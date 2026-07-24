@@ -30,7 +30,9 @@
 - No DDL, RLS, or other writes were made against `spsdfdlufqcduekqxxjk` at any point — every other query against it was a read-only `SELECT`.
 - The `NOTIFY pgrst, 'reload schema'` command run during investigation was scoped only to `ysffyuohwvdifvbopfcm` (this app's own project), never to the Studio project.
 
-**Still needs owner input (carried over, unchanged by this session):** everything listed under Phase 6's "Needs owner input" and "Final review flags" sections below, plus the two new items above (Vercel env var fix; dog-profile-creation flow decision).
+**Vercel env var fix confirmed working (owner corrected them, re-tested same session):** re-ran a live signup test against `dog-food-helper.vercel.app` after the owner corrected the Vercel project's Supabase env vars. Confirmed via direct log evidence on `ysffyuohwvdifvbopfcm` (not just the UI) that the request now reaches the **correct** project — the attempt was blocked only by Supabase's default email-send rate limit (`429: email rate limit exceeded`, from repeated test signups sent to the same real inbox during this session's investigation), not by the wrong-project bug. `public.user_profiles` confirmed still at 0 rows (no partial/junk data left behind by the rate-limited attempt). **A full write-through test (real account + profile row created) is still pending** until the rate limit window clears — recommend retrying in ~1 hour, or testing with a fresh, not-yet-used email address.
+
+**Still needs owner input (carried over, unchanged by this session):** everything listed under Phase 6's "Needs owner input" and "Final review flags" sections below, plus the dog-profile-creation flow decision above (the Vercel env var item is now resolved).
 
 ---
 
