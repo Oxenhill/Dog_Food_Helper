@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { adminAuthHeaders, getAdminToken, setAdminToken } from '@/lib/adminAuth';
+import { adminAuthHeaders, clearAdminToken, getAdminToken, setAdminToken } from '@/lib/adminAuth';
 import { IngredientReviewQueueItem, FoodType, Food } from '@/lib/types';
 
 const FOOD_TYPES: FoodType[] = ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other'];
@@ -45,12 +45,17 @@ function initialCorrections(item: QueueItemWithDuplicate): CorrectionState {
  * `foods`' strict columns, see /api/ingredients/review's header comment) or
  * Reject (with optional feedback).
  *
- * Gated by the same x-admin-token stopgap as the rest of Phase 4/5's admin
- * endpoints — not real admin auth. The token is entered once and kept in
- * localStorage (src/lib/adminAuth.ts), never hardcoded into this file.
+ * Gated by a real Supabase sign-in + `user_profiles.is_admin` check
+ * (src/lib/serverAdminAuth.ts) — replaces the old shared x-admin-token
+ * stopgap. Signs in via the existing POST /api/auth/signin route and stores
+ * the resulting session access token (src/lib/adminAuth.ts), sent as
+ * `Authorization: Bearer <token>` on every admin request.
  */
 export default function IngredientReviewQueueAdmin() {
-  const [tokenInput, setTokenInput] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signInError, setSignInError] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   const [hasToken, setHasToken] = useState(false);
   const [items, setItems] = useState<QueueItemWithDuplicate[]>([]);
   const [corrections, setCorrections] = useState<Record<string, CorrectionState>>({});
@@ -69,6 +74,14 @@ export default function IngredientReviewQueueAdmin() {
       const res = await fetch('/api/ingredients/review-queue?status=pending', {
         headers: adminAuthHeaders(),
       });
+      if (res.status === 401) {
+        // Signed in, but not an admin (or the session expired) — don't leave
+        // the page stuck showing an empty queue with no explanation.
+        clearAdminToken();
+        setHasToken(false);
+        setSignInError('Signed in, but this account does not have admin access (or the session expired).');
+        return;
+      }
       if (!res.ok) {
         setStatusMsg({ _global: `Failed to load queue (${res.status})` });
         return;
@@ -89,9 +102,30 @@ export default function IngredientReviewQueueAdmin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasToken]);
 
-  function saveToken() {
-    setAdminToken(tokenInput.trim());
-    setHasToken(true);
+  async function signIn() {
+    setSignInError('');
+    setSigningIn(true);
+    try {
+      const res = await fetch('/api/auth/signin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setSignInError(json.error ?? `Sign-in failed (${res.status})`);
+        return;
+      }
+      const accessToken = json.session?.access_token;
+      if (!accessToken) {
+        setSignInError('Signed in, but no session token was returned — check your email confirmation status.');
+        return;
+      }
+      setAdminToken(accessToken);
+      setHasToken(true);
+    } finally {
+      setSigningIn(false);
+    }
   }
 
   function updateCorrection(id: string, field: keyof CorrectionState, value: string) {
@@ -196,24 +230,34 @@ export default function IngredientReviewQueueAdmin() {
   if (!hasToken) {
     return (
       <div className="max-w-md space-y-3">
-        <h1 className="text-xl font-bold">Ingredient review queue — admin</h1>
+        <h1 className="text-xl font-bold">Ingredient review queue — admin sign in</h1>
         <p className="text-sm text-gray-600">
-          Enter the admin token (RESEARCH_INGEST_ADMIN_TOKEN) to continue. This is a shared-secret
-          stopgap, not real admin auth — see BUILD_PROGRESS.md.
+          Sign in with your Dog Food Helper account. Access is only granted if your account has
+          admin status (user_profiles.is_admin) — see BUILD_PROGRESS.md for how to become the
+          first admin.
         </p>
+        {signInError && <p className="text-sm text-red-600">{signInError}</p>}
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
+          placeholder="Email"
+        />
         <input
           type="password"
-          value={tokenInput}
-          onChange={(e) => setTokenInput(e.target.value)}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
           className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          placeholder="Admin token"
+          placeholder="Password"
         />
         <button
           type="button"
-          onClick={saveToken}
-          className="bg-gray-800 text-white rounded-lg px-4 py-2 text-sm"
+          onClick={() => void signIn()}
+          disabled={signingIn}
+          className="bg-gray-800 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-50"
         >
-          Continue
+          {signingIn ? 'Signing in…' : 'Sign in'}
         </button>
       </div>
     );

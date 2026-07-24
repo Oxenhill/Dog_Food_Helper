@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ingestResearchDocument } from '@/lib/embeddingPipeline';
+import { requireAdmin } from '@/lib/serverAdminAuth';
 import { ResearchTopic, ReviewStatus } from '@/lib/types';
 
 const VALID_TOPICS: ResearchTopic[] = ['gut_biome', 'allergy', 'health_condition', 'general'];
@@ -8,13 +9,9 @@ const VALID_REVIEW_STATUSES: ReviewStatus[] = ['pending', 'approved', 'rejected'
 /**
  * POST /api/research/ingest (Part B / Phase 4 item 6 — admin only)
  *
- * There is no real admin/session system yet (still a stopgap since Phase 2 —
- * see BUILD_PROGRESS.md's Phase 2 deviation #6, clientAuth.ts). Gating this
- * behind a shared secret header is a deliberate, minimal stand-in — anyone
- * with the `RESEARCH_INGEST_ADMIN_TOKEN` env value can call this, which is
- * fine for a single-owner Phase 4 build but is NOT a real admin auth system
- * and must not be treated as one once there are other users. Flagged in
- * BUILD_PROGRESS.md.
+ * Gated by requireAdmin() — a real Supabase session bearer token resolving
+ * to a user_profiles.is_admin=true row. Replaces the RESEARCH_INGEST_ADMIN_TOKEN
+ * shared-secret stopgap this route used since Phase 4.
  *
  * Body: { title, topic, text, source_url?, review_status?, supersedes_document_id? }
  * `review_status` defaults to 'pending' (never auto-live) unless explicitly
@@ -23,15 +20,8 @@ const VALID_REVIEW_STATUSES: ReviewStatus[] = ['pending', 'approved', 'rejected'
  */
 export async function POST(request: NextRequest) {
   try {
-    const adminToken = process.env.RESEARCH_INGEST_ADMIN_TOKEN;
-    if (!adminToken) {
-      return NextResponse.json(
-        { error: 'RESEARCH_INGEST_ADMIN_TOKEN is not configured on the server — ingestion is disabled.' },
-        { status: 503 }
-      );
-    }
-    const providedToken = request.headers.get('x-admin-token');
-    if (providedToken !== adminToken) {
+    const admin = await requireAdmin(request);
+    if (!admin) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

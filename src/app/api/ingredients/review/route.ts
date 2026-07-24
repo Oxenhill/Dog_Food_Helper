@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { requireAdmin } from '@/lib/serverAdminAuth';
 import { findDuplicateFood } from '@/lib/foodDuplicates';
 import {
   IngredientReviewCorrections,
@@ -9,26 +10,16 @@ import {
 
 const VALID_FOOD_TYPES: FoodType[] = ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other'];
 
-function isAdminAuthorized(request: NextRequest): boolean {
-  // Same stopgap as Phase 4's /api/research/ingest (Part B item 4 explicitly
-  // says "reuse the same stopgap"): a shared-secret header checked against
-  // RESEARCH_INGEST_ADMIN_TOKEN. NOT a real admin/role auth system — see
-  // BUILD_PROGRESS.md.
-  const adminToken = process.env.RESEARCH_INGEST_ADMIN_TOKEN;
-  if (!adminToken) return false;
-  return request.headers.get('x-admin-token') === adminToken;
-}
-
 /**
- * POST /api/ingredients/review — Part B `reviewQueueItem` (admin/you only).
+ * POST /api/ingredients/review — Part B `reviewQueueItem` (admin only, gated
+ * by requireAdmin() — a real Supabase session resolving to
+ * user_profiles.is_admin=true). `reviewed_by` is always set to the
+ * authenticated admin's own id — no longer a client-supplied field, since a
+ * real session now exists to derive it from.
  *
  * Body:
  *   queue_id: string (required)
  *   decision: 'approve' | 'reject' (required)
- *   reviewer_id?: string — no real admin auth exists yet (see
- *     isAdminAuthorized above), so there's no session to derive this from;
- *     accepted optionally as a plain uuid if the caller wants it recorded
- *     against `reviewed_by`.
  *   feedback?: string — reject-path only. `ingredient_review_queue` (Part A)
  *     has no `feedback` column, so this is stored inside `raw_ocr_json`
  *     under `_review.feedback` rather than added as a new table column not
@@ -60,13 +51,8 @@ function isAdminAuthorized(request: NextRequest): boolean {
  */
 export async function POST(request: NextRequest) {
   try {
-    if (!process.env.RESEARCH_INGEST_ADMIN_TOKEN) {
-      return NextResponse.json(
-        { error: 'RESEARCH_INGEST_ADMIN_TOKEN is not configured on the server — review is disabled.' },
-        { status: 503 }
-      );
-    }
-    if (!isAdminAuthorized(request)) {
+    const admin = await requireAdmin(request);
+    if (!admin) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -74,7 +60,6 @@ export async function POST(request: NextRequest) {
     const {
       queue_id,
       decision,
-      reviewer_id,
       feedback,
       corrections,
       link_to_existing_food_id,
@@ -82,7 +67,6 @@ export async function POST(request: NextRequest) {
     }: {
       queue_id?: string;
       decision?: 'approve' | 'reject';
-      reviewer_id?: string;
       feedback?: string;
       corrections?: IngredientReviewCorrections;
       link_to_existing_food_id?: string;
@@ -123,7 +107,7 @@ export async function POST(request: NextRequest) {
         .from('ingredient_review_queue')
         .update({
           status: 'rejected',
-          reviewed_by: reviewer_id ?? null,
+          reviewed_by: admin.id,
           reviewed_at: new Date().toISOString(),
           raw_ocr_json: updatedRawJson,
         })
@@ -242,7 +226,7 @@ export async function POST(request: NextRequest) {
       .from('ingredient_review_queue')
       .update({
         status: 'approved',
-        reviewed_by: reviewer_id ?? null,
+        reviewed_by: admin.id,
         reviewed_at: new Date().toISOString(),
         resulting_food_id: resultingFoodId,
         raw_ocr_json: corrections

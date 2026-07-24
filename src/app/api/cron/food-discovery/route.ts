@@ -21,7 +21,7 @@ import { submitDiscoveryBatch } from '@/lib/foodDiscovery';
  * process results.
  */
 export async function POST(request: NextRequest) {
-  if (!isCronAuthorized(request)) {
+  if (!(await isCronAuthorized(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

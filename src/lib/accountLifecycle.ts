@@ -1,4 +1,5 @@
 import { supabaseAdmin } from './supabase';
+import { sendEmail } from './emailProvider';
 
 /**
  * Account inactivity auto-deletion job (Phase 6, architecture doc §10).
@@ -17,16 +18,15 @@ import { supabaseAdmin } from './supabase';
  *     intact so they keep contributing to pooled/research signals, per §10
  *     and CLAUDE.md's non-negotiable principle #5.
  *
- * **Notification gap (flagged, not silently stubbed as if it worked):** no
- * email/notification provider is wired into this codebase at all (no
- * Resend/SendGrid/etc. in package.json, no notifications table in the
- * schema). `sendInactivityWarning()` below logs the warning and returns
- * true so the state machine (inactivity_warning_sent_at) still behaves
- * correctly, but no actual email or in-app banner is sent yet. **Needs
- * owner input:** pick and wire up a real notification channel before this
- * job is relied on with real users — right now a warned user has no way to
- * actually see the warning and would be deleted 30 days later, having never
- * been told.
+ * **Notification gap — fixed.** `sendInactivityWarning()` now sends a real
+ * email via `src/lib/emailProvider.ts` (Resend). Critically,
+ * `inactivity_warning_sent_at` is only stamped when the send actually
+ * succeeds (see checkInactiveAccounts below) — if RESEND_API_KEY/
+ * EMAIL_FROM_ADDRESS aren't configured, or the send fails, the warning
+ * timestamp is deliberately left unset so the deletion state machine can
+ * never advance for a user who was never actually notified. That user is
+ * simply retried on the next daily run instead of silently being queued for
+ * deletion off a warning that was never delivered.
  */
 
 export interface AccountInactivityPolicy {
@@ -58,13 +58,40 @@ export async function getActiveInactivityPolicy(): Promise<AccountInactivityPoli
   return data as AccountInactivityPolicy;
 }
 
-async function sendInactivityWarning(userId: string, daysUntilDeletion: number): Promise<void> {
-  // Stopgap — see file header. Logs only; no real notification is sent.
-  const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
-  const email = authUser?.user?.email ?? '(unknown email)';
-  console.warn(
-    `[inactivity-check] WARNING NOTIFICATION (not actually sent — no email provider wired up): ${email} (user ${userId}) — account will be deleted in ${daysUntilDeletion} days unless they log in.`
-  );
+/**
+ * Sends the inactivity warning email. Returns whether it was actually
+ * delivered — the caller (checkInactiveAccounts) must not stamp
+ * `inactivity_warning_sent_at` on a false result, or a user could be deleted
+ * having never been told.
+ */
+async function sendInactivityWarning(userId: string, daysUntilDeletion: number): Promise<boolean> {
+  const { data: authUser, error: userLookupError } = await supabaseAdmin.auth.admin.getUserById(userId);
+  const email = authUser?.user?.email;
+
+  if (userLookupError || !email) {
+    console.error(
+      `[inactivity-check] could not resolve an email address for user ${userId} — cannot send inactivity warning`,
+      userLookupError
+    );
+    return false;
+  }
+
+  const subject = 'Your Dog Food Helper account will be deleted soon due to inactivity';
+  const text =
+    `We haven't seen you log in for a while. Your account and personal data will be permanently ` +
+    `deleted in ${daysUntilDeletion} day(s) unless you log in before then. Your dogs' health and ` +
+    `food history will be kept (anonymised) to keep contributing to the community's recommendations, ` +
+    `but your account and personal details will be removed.\n\n` +
+    `Log in any time before then to keep your account active.`;
+  const html = `<p>${text.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+
+  const sent = await sendEmail({ to: email, subject, html, text });
+  if (!sent) {
+    console.error(
+      `[inactivity-check] inactivity warning email to ${email} (user ${userId}) was NOT delivered — will retry on the next run instead of stamping inactivity_warning_sent_at`
+    );
+  }
+  return sent;
 }
 
 /**
@@ -176,16 +203,21 @@ export async function checkInactiveAccounts(): Promise<InactivityCheckResult> {
     if (daysSinceActive >= warningThresholdDays && daysSinceActive < policy.inactivity_threshold_days) {
       if (!user.inactivity_warning_sent_at) {
         const daysUntilDeletion = policy.inactivity_threshold_days - daysSinceActive;
-        await sendInactivityWarning(user.id, daysUntilDeletion);
-        const { error: updateError } = await supabaseAdmin
-          .from('user_profiles')
-          .update({ inactivity_warning_sent_at: now.toISOString() })
-          .eq('id', user.id);
-        if (updateError) {
-          console.error(`[inactivity-check] failed to stamp inactivity_warning_sent_at for ${user.id}`, updateError);
-        } else {
-          result.warnings_sent += 1;
+        const sent = await sendInactivityWarning(user.id, daysUntilDeletion);
+        if (sent) {
+          const { error: updateError } = await supabaseAdmin
+            .from('user_profiles')
+            .update({ inactivity_warning_sent_at: now.toISOString() })
+            .eq('id', user.id);
+          if (updateError) {
+            console.error(`[inactivity-check] failed to stamp inactivity_warning_sent_at for ${user.id}`, updateError);
+          } else {
+            result.warnings_sent += 1;
+          }
         }
+        // else: not delivered -- inactivity_warning_sent_at is deliberately
+        // left unset so this user is retried (not silently queued for
+        // deletion off a warning they never received) on the next run.
       }
     } else if (daysSinceActive < warningThresholdDays && user.inactivity_warning_sent_at) {
       // Re-engaged since a warning was sent (last_active_at moved forward

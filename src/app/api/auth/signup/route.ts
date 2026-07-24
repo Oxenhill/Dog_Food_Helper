@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
@@ -29,13 +29,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create user profile
-    const { error: profileError } = await supabase
+    // Create user profile via the service-role client, not the shared anon
+    // `supabase` client above: user_profiles now has RLS enabled
+    // (id = auth.uid()), and signUp() may not return an active session at
+    // all (email confirmation enabled) — so there's no reliable auth.uid()
+    // for this insert to satisfy. supabaseAdmin bypasses RLS, matching every
+    // other table write in this codebase.
+    //
+    // Admin bootstrap: if ADMIN_EMAILS (comma-separated) is set and this
+    // email matches (case-insensitive), the new profile is created as an
+    // admin. This replaces needing a manual SQL UPDATE to grant the first
+    // admin — see .env.example.
+    const adminEmails = (process.env.ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    const isBootstrapAdmin = adminEmails.includes(String(email).toLowerCase());
+
+    const { error: profileError } = await supabaseAdmin
       .from('user_profiles')
       .insert({
         id: authData.user.id,
         display_name: display_name || email,
         last_active_at: new Date().toISOString(),
+        is_admin: isBootstrapAdmin,
       });
 
     if (profileError) {

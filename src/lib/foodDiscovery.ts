@@ -23,15 +23,14 @@ import {
  *      directly into foods/food_ingredients (Tier 1 — no review queue, per
  *      architecture doc §7).
  *
- * **Flagged gap (see BUILD_PROGRESS.md):** Part A's schema has no table for
- * tracking in-flight discovery batches. Phase 2-5 all establish the norm of
- * not adding tables outside Part A without flagging it, so none was added
- * here either — processDiscoveryBatch() requires the caller to supply back
- * the manifest returned by submitDiscoveryBatch() (the cron route's response
- * body). In a real deployment this manifest needs to be persisted somewhere
- * external to this codebase (a queue, a log sink, or ideally a new
- * `food_discovery_batches` tracking table added to the schema) between the
- * weekly submit and the later process step.
+ * **Batch tracking (previously flagged gap, now fixed):** submitDiscoveryBatch()
+ * persists {batch_id, manifest, status} to `batch_submissions` immediately
+ * after the batch is created; processDiscoveryBatch() reads the manifest back
+ * from that table instead of requiring the caller to hold onto the submit
+ * route's response body. getPendingBatchSubmissions() lets the process route
+ * discover and process every outstanding batch on its own (needed because a
+ * cron-triggered GET request has no body to carry a batch_id/manifest in at
+ * all — the previous design could only be driven manually via POST).
  *
  * **Flagged deviation from "Haiku vision":** the spec says extraction should
  * use "Haiku vision... against web pages," mirroring Phase 5's OCR. Actually
@@ -185,6 +184,29 @@ export interface SubmitDiscoveryResult {
   manifest: DiscoveryManifestEntry[];
 }
 
+interface BatchSubmissionRow {
+  id: string;
+  batch_id: string;
+  manifest: DiscoveryManifestEntry[];
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  result_summary: unknown;
+}
+
+/** Every batch_submissions row not yet marked processed/failed — the process
+ * route uses this to discover outstanding batches without needing a caller
+ * to supply batch_id/manifest (e.g. a cron-triggered GET with no body). */
+export async function getPendingBatchSubmissions(): Promise<BatchSubmissionRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('batch_submissions')
+    .select('*')
+    .in('status', ['submitted', 'in_progress']);
+
+  if (error) throw error;
+  return (data ?? []) as BatchSubmissionRow[];
+}
+
 /**
  * Phase 1 of the discovery job: crawl approved domains for candidate pages,
  * fetch + strip each to text, build one Batch API request per page, submit
@@ -241,6 +263,19 @@ export async function submitDiscoveryBatch(): Promise<SubmitDiscoveryResult> {
   const batch = await createMessageBatch(requests);
   console.log(`[food-discovery] submitted batch ${batch.id} with ${requests.length} requests`);
 
+  const { error: trackingError } = await supabaseAdmin.from('batch_submissions').insert({
+    batch_id: batch.id,
+    manifest,
+    status: 'submitted',
+  });
+  if (trackingError) {
+    // Don't fail the whole submission over a tracking-row insert failure —
+    // the batch has already been created on Anthropic's side and the response
+    // below still carries the manifest for a manual fallback. Log loudly so
+    // it isn't silently lost.
+    console.error(`[food-discovery] failed to persist batch_submissions row for ${batch.id}`, trackingError);
+  }
+
   return {
     batch_id: batch.id,
     domains_checked: domains.length,
@@ -260,17 +295,22 @@ export interface ProcessDiscoveryResult {
 }
 
 /**
- * Phase 2 of the discovery job: given a batch id and the manifest returned
- * by submitDiscoveryBatch(), checks whether the batch has ended; if so,
- * fetches results, and for each successfully-extracted product runs
- * duplicate detection (Phase 5's findDuplicateFood, reused as-is) +
- * required-field checks, then inserts directly into foods/food_ingredients
+ * Phase 2 of the discovery job: given a batch id, checks whether the batch
+ * has ended; if so, fetches results, and for each successfully-extracted
+ * product runs duplicate detection (Phase 5's findDuplicateFood, reused as-is)
+ * + required-field checks, then inserts directly into foods/food_ingredients
  * (Tier 1 — no review queue, per architecture doc §7). If the batch hasn't
  * ended yet, returns early with batch_status so the caller can retry later.
+ *
+ * `manifest` is optional — if omitted, it's read back from the
+ * `batch_submissions` row created by submitDiscoveryBatch(). Passing it
+ * explicitly still works (backward-compatible) but is no longer required.
+ * Updates the tracking row's status/result_summary/completed_at as a side
+ * effect so getPendingBatchSubmissions() reflects reality afterward.
  */
 export async function processDiscoveryBatch(
   batchId: string,
-  manifest: DiscoveryManifestEntry[]
+  manifest?: DiscoveryManifestEntry[]
 ): Promise<ProcessDiscoveryResult> {
   const batch = await getBatchStatus(batchId);
   const result: ProcessDiscoveryResult = {
@@ -283,11 +323,31 @@ export async function processDiscoveryBatch(
     inserted_food_ids: [],
   };
 
+  let resolvedManifest = manifest;
+  if (!resolvedManifest) {
+    const { data: row, error } = await supabaseAdmin
+      .from('batch_submissions')
+      .select('manifest')
+      .eq('batch_id', batchId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row) {
+      throw new Error(
+        `No batch_submissions row found for batch ${batchId} and no manifest was supplied — cannot process`
+      );
+    }
+    resolvedManifest = row.manifest as DiscoveryManifestEntry[];
+  }
+
   if (batch.processing_status !== 'ended') {
+    await supabaseAdmin
+      .from('batch_submissions')
+      .update({ status: 'in_progress' })
+      .eq('batch_id', batchId);
     return result;
   }
 
-  const manifestById = new Map(manifest.map((m) => [m.custom_id, m]));
+  const manifestById = new Map(resolvedManifest.map((m) => [m.custom_id, m]));
   const lines = await getBatchResults(batch);
 
   for (const line of lines) {
@@ -367,6 +427,15 @@ export async function processDiscoveryBatch(
   console.log(
     `[food-discovery] processed batch ${batchId}: seen=${result.candidates_seen} duplicates=${result.duplicates_skipped} missing_fields=${result.missing_required_fields_skipped} not_product=${result.not_product_page_skipped} inserted=${result.inserted}`
   );
+
+  await supabaseAdmin
+    .from('batch_submissions')
+    .update({
+      status: 'processed',
+      completed_at: new Date().toISOString(),
+      result_summary: result,
+    })
+    .eq('batch_id', batchId);
 
   return result;
 }

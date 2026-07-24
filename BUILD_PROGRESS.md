@@ -1,7 +1,65 @@
 # Dog Food Platform — Build Progress
 
 **Last updated:** 2026-07-24
-**Current phase:** Phase 6 complete — this was the final phase (technical build spec Part E). See "Final review flags" at the bottom before real users touch this.
+**Current phase:** Phase 6 complete, plus a post-Phase-6 hardening pass (this session, 2026-07-24) covering 6 launch-blocking/near-blocking flags. See "Post-Phase-6 hardening" below and "Final review flags" further down before real users touch this.
+
+---
+
+## Post-Phase-6 hardening (2026-07-24)
+
+Six flagged items from the owner's punch list, addressed in one session. `/docs/*` still doesn't exist in this checkout (unchanged from Phase 6's note) — worked from the inline task brief + live Supabase schema + this file, same as Phase 6.
+
+**0. Baseline fixes needed just to run `npm install && npm run build` at all:**
+- `next.config.ts` isn't supported by the installed Next 14.2.35 (TS config support landed in Next 15) — every build failed immediately with `next build` refusing to start. Replaced with `next.config.mjs` (same content). Pre-existing, not introduced this session.
+- `node_modules` was corrupted from an interrupted install in this sandbox (webpack couldn't resolve `@supabase/phoenix` from inside `@supabase/supabase-js`'s nested `realtime-js`) — same recurring pattern every prior phase flagged. Fixed with a clean `rm -rf node_modules package-lock.json && npm install`. After both fixes, `npm run build` succeeds end-to-end.
+- No ESLint config exists in this repo at all — `npm run lint` just prompts interactively (Strict/Base/Cancel) instead of running. Not fixed this session (out of scope for the 6 flags); run `npm run lint` once yourself and pick a config before relying on it in CI.
+
+**1. RLS enabled on all previously-exposed tables (CRITICAL, done):**
+- Live-schema check (not assumed) found the *actual* set of RLS-disabled tables differed from the punch list: `dog_food_events`, `dog_weight_logs`, `dog_log_entries`, `dog_red_flag_events`, and `ingredient_outcome_signals` already had RLS enabled with correct owner-scoped policies since Phase 1 — the punch list was stale on that point. The tables that actually had RLS disabled were: `user_profiles`, `account_inactivity_policy`, `wellness_indicator_reference`, `breed_life_stage_thresholds`, `metric_minimum_lag_days`, `recommendation_scoring_weights`, `foods`, `food_ingredients`, `ingredient_review_queue`, `source_domain_allowlist`, `research_documents`, `research_chunks` (`user_profiles` and `food_ingredients` weren't on the punch list either way).
+- Confirmed via repo-wide grep that every data-table query in this codebase goes through `supabaseAdmin` (service role, bypasses RLS) — the anon `supabase` client is only ever used for `.auth.signInWithPassword`/`.auth.signUp` calls, never a `.from()` query — so enabling RLS could not break any existing app behaviour; it only closes the anon-key-exposure hole.
+- Policies applied (migration `enable_rls_remaining_tables`, live on project `ysffyuohwvdifvbopfcm`):
+  - Public read (anon + authenticated), service-role write only: `foods`, `food_ingredients`, `wellness_indicator_reference`, `breed_life_stage_thresholds`, `metric_minimum_lag_days`, `recommendation_scoring_weights`.
+  - Public read restricted to `review_status='approved' AND superseded_by IS NULL`: `research_documents`, `research_chunks` — mirrors the same filter `ragRetrieval.ts` already applies in application code (defense in depth).
+  - Owner-scoped (matches the existing `dogs`/`dog_*` pattern): `user_profiles` (`id = auth.uid()`).
+  - Authenticated read-only, no client write policy: `account_inactivity_policy`.
+  - Authenticated read of own rows only (`submitted_by = auth.uid()`), no insert/update/delete policy — submission/review must go through the API routes (EXIF stripping, validation, OCR, admin review), not a direct table write: `ingredient_review_queue`.
+  - **Judgment call, flagged:** `source_domain_allowlist` was deliberately left with *zero* anon/authenticated policies (fully denied, service-role/cron-only) rather than treated as public reference data — it's internal scraping configuration with no client-facing purpose anywhere in the app. Confirmed via `get_advisors` this produces only an expected INFO-level "RLS enabled, no policy" note, not an error.
+- Re-ran the security advisor after applying: the `rls_disabled_in_public` ERROR is gone. Only two INFO-level "RLS enabled, no policy" notes remain (`source_domain_allowlist`, `batch_submissions` — both deliberate, service-role-only tables, see below).
+
+**2. Inactivity-warning emails now actually send (was silently logged only):**
+- Added `src/lib/emailProvider.ts` — a minimal Resend REST API client (raw `fetch`, no new npm dependency, matching `batchApiHelper.ts`'s existing pattern — deliberately avoids adding a dependency in a sandbox that has repeatedly hit npm-install corruption on new/transitive deps).
+- `src/lib/accountLifecycle.ts`'s `sendInactivityWarning()` now sends a real email and returns whether it was actually delivered. **Safety fix beyond the literal ask:** `checkInactiveAccounts()` now only stamps `inactivity_warning_sent_at` when the send succeeds — previously it stamped unconditionally even though nothing was sent, which is exactly the "user deleted having never been warned" risk the punch list flagged. If email isn't configured or a send fails, the user is simply retried on the next daily run instead of being silently queued for deletion.
+- New env vars: `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` (must be a sender verified with your Resend account/domain) — see `.env.example`.
+
+**3. `batch_submissions` tracking table added (was: async job could orphan manifests):**
+- New table (migration `add_batch_submissions_tracking_table`): `id, batch_id, manifest, status, created_at, completed_at, result_summary`. **Deviation, flagged:** added `manifest` beyond the originally-specified column list — without persisting the manifest itself, the process step still couldn't run without the caller supplying it externally, which is the exact gap this table exists to close.
+- `submitDiscoveryBatch()` now persists a row immediately after the batch is created. `processDiscoveryBatch()` reads the manifest back from this table if not passed explicitly, and updates `status`/`completed_at`/`result_summary` as it processes.
+- **Bug fix found in the process:** `POST /api/cron/food-discovery/process` previously *required* a JSON body (`{batch_id, manifest}`), but Vercel Cron sends a bodyless GET — meaning the automated cron path could never have worked at all, only manual POSTs with a body. Reworked the route: no body → processes every outstanding `batch_submissions` row (new `getPendingBatchSubmissions()`); `{batch_id}` in the body → processes one specific batch manually. `RLS`: `batch_submissions` is enabled with zero anon/authenticated policies (internal job-tracking data, service-role/cron-only), same as `source_domain_allowlist`.
+
+**4. Embedding provider misconfiguration now fails loudly in production:**
+- `src/lib/embeddingPipeline.ts`: new `assertEmbeddingProviderConfigured()`, called at the top of `generateEmbedding()`. Throws if neither `OPENAI_API_KEY` nor `VOYAGE_API_KEY` is set **and** `NODE_ENV === 'production'` — dev/test behaviour (local deterministic pseudo-embedding + warning) is unchanged. Still needs an owner decision on which provider to use (unchanged flag from Phase 4).
+
+**5. Real admin auth (was: shared `RESEARCH_INGEST_ADMIN_TOKEN` secret since Phase 4, across 8 routes):**
+- Migration `add_user_profiles_is_admin_role`: `user_profiles.is_admin boolean not null default false`. Minimal boolean role rather than a full roles/`profile_roles` table — matches the punch list's own "or at least tie it to Supabase Auth + a role column."
+- New `src/lib/serverAdminAuth.ts` — `requireAdmin(request)`: verifies a real Supabase session bearer token (`Authorization: Bearer <access_token>`) via `supabaseAdmin.auth.getUser()`, then checks `user_profiles.is_admin` for that user. Replaces the shared-token check in: `POST /api/research/ingest`, `POST /api/ingredients/review` (also now sets `reviewed_by` to the authenticated admin's own id, not a client-supplied field), `GET /api/ingredients/review-queue`, `GET /api/ingredients/photo-url`.
+- `src/lib/cronAuth.ts` (`isCronAuthorized`, now async): still accepts `Authorization: Bearer $CRON_SECRET` for Vercel Cron itself (machine-to-machine, unchanged), and now *also* accepts a real admin session bearer token on the same header for manual/human triggering — replacing the old `x-admin-token`/`RESEARCH_INGEST_ADMIN_TOKEN` fallback. All three cron routes' `GET`/`POST` handlers updated to `await` it.
+- **Admin bootstrap:** new `ADMIN_EMAILS` env var (comma-separated) — `POST /api/auth/signup` sets `is_admin=true` on the new profile if the signup email matches, avoiding a manual SQL `UPDATE` to create the first admin. `user_profiles` currently has 0 rows (no one has signed up yet) — **needs owner action:** set `ADMIN_EMAILS` to your own email before your first signup.
+- Client side: `src/lib/adminAuth.ts` now stores a real Supabase access token (from `POST /api/auth/signin`) instead of a pasted static secret, sent as `Authorization: Bearer <token>` instead of `x-admin-token`. `IngredientReviewQueueAdmin.tsx`'s login gate is now an actual email/password sign-in form; a 401 from the review-queue endpoint (wrong password, or a non-admin account) clears the stored token and shows a clear message rather than looking like an empty queue.
+- **RLS-interaction fix, required by item 1 above, not optional:** `POST /api/auth/signup` and `POST /api/auth/signin` were writing to `user_profiles` via the shared anon `supabase` client. With RLS now enabled (`id = auth.uid()`), that insert/update would silently fail whenever `signUp()` doesn't return an active session (e.g. email confirmation enabled) — there's no reliable `auth.uid()` for a module-level singleton client shared across concurrent server requests to rely on either. Both routes now write via `supabaseAdmin` instead, matching every other table write in this codebase. Found and fixed as a direct, necessary consequence of item 1 — not scope creep.
+
+**6. Bristol/BCS chart illustrations — admin upload (flagged "nice to have", done anyway):**
+- New public Storage bucket `chart-illustrations` (`src/lib/chartIllustrationStorage.ts`) — public because these are original, non-sensitive reference illustrations, same trust level as `foods`. No new DB table: deterministic paths (`${chartType}/${value}.{png,svg}`) plus a single `manifest.json` object in the same bucket, read by the new public `GET /api/charts/illustrations`. Keeps this codebase's "don't add tables outside spec without flagging it" convention intact for a feature this small.
+- `POST /api/admin/charts/upload` — admin-gated (`requireAdmin`, same as item 5), PNG/SVG only, 2MB limit.
+- `/admin/charts` (`ChartIllustrationsAdmin.tsx`) — upload slot per Bristol value (1-7) and BCS value (1-9), shows the current image if one exists. Reuses the same sign-in/token as the review-queue admin page.
+- `BristolChartSelector`/`BCSChartSelector` now fetch the manifest (`useChartIllustrations` hook) and render an `<img>` per option when one has been uploaded, falling back to the existing text-only rendering otherwise (`onError` also hides a broken image rather than showing a broken-image icon) — exactly the "swap the rendering for `<img>` once artwork exists, the `value` contract doesn't change" note from Phase 2.
+- **Still requires original artwork to actually be commissioned and uploaded** — this only builds the upload/display mechanism. Legal constraint (never use existing brand/body artwork) is documented in the code but not something the code can enforce automatically.
+
+**Needs owner input (new this session):**
+- Set `ADMIN_EMAILS` (your email) before you sign up, to become the first admin automatically — see item 5.
+- Set `RESEND_API_KEY` + `EMAIL_FROM_ADDRESS` (a sender verified with your Resend account/domain) before inactivity warnings actually deliver — until then they fail safe (retried, never silently marked sent) but nothing is sent.
+- No ESLint config exists in this repo — run `npm run lint` once and choose Strict or Base.
+- Commission the original Bristol/BCS illustrations, then upload them via `/admin/charts`.
+- Everything still open from Phase 6's own list is unchanged by this session: `dog_health_conditions` hard-filter exclusion (Phase 3, safety-relevant); `wellness_indicator_reference` taxonomy not research-backed (Phase 2); Sonnet/Haiku exact model-id strings unconfirmed against the live Anthropic list (Phase 4/5); Batch API request/response shape unverified against a live batch (Phase 6); legal/GDPR review not done (Phase 6); `/docs/*` still missing from this checkout.
 
 ---
 

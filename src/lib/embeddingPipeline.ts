@@ -108,7 +108,26 @@ function localPseudoEmbedding(text: string): number[] {
 
 let warnedLocalFallback = false;
 
+/** Throws if neither embedding provider key is set and we're running in
+ * production — the local pseudo-embedding fallback must never silently back
+ * real RAG retrieval in production (BUILD_PROGRESS.md: "embedding provider
+ * not yet chosen" is a standing owner-input flag, not a green light to ship
+ * arbitrary similarity search). Dev/test keeps using the pseudo-embedding
+ * fallback unchanged. */
+export function assertEmbeddingProviderConfigured(): void {
+  const hasProvider = Boolean(process.env.OPENAI_API_KEY || process.env.VOYAGE_API_KEY);
+  if (!hasProvider && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'No embedding provider configured: set OPENAI_API_KEY or VOYAGE_API_KEY before ' +
+        'running RAG ingestion/retrieval in production. Without one of these, embeddings ' +
+        'would fall back to a non-semantic local pseudo-embedding, making similarity search ' +
+        'results arbitrary. See src/lib/embeddingPipeline.ts header comment.'
+    );
+  }
+}
+
 export async function generateEmbedding(text: string): Promise<number[]> {
+  assertEmbeddingProviderConfigured();
   const cleaned = text.trim();
   let raw: number[];
 

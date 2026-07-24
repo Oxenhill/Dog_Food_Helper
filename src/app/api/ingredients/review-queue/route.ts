@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { requireAdmin } from '@/lib/serverAdminAuth';
 import { findDuplicateFood } from '@/lib/foodDuplicates';
 import { ReviewStatus } from '@/lib/types';
 
@@ -10,8 +11,9 @@ const VALID_STATUSES: ReviewStatus[] = ['pending', 'approved', 'rejected'];
  *
  * Not a named Part B action, but the admin review-queue page (Part B/spec
  * item 2) needs a read endpoint to populate itself from, same pattern as
- * Phase 2's `GET /api/baselines` companion. Admin-token gated, same stopgap
- * as the review/ingest endpoints.
+ * Phase 2's `GET /api/baselines` companion. Gated by requireAdmin() — see
+ * that file for the real Supabase-session + user_profiles.is_admin check
+ * this replaces the old shared-token stopgap with.
  *
  * For each pending item, opportunistically attaches a `possible_duplicate`
  * field (via the same brand+name check used at approval time) so the admin
@@ -19,14 +21,8 @@ const VALID_STATUSES: ReviewStatus[] = ['pending', 'approved', 'rejected'];
  */
 export async function GET(request: NextRequest) {
   try {
-    const adminToken = process.env.RESEARCH_INGEST_ADMIN_TOKEN;
-    if (!adminToken) {
-      return NextResponse.json(
-        { error: 'RESEARCH_INGEST_ADMIN_TOKEN is not configured on the server.' },
-        { status: 503 }
-      );
-    }
-    if (request.headers.get('x-admin-token') !== adminToken) {
+    const admin = await requireAdmin(request);
+    if (!admin) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

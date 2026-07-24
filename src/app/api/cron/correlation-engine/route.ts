@@ -12,7 +12,7 @@ import { computeCorrelationsForDog, runCorrelationEngine } from '@/lib/correlati
  * at least one eligible log entry.
  */
 export async function POST(request: NextRequest) {
-  if (!isCronAuthorized(request)) {
+  if (!(await isCronAuthorized(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 // Vercel Cron triggers scheduled jobs with a GET request (see vercel.json).
 // GET always runs for all dogs (no body to read a dog_id override from).
 export async function GET(request: NextRequest) {
-  if (!isCronAuthorized(request)) {
+  if (!(await isCronAuthorized(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {

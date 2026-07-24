@@ -9,7 +9,7 @@ import { checkInactiveAccounts } from '@/lib/accountLifecycle';
  * (warn -> delete state machine, hard-delete vs anonymise).
  */
 export async function POST(request: NextRequest) {
-  if (!isCronAuthorized(request)) {
+  if (!(await isCronAuthorized(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

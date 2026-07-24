@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { requireAdmin } from '@/lib/serverAdminAuth';
 
 const BUCKET = 'ingredient-photos';
 
@@ -10,14 +11,12 @@ const BUCKET = 'ingredient-photos';
  * src/lib/ingredientPhotoStorage.ts — bucket is private by design). Not a
  * named Part B action; a small companion needed for spec item 2's "display
  * extracted ingredients + suggested food record" to actually let a reviewer
- * see the source photo, not just the OCR text.
+ * see the source photo, not just the OCR text. Gated by requireAdmin() — see
+ * that file for the real Supabase-session + user_profiles.is_admin check.
  */
 export async function GET(request: NextRequest) {
-  const adminToken = process.env.RESEARCH_INGEST_ADMIN_TOKEN;
-  if (!adminToken) {
-    return NextResponse.json({ error: 'RESEARCH_INGEST_ADMIN_TOKEN is not configured.' }, { status: 503 });
-  }
-  if (request.headers.get('x-admin-token') !== adminToken) {
+  const admin = await requireAdmin(request);
+  if (!admin) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

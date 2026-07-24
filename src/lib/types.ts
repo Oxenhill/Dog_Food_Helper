@@ -329,5 +329,8 @@ export interface UserProfile {
   display_name?: string | null;
   last_active_at?: string | null;
   inactivity_warning_sent_at?: string | null;
+  // Real admin role (replaces the RESEARCH_INGEST_ADMIN_TOKEN shared-secret
+  // stopgap) — checked server-side in src/lib/serverAdminAuth.ts.
+  is_admin: boolean;
   created_at: string;
 }
