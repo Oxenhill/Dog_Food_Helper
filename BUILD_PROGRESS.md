@@ -23,6 +23,13 @@
 - **Separate, lower-severity finding:** the local `.env` in this checkout has real values for `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`/`ADMIN_EMAILS`/the Anthropic model-id env vars, but `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` are literal placeholder strings (`placeholder_ser...`, `placeholder_cron_sec...`). This blocks any full local write-path test (signup's profile insert, or anything else using `supabaseAdmin`) until a real service role key is placed in a local `.env.local` — not fixed or guessed at here since it's a secret credential.
 - **Verified as a side effect, not previously documented:** this Supabase project has **email confirmation effectively auto-completing** — the one signup that did complete end-to-end (`trainers+claudetest1@...`, via local dev pointed at the correct project) reached `confirmed_at`/`email_confirmed_at` within 30 seconds with no manual action from me. Worth confirming intentionally rather than relying on this observation alone.
 
+**Cleanup fully verified (owner asked for a complete accounting):** the Vercel env-var mismatch itself predates this session (it was already listed as "currently set" in the task brief this session started from) — this session did not set it, only discovered it via live testing. What this session's testing *did* write to the wrong project (`spsdfdlufqcduekqxxjk`) was fully audited and undone:
+- The two `auth.users` rows created as a side effect were deleted; re-confirmed with a follow-up `SELECT` that zero matching rows remain.
+- Checked for triggers on `spsdfdlufqcduekqxxjk`'s `auth.users` table — none exist, so nothing could have cascaded into that project's own `profiles`/`roles`/`profile_roles` tables.
+- Directly queried `spsdfdlufqcduekqxxjk.public.profiles` for the two deleted user IDs — zero rows, confirming no other data was written there.
+- No DDL, RLS, or other writes were made against `spsdfdlufqcduekqxxjk` at any point — every other query against it was a read-only `SELECT`.
+- The `NOTIFY pgrst, 'reload schema'` command run during investigation was scoped only to `ysffyuohwvdifvbopfcm` (this app's own project), never to the Studio project.
+
 **Still needs owner input (carried over, unchanged by this session):** everything listed under Phase 6's "Needs owner input" and "Final review flags" sections below, plus the two new items above (Vercel env var fix; dog-profile-creation flow decision).
 
 ---
