@@ -1,7 +1,32 @@
 # Dog Food Platform — Build Progress
 
 **Last updated:** 2026-07-24
-**Current phase:** Phase 6 + post-Phase-6 hardening complete. This session (2026-07-24) added the sign-in/sign-up flow (Task 1) and found a **critical production misconfiguration** — see "Sign-in/sign-up flow + critical Vercel/Supabase misconfiguration" immediately below. **Do not let real users sign up on the deployed app until that is fixed.**
+**Current phase:** Phase 6 + post-Phase-6 hardening complete. This session (2026-07-24) added the sign-in/sign-up flow (Task 1, resolved — see below) and migrated AI provider calls to Vercel AI Gateway (Task 2, see "AI Gateway migration" below). **Owner action still needed:** enable OIDC Federation on the Vercel project (or set `AI_GATEWAY_API_KEY`) before the Gateway-routed calls will work in production — untested live in this session, no Gateway credentials were available in this sandbox.
+
+---
+
+## AI Gateway migration (2026-07-24)
+
+Owner decision (confirmed this session): authenticate via Vercel's automatic OIDC token, not a manually-provisioned `AI_GATEWAY_API_KEY`, since the app is already on Vercel.
+
+**What moved to the Gateway:**
+- `src/lib/ingredientOcr.ts` (Haiku vision/OCR) and `src/lib/researchScoring.ts` (Sonnet research scoring) — both previously called Anthropic directly via `@ai-sdk/anthropic`'s `createAnthropic()`. Now pass a plain `"provider/model"` string as `model` to `generateObject()`; the AI SDK (v7+) routes that through the Gateway automatically. `@ai-sdk/anthropic` and the direct `ANTHROPIC_API_KEY` dependency are gone from both files.
+- `src/lib/embeddingPipeline.ts` — previously raw-`fetch`ed OpenAI's and Voyage's embeddings endpoints directly (branching on which of `OPENAI_API_KEY`/`VOYAGE_API_KEY` was set). Now calls the AI SDK's `embed()` with a single configurable Gateway model id (`AI_GATEWAY_EMBEDDING_MODEL`, default `openai/text-embedding-3-small`) — confirmed live via the Gateway's own model catalog that it serves embedding models from both providers (plus Google), so one Gateway auth path now covers whichever is chosen. The local deterministic pseudo-embedding dev/test fallback is unchanged in behavior, just now gated on Gateway auth being present instead of either provider key.
+- **Not moved — `src/lib/batchApiHelper.ts` (weekly food-discovery job) stays a direct Anthropic call.** Confirmed via Vercel's own documentation (searched this session, no batch/async-discount endpoint mentioned anywhere in the AI Gateway docs) that the Gateway has no Message-Batches-API equivalent. This file still needs `ANTHROPIC_API_KEY` and a raw dated Anthropic model id — unchanged.
+
+**Model-id flag resolved (was open since Phase 4/5):** fetched the Gateway's own model catalog live (`GET https://ai-gateway.vercel.sh/v1/models`, no auth required) rather than guessing. It lists `anthropic/claude-haiku-4.5` and `anthropic/claude-sonnet-5` verbatim — exact matches for CLAUDE.md's product names ("Claude Haiku 4.5", "Claude Sonnet 5"). This is the first time these model-id strings have been confirmed against a live source rather than defaulted and flagged.
+
+**Env var changes (owner action needed — none of these are set in Vercel yet):**
+- New: `AI_GATEWAY_API_KEY` (local dev / non-OIDC fallback only — production should rely on OIDC), `AI_GATEWAY_HAIKU_MODEL` (default `anthropic/claude-haiku-4.5`), `AI_GATEWAY_SONNET_MODEL` (default `anthropic/claude-sonnet-5`), `AI_GATEWAY_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`).
+- **`ANTHROPIC_HAIKU_MODEL` is unchanged in meaning** but now used *only* by the direct-API batch job (`foodDiscovery.ts`/`batchApiHelper.ts`) — it must stay a raw dated Anthropic id (e.g. `claude-haiku-4-5-20251001`), never a Gateway `"provider/model"` string. This is a deliberate split, not an oversight: the same env var used to be read by both the (now-migrated) OCR file and the (still-direct) batch job, and those two need different id formats — reusing one var for both would have silently broken whichever read it under the wrong assumption.
+- `ANTHROPIC_SONNET_MODEL` (old name, only ever read by the now-migrated `researchScoring.ts`) is retired in favor of `AI_GATEWAY_SONNET_MODEL` — a clean rename, not a shared-var conflict, since nothing else referenced the old name.
+- `OPENAI_API_KEY`/`VOYAGE_API_KEY` are no longer read anywhere in this codebase (embeddings now go through the Gateway) — harmless to leave set in Vercel if already there, but no longer required.
+
+**Owner action needed before this works in production:** enable "OIDC Federation" in the Vercel project's settings (confirmed via Vercel's own docs that `VERCEL_OIDC_TOKEN` is only populated "when OIDC Federation is enabled" for the project — it is not on by default) — or, as a fallback, provision an `AI_GATEWAY_API_KEY` and set it in Vercel instead. Without one of these, every Gateway-routed call (OCR, research scoring, embeddings) will fail with an auth error once deployed.
+
+**Dependency changes:** `ai` bumped `^3.4.33` → `^7.0.37`; `@ai-sdk/anthropic` removed entirely (no longer needed — the Gateway routes Anthropic models via plain string ids); `zod` bumped `^3.23.8` → `^3.25.76` (still v3, meets `ai@7`'s peer range, no API changes needed for this codebase's usage); the `zod-to-json-schema` override is removed — confirmed the new `@ai-sdk/provider-utils@5.x` dependency chain no longer depends on that package at all (it uses `@standard-schema/spec` instead), so the specific dependency-graph bug that forced Phase 4's version pin no longer applies. Also fixed a real breaking-change bug while migrating: `ImagePart`'s field renamed `mimeType` → `mediaType` between the old and new SDK major versions — `ingredientOcr.ts`'s vision call was updated accordingly.
+
+**Verification done:** clean `rm -rf node_modules package-lock.json && npm install` succeeded (no corruption this session). `npx tsc --noEmit` passes with zero errors. `npm run build` completes successfully, all routes compile. **Not verified:** an actual live Gateway call — no `AI_GATEWAY_API_KEY` or Anthropic/OpenAI/Voyage key was available in this sandbox (all four are empty in the local `.env`), so none of `extractIngredientsFromImage()`, `researchScoring()`, or `generateEmbedding()`'s real (non-pseudo) path has been exercised end-to-end. Recommend testing all three once OIDC Federation is enabled (or a Gateway key is set) — ingredient photo submission end-to-end, a recommendation request with retrieved research chunks, and `npm run seed:phase4` for embeddings — before relying on this in production.
 
 ---
 

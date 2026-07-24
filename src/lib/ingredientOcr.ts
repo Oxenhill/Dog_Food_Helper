@@ -1,27 +1,40 @@
 import { generateObject } from 'ai';
-import { createAnthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
 import { OcrExtractionResult } from './types';
 
 /**
  * Photo/OCR ingredient extraction (Phase 5, Part B `submitIngredientPhoto`).
  *
- * Calls Claude Haiku 4.5 (vision) via the Vercel AI SDK to extract a
- * structured ingredient list from an owner-submitted packet/label photo.
- * This is Tier 2 (architecture doc §7) — the caller must always write the
- * result to `ingredient_review_queue`, never directly to `foods`/
- * `food_ingredients` (that's this file's caller's job, not this file's).
+ * Calls Claude Haiku 4.5 (vision) to extract a structured ingredient list
+ * from an owner-submitted packet/label photo. This is Tier 2 (architecture
+ * doc §7) — the caller must always write the result to
+ * `ingredient_review_queue`, never directly to `foods`/`food_ingredients`
+ * (that's this file's caller's job, not this file's).
  *
- * Model id is configurable via ANTHROPIC_HAIKU_MODEL, same pattern as
- * researchScoring.ts's ANTHROPIC_SONNET_MODEL — CLAUDE.md names "Claude
- * Haiku 4.5" as a product name, not a confirmed exact API model-id string.
- * **Confirm/update the default below against the live Anthropic model list
- * before relying on this in production** (same flag as Phase 4's Sonnet
- * default — see BUILD_PROGRESS.md).
+ * Routed through Vercel AI Gateway (owner decision, this session) rather
+ * than calling Anthropic directly: passing a plain "provider/model" string
+ * as `model` makes the AI SDK (v7+) route the request through the Gateway
+ * automatically, authenticating via AI_GATEWAY_API_KEY if set, or via
+ * Vercel's automatic OIDC token when deployed on Vercel with OIDC
+ * Federation enabled for the project (no code-level fallback needed for
+ * that — the SDK handles it). No more @ai-sdk/anthropic / ANTHROPIC_API_KEY
+ * dependency here.
+ *
+ * Model id: the Gateway's own model catalog (confirmed live via
+ * GET https://ai-gateway.vercel.sh/v1/models, no auth required) lists
+ * `anthropic/claude-haiku-4.5` verbatim — this resolves the long-standing
+ * "exact model-id string unconfirmed" flag from Phase 4/5 for Haiku, since
+ * the Gateway's friendly id matches CLAUDE.md's product name exactly.
+ * Configurable via AI_GATEWAY_HAIKU_MODEL — deliberately a *different* env
+ * var from ANTHROPIC_HAIKU_MODEL, which foodDiscovery.ts/batchApiHelper.ts
+ * still read for the *direct* (non-Gateway) Anthropic Batch API call — that
+ * one needs a raw dated Anthropic model id (e.g.
+ * "claude-haiku-4-5-20251001"), not this Gateway-format "provider/model" id;
+ * reusing the same env var for both would silently break whichever one
+ * read it second.
  */
 
-const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const HAIKU_MODEL = process.env.ANTHROPIC_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
+const HAIKU_MODEL = process.env.AI_GATEWAY_HAIKU_MODEL || 'anthropic/claude-haiku-4.5';
 
 // Nullable/optional throughout: Haiku is explicitly instructed not to guess
 // a brand/product name/price it can't actually read off the photo — an
@@ -75,7 +88,7 @@ export async function extractIngredientsFromImage(
 ): Promise<OcrExtractionResult> {
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU_MODEL),
+      model: HAIKU_MODEL,
       schema: OcrExtractionSchema,
       messages: [
         {
@@ -85,7 +98,8 @@ export async function extractIngredientsFromImage(
               type: 'text',
               text: `Extract dog food packaging information from this photo. This is a decision-support tool for dog owners — accuracy matters more than completeness. Only report a field if you can actually read it in the photo; use null (not a guess) for anything illegible, cropped out, or not present. List ingredients in the exact order printed, most prevalent first, exactly as written (don't normalise/rename them).`,
             },
-            { type: 'image', image: imageBuffer, mimeType },
+            // AI SDK v7's ImagePart uses `mediaType`, not the v3-era `mimeType`.
+            { type: 'image', image: imageBuffer, mediaType: mimeType },
           ],
         },
       ],

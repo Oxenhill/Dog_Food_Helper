@@ -1,5 +1,4 @@
 import { generateObject } from 'ai';
-import { createAnthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
 import { Dog, Food } from './types';
 import { RetrievedResearchChunk } from './ragRetrieval';
@@ -11,15 +10,22 @@ import { RetrievedResearchChunk } from './ragRetrieval';
  * synthesize a 0-1 relevance score + a plain-language reasoning summary
  * ("This food has high-quality protein, which supports [research finding X]").
  *
- * Model id is configurable via ANTHROPIC_SONNET_MODEL — CLAUDE.md names the
- * model "Claude Sonnet 5" but that's a product name, not a guaranteed exact
- * API model-id string, so this isn't hardcoded blind. Confirm/update the
- * default against the live Anthropic model list before relying on this in
- * production (flagged in BUILD_PROGRESS.md).
+ * Routed through Vercel AI Gateway (owner decision, this session) — see
+ * ingredientOcr.ts's header comment for the general rationale (plain
+ * "provider/model" string routes automatically via the AI SDK v7+, no more
+ * @ai-sdk/anthropic / ANTHROPIC_API_KEY dependency here).
+ *
+ * Model id: confirmed live against the Gateway's own model catalog
+ * (GET https://ai-gateway.vercel.sh/v1/models) — `anthropic/claude-sonnet-5`
+ * is listed verbatim, matching CLAUDE.md's product name exactly. This
+ * resolves the "exact model-id string unconfirmed" flag from Phase 4.
+ * Configurable via AI_GATEWAY_SONNET_MODEL (renamed from the old
+ * ANTHROPIC_SONNET_MODEL, which held a raw dated Anthropic API id — nothing
+ * else in this codebase reads the old name, so this is a clean rename, not
+ * a shared-var conflict like the Haiku one).
  */
 
-const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const SONNET_MODEL = process.env.ANTHROPIC_SONNET_MODEL || 'claude-sonnet-4-5-20250929';
+const SONNET_MODEL = process.env.AI_GATEWAY_SONNET_MODEL || 'anthropic/claude-sonnet-5';
 
 const ResearchRelevanceSchema = z.object({
   relevance_score: z
@@ -66,7 +72,7 @@ export async function researchScoring(
 
   try {
     const { object } = await generateObject({
-      model: anthropic(SONNET_MODEL),
+      model: SONNET_MODEL,
       schema: ResearchRelevanceSchema,
       prompt: `You are assessing how relevant a set of dog-nutrition research snippets is to recommending one specific candidate food for one specific dog. This is a decision-support tool for dog owners, not veterinary advice — be conservative and evidence-based; do not overstate a connection the research doesn't actually support.
 

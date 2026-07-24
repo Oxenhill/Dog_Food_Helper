@@ -1,8 +1,9 @@
+import { embed } from 'ai';
 import { supabaseAdmin } from './supabase';
 import { ResearchTopic, ReviewStatus } from './types';
 
 /**
- * Embedding pipeline (Phase 4)
+ * Embedding pipeline (Phase 4, migrated to Vercel AI Gateway this session)
  *
  * ---------------------------------------------------------------------------
  * DEVIATION LOGGED (per CLAUDE.md's "stop and log, don't guess" rule) — see
@@ -10,26 +11,32 @@ import { ResearchTopic, ReviewStatus } from './types';
  * "Call Claude Haiku to embed each chunk into a 1536-dimensional vector".
  * Anthropic does not expose an embeddings endpoint for any Claude model
  * (Haiku included) — Claude models are text-generation models, not embedding
- * models, and Anthropic's own docs point users to a third-party embeddings
- * provider (Voyage AI) for this. There is no way to literally satisfy "Claude
- * Haiku generates the embedding vector" as written, so rather than silently
- * inventing a different, unflagged approach, this is called out explicitly:
+ * models. There is no way to literally satisfy "Claude Haiku generates the
+ * embedding vector" as written, so rather than silently inventing a
+ * different, unflagged approach, this is called out explicitly.
  *
- * generateEmbedding() below tries, in order:
- *   1. OpenAI `text-embedding-3-small` if OPENAI_API_KEY is set — chosen as
- *      the default real-provider fallback because it natively returns
- *      1536-dim vectors (exact match for the `research_chunks.embedding
- *      vector(1536)` column, zero dimension-mismatch risk).
- *   2. Voyage AI `voyage-3-large` if VOYAGE_API_KEY is set instead (Anthropic's
- *      recommended embeddings partner).
- *   3. A local deterministic pseudo-embedding (hash-seeded, unit-normalized)
- *      if neither key is present, purely so the pipeline and schema can be
- *      exercised end-to-end (chunking, storage, retrieval plumbing) without
- *      an external key. This fallback is NOT semantically meaningful —
- *      similarity search results using it are effectively arbitrary. It logs
- *      a warning every time it's used and must not be relied on in
- *      production. Needs owner decision: which real embedding provider to
- *      use (OpenAI vs Voyage vs other) before Phase 4 is production-ready.
+ * generateEmbedding() below:
+ *   1. Calls the configured embedding model (AI_GATEWAY_EMBEDDING_MODEL,
+ *      default 'openai/text-embedding-3-small' — natively 1536-dim, an exact
+ *      match for the `research_chunks.embedding vector(1536)` column) via
+ *      the Vercel AI Gateway, using the AI SDK's `embed()`. This session
+ *      moved both the OpenAI and Voyage direct-fetch calls this file used
+ *      to make onto the Gateway (confirmed live via the Gateway's own
+ *      GET /v1/models catalog that it serves both openai/text-embedding-*
+ *      and voyage/* embedding models) — one Gateway auth path now covers
+ *      whichever provider is configured, instead of two separate direct API
+ *      keys. Swap AI_GATEWAY_EMBEDDING_MODEL to 'voyage/voyage-3-large' (or
+ *      another catalog entry) to change provider — this remains an
+ *      owner-approval-gated choice per CLAUDE.md (embedding
+ *      provider/model/dimension), not decided here.
+ *   2. Falls back to a local deterministic pseudo-embedding (hash-seeded,
+ *      unit-normalized) if Gateway auth isn't configured (no
+ *      AI_GATEWAY_API_KEY and no ambient VERCEL_OIDC_TOKEN), purely so the
+ *      pipeline and schema can be exercised end-to-end (chunking, storage,
+ *      retrieval plumbing) without external credentials. This fallback is
+ *      NOT semantically meaningful — similarity search results using it are
+ *      effectively arbitrary. It logs a warning every time it's used and
+ *      must not be relied on in production (enforced below in production).
  *
  * Whatever provider is used, the returned vector is normalized to exactly
  * 1536 dimensions (padded/truncated) before being written, so the DB column
@@ -38,6 +45,7 @@ import { ResearchTopic, ReviewStatus } from './types';
  */
 
 const EMBEDDING_DIM = 1536;
+const EMBEDDING_MODEL = process.env.AI_GATEWAY_EMBEDDING_MODEL || 'openai/text-embedding-3-small';
 
 function normalizeToDimension(vec: number[], dim: number): number[] {
   if (vec.length === dim) return vec;
@@ -45,44 +53,13 @@ function normalizeToDimension(vec: number[], dim: number): number[] {
   return [...vec, ...new Array(dim - vec.length).fill(0)];
 }
 
-async function embedWithOpenAI(text: string): Promise<number[]> {
-  const res = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'text-embedding-3-small',
-      input: text,
-      dimensions: EMBEDDING_DIM,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`OpenAI embeddings request failed: ${res.status} ${await res.text()}`);
-  }
-  const json = await res.json();
-  return json.data[0].embedding as number[];
+function hasGatewayAuthConfigured(): boolean {
+  return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN);
 }
 
-async function embedWithVoyage(text: string): Promise<number[]> {
-  const res = await fetch('https://api.voyageai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.VOYAGE_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'voyage-3-large',
-      input: [text],
-      input_type: 'document',
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Voyage embeddings request failed: ${res.status} ${await res.text()}`);
-  }
-  const json = await res.json();
-  return json.data[0].embedding as number[];
+async function embedWithGateway(text: string): Promise<number[]> {
+  const { embedding } = await embed({ model: EMBEDDING_MODEL, value: text });
+  return embedding;
 }
 
 /** Deterministic, dependency-free pseudo-embedding — dev/test fallback only.
@@ -108,20 +85,20 @@ function localPseudoEmbedding(text: string): number[] {
 
 let warnedLocalFallback = false;
 
-/** Throws if neither embedding provider key is set and we're running in
- * production — the local pseudo-embedding fallback must never silently back
- * real RAG retrieval in production (BUILD_PROGRESS.md: "embedding provider
- * not yet chosen" is a standing owner-input flag, not a green light to ship
+/** Throws if Gateway auth isn't configured and we're running in production —
+ * the local pseudo-embedding fallback must never silently back real RAG
+ * retrieval in production (BUILD_PROGRESS.md: "embedding provider not yet
+ * chosen" is a standing owner-input flag, not a green light to ship
  * arbitrary similarity search). Dev/test keeps using the pseudo-embedding
  * fallback unchanged. */
 export function assertEmbeddingProviderConfigured(): void {
-  const hasProvider = Boolean(process.env.OPENAI_API_KEY || process.env.VOYAGE_API_KEY);
-  if (!hasProvider && process.env.NODE_ENV === 'production') {
+  if (!hasGatewayAuthConfigured() && process.env.NODE_ENV === 'production') {
     throw new Error(
-      'No embedding provider configured: set OPENAI_API_KEY or VOYAGE_API_KEY before ' +
-        'running RAG ingestion/retrieval in production. Without one of these, embeddings ' +
-        'would fall back to a non-semantic local pseudo-embedding, making similarity search ' +
-        'results arbitrary. See src/lib/embeddingPipeline.ts header comment.'
+      'No AI Gateway auth configured: set AI_GATEWAY_API_KEY, or deploy on Vercel with ' +
+        'OIDC Federation enabled for this project (VERCEL_OIDC_TOKEN), before running RAG ' +
+        'ingestion/retrieval in production. Without one of these, embeddings would fall ' +
+        'back to a non-semantic local pseudo-embedding, making similarity search results ' +
+        'arbitrary. See src/lib/embeddingPipeline.ts header comment.'
     );
   }
 }
@@ -131,17 +108,15 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   const cleaned = text.trim();
   let raw: number[];
 
-  if (process.env.OPENAI_API_KEY) {
-    raw = await embedWithOpenAI(cleaned);
-  } else if (process.env.VOYAGE_API_KEY) {
-    raw = await embedWithVoyage(cleaned);
+  if (hasGatewayAuthConfigured()) {
+    raw = await embedWithGateway(cleaned);
   } else {
     if (!warnedLocalFallback) {
       console.warn(
-        '[embeddingPipeline] No OPENAI_API_KEY or VOYAGE_API_KEY set — using a local ' +
-          'deterministic pseudo-embedding. This is NOT semantically meaningful and RAG ' +
-          'retrieval results will be arbitrary. Set OPENAI_API_KEY (recommended, native ' +
-          '1536-dim) or VOYAGE_API_KEY before relying on this in anything but local dev. ' +
+        '[embeddingPipeline] No AI_GATEWAY_API_KEY / VERCEL_OIDC_TOKEN available — using a ' +
+          'local deterministic pseudo-embedding. This is NOT semantically meaningful and RAG ' +
+          'retrieval results will be arbitrary. Set AI_GATEWAY_API_KEY for local dev before ' +
+          'relying on this outside a plain local run. ' +
           'See src/lib/embeddingPipeline.ts header comment / BUILD_PROGRESS.md.'
       );
       warnedLocalFallback = true;
