@@ -1,7 +1,23 @@
 # Dog Food Platform — Build Progress
 
 **Last updated:** 2026-07-24
-**Current phase:** Phase 6 + post-Phase-6 hardening complete. This session (2026-07-24) added the sign-in/sign-up flow (Task 1, resolved — see below) and migrated AI provider calls to Vercel AI Gateway (Task 2, see "AI Gateway migration" below). **Owner action still needed:** enable OIDC Federation on the Vercel project (or set `AI_GATEWAY_API_KEY`) before the Gateway-routed calls will work in production — untested live in this session, no Gateway credentials were available in this sandbox.
+**Current phase:** Phase 6 + post-Phase-6 hardening complete. This session (2026-07-24) added the sign-in/sign-up flow (Task 1), migrated AI provider calls to Vercel AI Gateway (Task 2), and added the missing dog-profile UI (list/create/hub — see "Dog profile UI" below). **Owner action still needed:** enable OIDC Federation on the Vercel project (or set `AI_GATEWAY_API_KEY`) before the Gateway-routed calls will work in production — untested live in this session, no Gateway credentials were available in this sandbox. A separate handover prompt for a fresh orchestrated session is being prepared to finish remaining gaps and do a full UI design pass — see the end of this file once that's added.
+
+---
+
+## Dog profile UI (2026-07-24)
+
+Signup's redirect target (`/account`, a bare confirmation page — see the "Sign-in/sign-up flow" entry below) turned out to be a bigger gap than initially scoped: there was **no dog-profile-creation UI or dog list anywhere in the app** — only the API routes (`POST /api/dogs/create`, `GET/PUT /api/dogs/[dogId]`) existed, unreachable from any page. The owner expected this to already exist (Phase 1's checklist says "Dog profile CRUD" is done — true for the API layer, not the UI). Filled in this session:
+
+- `GET /api/dogs` (new) — lists the signed-in owner's dogs; companion to the existing `POST /api/dogs/create`.
+- `/dogs` (new) — the owner's dog list, empty-state prompts to add a first dog, links into each dog's hub page.
+- `/dogs/new` (new) — dog profile creation form (name, breed, DOB, weight, size category, lifestyle role, work type, exercise hours, current food freetext, monthly budget) → `POST /api/dogs/create` → redirects to the new dog's hub page.
+- `/dogs/[dogId]` (new) — dog hub page. Links to every existing per-dog page (baseline, quick-log, red-flag, photo submissions) that previously had no discoverable entry point, **and gives `POST /api/recommendations` — the Phase 3 recommendation engine — its first UI anywhere in the app.** Confirmed via grep that no page/component called that route before this session.
+- `/signin`, `/signup` now redirect to `/dogs` instead of the bare `/account` page. `/account` is simplified to a minimal sign-out/settings page, reachable from `/dogs`'s header.
+
+**Verification:** `npx tsc --noEmit` and `npm run build` both pass cleanly (all new routes compile). Smoke-tested in a local browser with a fake session id — pages render correctly and fail gracefully (surfacing the same known local-`.env`-placeholder-key error as every other write path in this sandbox, not a new bug). **Not yet tested with real data** — need a real signed-in session against the live Supabase project to confirm dog creation, listing, and the recommendations call all work end-to-end (the recommendations call in particular exercises this session's Gateway migration — first real chance to verify that live).
+
+**Still not built — flagged, not silently expanded into this session's scope:** editing an existing dog profile (the `PUT /api/dogs/[dogId]` route exists, no edit form); a `dog_restrictions`/`dog_health_conditions` management UI (API routes exist per Phase 1, no forms); deleting a dog profile (no route or UI). These plus the broader visual design of the whole app are intended for the upcoming handover session — see the end of this file.
 
 ---
 

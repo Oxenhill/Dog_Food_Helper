@@ -40,7 +40,7 @@ export default function SignInPage() {
         return;
       }
       setUserId(json.user.id);
-      router.push('/account');
+      router.push('/dogs');
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {

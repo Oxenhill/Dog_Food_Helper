@@ -21,14 +21,9 @@ import { setUserId } from '@/lib/clientAuth';
 // once confirmed — this page can't currently detect confirmation status
 // either way (no such flag comes back from the API).
 //
-// Redirect destination after signup: there is no dog-profile-creation page
-// or dashboard anywhere in this app yet (confirmed — nothing exists under
-// src/app/dogs/[dogId]/ except pages that require an existing dogId, and no
-// "list my dogs" / "create a dog" page exists at all). Building that flow is
-// out of scope here per the task brief ("flag it, don't silently build a
-// large new flow"), so this redirects to a bare confirmation page
-// (/account) instead of a first-dog-profile step. Logged in
-// BUILD_PROGRESS.md under "Needs owner input".
+// Redirects to /dogs, the owner's dog list — that page shows an empty state
+// with a link into /dogs/new if they have no dogs yet, rather than forcing a
+// first-dog-profile step directly into the signup flow itself.
 export default function SignUpPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -57,7 +52,7 @@ export default function SignUpPage() {
         return;
       }
       setUserId(json.user.id);
-      router.push('/account');
+      router.push('/dogs');
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {
