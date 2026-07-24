@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-gray-50 p-8">
@@ -18,9 +20,12 @@ export default function Home() {
             <p className="text-gray-600 mb-4">
               Log in to access your dog profiles and personalized recommendations.
             </p>
-            <button className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">
+            <Link
+              href="/signin"
+              className="inline-block bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+            >
               Sign In
-            </button>
+            </Link>
           </div>
 
           <div className="bg-white rounded-lg shadow p-6">
@@ -30,9 +35,12 @@ export default function Home() {
             <p className="text-gray-600 mb-4">
               New to Dog Food Helper? Create an account to get started.
             </p>
-            <button className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700">
+            <Link
+              href="/signup"
+              className="inline-block bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700"
+            >
               Sign Up
-            </button>
+            </Link>
           </div>
         </div>
 
