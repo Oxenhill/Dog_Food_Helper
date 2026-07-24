@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/serverAuth';
 import { deriveLifeStage } from '@/lib/lifeStage';
 
 export async function GET(
@@ -7,7 +8,8 @@ export async function GET(
   { params }: { params: { dogId: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },
@@ -41,7 +43,8 @@ export async function PUT(
   { params }: { params: { dogId: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },
@@ -127,7 +130,8 @@ export async function DELETE(
   { params }: { params: { dogId: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },

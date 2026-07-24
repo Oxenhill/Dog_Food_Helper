@@ -3,27 +3,16 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { setUserId } from '@/lib/clientAuth';
+import { saveSession } from '@/lib/session';
 
-// Owner-facing sign-up page (was entirely missing — see /signin's header
-// comment for the same context). Posts to the existing POST /api/auth/signup
-// route.
-//
-// POST /api/auth/signup only ever returns `{ user }`, never a session (it
-// calls supabase.auth.signUp(), which doesn't return an active session when
-// email confirmation is required) — so there is no access token to store
-// here even if we wanted one. We store the returned user.id via
-// clientAuth.ts's setUserId() regardless: the x-user-id header this app's
-// owner-facing routes read is an unverified stopgap already (see
-// clientAuth.ts), so setting it immediately post-signup is consistent with
-// that existing trust level, not a new gap. If email confirmation turns out
-// to be enabled on this Supabase project, sign-in itself would still work
-// once confirmed — this page can't currently detect confirmation status
-// either way (no such flag comes back from the API).
-//
-// Redirects to /dogs, the owner's dog list — that page shows an empty state
-// with a link into /dogs/new if they have no dogs yet, rather than forcing a
-// first-dog-profile step directly into the signup flow itself.
+// Owner-facing sign-up page. Posts to POST /api/auth/signup, which returns
+// `{ user }` but no session (supabase.auth.signUp() doesn't return an active
+// session, and may require email confirmation). To land the user in a usable
+// signed-in state we immediately attempt a sign-in with the same credentials:
+//   - success -> store the real session (saveSession) and route by role
+//     (admin -> /admin via the ADMIN_EMAILS bootstrap, owner -> /dogs);
+//   - failure (e.g. email confirmation required) -> send them to /signin with
+//     a clear message rather than a broken half-signed-in state.
 export default function SignUpPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -51,8 +40,30 @@ export default function SignUpPage() {
         setError('Account created, but no user id was returned.');
         return;
       }
-      setUserId(json.user.id);
-      router.push('/dogs');
+      // Establish a real session by signing in with the same credentials.
+      const signinRes = await fetch('/api/auth/signin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const signinJson = await signinRes.json();
+      if (!signinRes.ok || !signinJson.session?.access_token) {
+        // Most likely email confirmation is required — the account exists, but
+        // there's no session yet. Route to sign-in with context.
+        router.push('/signin?created=1');
+        return;
+      }
+      saveSession(signinJson.session);
+      let isAdmin = false;
+      try {
+        const meRes = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${signinJson.session.access_token}` },
+        });
+        if (meRes.ok) isAdmin = (await meRes.json())?.is_admin === true;
+      } catch {
+        // Fall through to the owner route on any lookup failure.
+      }
+      router.push(isAdmin ? '/admin' : '/dogs');
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {

@@ -1,24 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { setUserId } from '@/lib/clientAuth';
+import { saveSession } from '@/lib/session';
 
-// Owner-facing sign-in page (was entirely missing — the landing page's
-// "Sign In" button had no href/onClick until this was built). Posts to the
-// existing POST /api/auth/signin route and stores the returned user id via
-// clientAuth.ts's setUserId(), matching the x-user-id-header stopgap every
-// other authenticated owner-facing route already depends on. This is
-// deliberately NOT the same mechanism as the admin pages (adminAuth.ts),
-// which store a real Supabase access token for src/lib/serverAdminAuth.ts's
-// session check — the two auth paths are intentionally different right now.
+// Unified sign-in for owners AND admins. Posts to POST /api/auth/signin, then
+// stores the real Supabase session (saveSession) — the single credential every
+// authenticated route now verifies server-side. Role-aware routing: we ask the
+// server (/api/auth/me) whether this account is an admin and route to /admin or
+// /dogs accordingly. is_admin is derived server-side from user_profiles, never
+// from any client-supplied value.
 export default function SignInPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    // Read ?created=1 without useSearchParams (which would force a Suspense
+    // boundary for static generation).
+    if (new URLSearchParams(window.location.search).get('created') === '1') {
+      setInfo('Account created. Sign in to continue — if you were asked to confirm your email, do that first.');
+    }
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,12 +42,21 @@ export default function SignInPage() {
         setError(json.error ?? `Sign-in failed (${res.status})`);
         return;
       }
-      if (!json.user?.id) {
-        setError('Signed in, but no user id was returned.');
+      if (!json.session?.access_token) {
+        setError('Signed in, but no session was returned.');
         return;
       }
-      setUserId(json.user.id);
-      router.push('/dogs');
+      saveSession(json.session);
+      let isAdmin = false;
+      try {
+        const meRes = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${json.session.access_token}` },
+        });
+        if (meRes.ok) isAdmin = (await meRes.json())?.is_admin === true;
+      } catch {
+        // On any lookup failure, fall through to the owner route.
+      }
+      router.push(isAdmin ? '/admin' : '/dogs');
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {
@@ -65,6 +81,11 @@ export default function SignInPage() {
         <p className="lead mt-2">Pick up where you left off with your dogs.</p>
 
         <div className="card card-pad mt-6">
+          {info && (
+            <div className="callout-info mb-4" role="status">
+              {info}
+            </div>
+          )}
           {error && (
             <div className="callout-alarm mb-4" role="alert">
               {error}

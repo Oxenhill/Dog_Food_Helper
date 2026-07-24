@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/serverAuth';
 import { Dog, Food } from '@/lib/types';
 import { applyHardFilter } from '@/lib/hardFilter';
 import { calculateDER } from '@/lib/nutritionalScoring';
@@ -38,7 +39,8 @@ const SCORING_BATCH_SIZE = 5;
  */
 export async function POST(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json({ error: 'User ID required' }, { status: 401 });
     }

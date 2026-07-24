@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { adminAuthHeaders, clearAdminToken, getAdminToken, setAdminToken } from '@/lib/adminAuth';
+import { adminAuthHeaders, clearAdminToken, getAdminToken } from '@/lib/adminAuth';
+import { saveSession } from '@/lib/session';
 import { BRISTOL_STOOL_TYPES, BCS_LEVELS } from '@/lib/chartReference';
 import { ChartManifest, ChartType } from '@/lib/chartIllustrationStorage';
 
@@ -61,7 +62,7 @@ export default function ChartIllustrationsAdmin() {
         setSignInError('Signed in, but no session token was returned — check your email confirmation status.');
         return;
       }
-      setAdminToken(accessToken);
+      saveSession(json.session);
       setHasToken(true);
     } finally {
       setSigningIn(false);

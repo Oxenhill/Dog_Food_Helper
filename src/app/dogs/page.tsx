@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
+import AdminLink from '@/components/AdminLink';
 import { Dog } from '@/lib/types';
 
 /**
@@ -44,9 +45,12 @@ export default function DogsPage() {
             <span className="wordmark-dot" />
             Dog Food Helper
           </Link>
-          <Link href="/account" className="btn-ghost btn-sm">
-            Account
-          </Link>
+          <div className="flex items-center gap-1">
+            <AdminLink />
+            <Link href="/account" className="btn-ghost btn-sm">
+              Account
+            </Link>
+          </div>
         </div>
       </header>
 

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/serverAuth';
 
 /**
  * Fetch a dog's current (most recent) baseline plus the log entries logged
@@ -8,7 +9,8 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json({ error: 'User ID required' }, { status: 401 });
     }

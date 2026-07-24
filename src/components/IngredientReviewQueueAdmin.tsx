@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { adminAuthHeaders, clearAdminToken, getAdminToken, setAdminToken } from '@/lib/adminAuth';
+import { adminAuthHeaders, clearAdminToken, getAdminToken } from '@/lib/adminAuth';
+import { saveSession } from '@/lib/session';
 import { IngredientReviewQueueItem, FoodType, Food } from '@/lib/types';
 
 const FOOD_TYPES: FoodType[] = ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other'];
@@ -121,7 +122,7 @@ export default function IngredientReviewQueueAdmin() {
         setSignInError('Signed in, but no session token was returned — check your email confirmation status.');
         return;
       }
-      setAdminToken(accessToken);
+      saveSession(json.session);
       setHasToken(true);
     } finally {
       setSigningIn(false);

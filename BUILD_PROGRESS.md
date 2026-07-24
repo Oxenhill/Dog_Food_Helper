@@ -5,6 +5,35 @@
 
 ---
 
+## WS1 — Unified auth + admin experience (2026-07-24, Opus-orchestrated)
+
+Closed the single most-repeated flag in this file: the split, insecure auth. **Uncommitted, held for the owner's deploy decision — see "Owner review" below. This also closes a LIVE vulnerability on the deployed app (see the security note).**
+
+### Security finding (headline)
+The **deployed** app (commit `9e120c3`) trusts an **unverified `x-user-id` request header** for every owner route (dogs, restrictions, health-conditions, logs, baselines, red-flags, food-events, weight-logs, recommendations, ingredient submissions). Any caller could read or modify **any** user's data by setting that header to their id. This is fixed here but is **live until deployed** — argues for deploying WS1 promptly.
+
+### What changed
+- **One verified session for owners AND admins.** New `src/lib/serverAuth.ts`: `getSessionUser`/`requireUser` (verify `Authorization: Bearer <supabase_access_token>` via `supabaseAdmin.auth.getUser`) and `requireAdmin` (adds a server-side `user_profiles.is_admin` check). `src/lib/serverAdminAuth.ts` is now a re-export shim of it (admin routes unchanged).
+- **All 16 owner API routes** converted from `request.headers.get('x-user-id')` to `requireUser(request)` (24 guard sites). Delegated the mechanical transform to a Sonnet subagent under an exact spec; every diff reviewed + verified (0 old patterns remain, 24 new guards, 16 imports, tsc/build clean).
+- **New `GET /api/auth/me`** — returns `{ user, is_admin, display_name }`, is_admin always derived server-side. Powers role-aware routing + nav.
+- **Unified client session** `src/lib/session.ts` (stores `{access_token, refresh_token, user_id}`, arms supabase-js auto-refresh via `onAuthStateChange` so `authHeaders()` stays synchronous AND fresh). `clientAuth.ts` + `adminAuth.ts` are now thin **compat shims** over it, so the 13 read-only consumers needed no edits. `authHeaders()`/`adminAuthHeaders()` now emit `Authorization: Bearer …` instead of the forgeable `x-user-id`.
+- **Role-aware routing:** `/signin` and `/signup` now `saveSession()` then ask `/api/auth/me` → admin → `/admin`, owner → `/dogs`. Signup establishes a real session by chaining a sign-in; if email confirmation blocks it, routes to `/signin?created=1` with a message.
+- **`/admin` dashboard** (`src/app/admin/page.tsx`) on the design system: live count cards (foods, contraindications [safety-tagged], research, review queue, users, chart art) from new admin-gated `GET /api/admin/overview`, each linking to its WS2 surface.
+- **`AdminShell`** (`src/components/AdminShell.tsx`) — shared admin chrome + fail-closed client guard (no session → `/signin`; non-admin → `/dogs`); persistent admin nav. Existing `/admin/review-queue` + `/admin/charts` pages rewrapped in it. **`AdminLink`** surfaces an "Admin" link in the owner `/dogs` header only for confirmed admins.
+
+### Design decision (recorded)
+Unified onto the **already-proven Bearer-token model**, NOT a new `@supabase/ssr` cookie stack. Rationale: eliminates the `x-user-id` hole, derives identity + is_admin server-side, reuses the working `requireAdmin` pattern, adds **no new dependency** (sandbox install-corruption risk; codebase deliberately avoids new deps). **Trade-off accepted:** token in localStorage (same trust model the admin path already used), not an httpOnly cookie. Future hardening: migrate to `@supabase/ssr` cookie sessions.
+
+### Verification (all performed this session)
+- `npx tsc --noEmit` clean; `npm run build` passes, all new routes compiled (`/admin`, `/api/auth/me`, `/api/admin/overview`).
+- **Live, against the real DB** (local prod server on :3131): forged `x-user-id` → **401** (hole closed); no-auth → 401; bogus bearer → 401; `/api/admin/overview` hidden as **404** to non-admins. Valid token (fresh test account) → `/api/dogs` **200**, `/api/auth/me` correct `is_admin:false`. Promoted the test account → same token now → `/api/auth/me` `is_admin:true`, `/api/admin/overview` **200** with real counts (foods 30, users 3, admins 2, research 0). `/admin` in a fresh browser fail-closes to `/signin`. Test account fully deleted afterward (0 rows in auth.users + user_profiles).
+
+### Owner review
+- **Deploy WS1 promptly?** It closes a live data-exposure vulnerability. Committing/pushing to main is owner-gated — awaiting go. Recommend deploying this as its own coherent change.
+- After deploy, an admin must have `user_profiles.is_admin=true` (the owner's account already does) and sign in via the unified `/signin` to reach `/admin`.
+
+---
+
 ## Finish-and-redesign session (2026-07-24, Opus-orchestrated)
 
 Opus orchestrator + four Sonnet subagents (parallel, disjoint file sets). Closed the remaining functional gaps and did a full visual redesign. **All work verified live/locally; not yet deployed — held for one coherent deploy per owner (see "Deploy" below).**

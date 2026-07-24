@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/serverAuth';
 import { randomUUID } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabase';
 import { stripImageMetadata } from '@/lib/imageExif';
@@ -39,7 +40,8 @@ const ALLOWED_MIME_TYPES: Record<string, string> = {
  */
 export async function POST(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json({ error: 'User ID required' }, { status: 401 });
     }

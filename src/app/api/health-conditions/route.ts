@@ -1,9 +1,11 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/serverAuth';
 
 export async function POST(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },
@@ -70,7 +72,8 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },
@@ -123,7 +126,8 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const authedUser = await requireUser(request);
+    const userId = authedUser?.id;
     if (!userId) {
       return NextResponse.json(
         { error: 'User ID required' },
