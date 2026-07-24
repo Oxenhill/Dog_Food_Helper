@@ -97,14 +97,43 @@ export async function retrieveResearchFor(
   if (conditionError) throw conditionError;
 
   const query = buildSearchQuery(dog as Dog, restrictions ?? [], conditions ?? []);
-  const queryEmbedding = await generateEmbedding(query);
+
+  // Research relevance is an OPTIONAL scoring enhancement, not a hard
+  // dependency of producing recommendations. Both external dependencies of
+  // this retrieval — the embedding provider (via the AI Gateway) and the
+  // match_research_chunks RPC — can legitimately be absent (no Gateway auth
+  // configured yet; RAG corpus not seeded). When either is unavailable we
+  // degrade to "no research context" and let recommendations proceed with
+  // research_relevance contributing an honest 0 (researchScoring returns
+  // NO_RESEARCH_RESULT for an empty chunk list, making no LLM call). This
+  // must never turn a whole recommendation request into a 500 — a missing
+  // optional enhancement is not a failed recommendation. Genuine data errors
+  // above (dog/restriction/condition fetch) are still surfaced as throws.
+  let queryEmbedding: number[];
+  try {
+    queryEmbedding = await generateEmbedding(query);
+  } catch (err) {
+    console.warn(
+      '[ragRetrieval] embedding unavailable — proceeding with no research context ' +
+        '(research_relevance will contribute 0):',
+      err
+    );
+    return [];
+  }
 
   const { data, error } = await supabaseAdmin.rpc('match_research_chunks', {
     query_embedding: queryEmbedding,
     match_count: topK,
   });
 
-  if (error) throw error;
+  if (error) {
+    console.warn(
+      '[ragRetrieval] match_research_chunks RPC failed — proceeding with no research ' +
+        'context (research_relevance will contribute 0):',
+      error
+    );
+    return [];
+  }
 
   return ((data ?? []) as MatchRow[])
     // Defense in depth: the RPC already filters review_status='approved' and
