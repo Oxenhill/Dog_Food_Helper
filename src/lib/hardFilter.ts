@@ -27,6 +27,18 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
 
     if (conditionError) throw conditionError;
 
+    // NOTE (Phase 3 verification pass): `conditions` is fetched but not yet
+    // used to exclude anything. Health-condition exclusion needs a
+    // condition -> contraindicated-ingredient/nutrient mapping, and there is
+    // no such table in Part A's schema — `foods`/`food_ingredients` has no
+    // nutrient columns (protein/fat/sodium/etc.) and there's no
+    // condition_contraindications reference table. Guessing a free-text
+    // condition -> ingredient mapping here would be exactly the kind of
+    // silent, safety-relevant assumption CLAUDE.md's "stop and log" rule
+    // exists to prevent, so this is left unimplemented and flagged in
+    // BUILD_PROGRESS.md under "Needs owner input" rather than invented.
+    void conditions;
+
     // Get all foods
     const { data: foods, error: foodError } = await supabaseAdmin
       .from('foods')

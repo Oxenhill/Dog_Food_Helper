@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+import { deriveLifeStage } from '@/lib/lifeStage';
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,6 +33,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // life_stage is system-derived (Part C item 1) — computed server-side here
+    // rather than left null, since Phase 3's recommendation scoring needs it.
+    const life_stage = await deriveLifeStage(date_of_birth, size_category);
+
     const { data, error } = await supabaseAdmin
       .from('dogs')
       .insert({
@@ -44,6 +49,7 @@ export async function POST(request: NextRequest) {
         lifestyle_role,
         work_type,
         daily_exercise_hours,
+        life_stage,
         current_food_id,
         current_food_freetext,
         monthly_food_budget,

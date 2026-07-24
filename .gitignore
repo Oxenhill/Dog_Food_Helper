@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+build/
+
+# Env
+.env
+.env.local
+.env*.local
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.check.json
+tsconfig.libcheck.json
+tsconfig.phase5check.json
+tsconfig.phase6check.json
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*

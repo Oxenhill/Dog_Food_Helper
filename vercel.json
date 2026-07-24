@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/food-discovery",
+      "schedule": "0 2 * * 0"
+    },
+    {
+      "path": "/api/cron/correlation-engine",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/inactivity-check",
+      "schedule": "0 1 * * *"
+    }
+  ]
+}
