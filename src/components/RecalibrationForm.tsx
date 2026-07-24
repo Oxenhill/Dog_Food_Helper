@@ -73,16 +73,20 @@ export default function RecalibrationForm({
     gasOdor !== null;
 
   return (
-    <div className="space-y-6">
-      <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded text-sm text-gray-700">
+    <div className="flex flex-col gap-6">
+      <div className="callout-disclaimer">
         Re-select the full chart for any indicator you want to recalibrate — this compares against
         the original baseline and gives the correlation engine a precise reading, not just a
         trend. Leave anything unchanged blank.
       </div>
 
-      {error && <div className="bg-red-50 border border-red-300 text-red-800 text-sm p-3 rounded">{error}</div>}
+      {error && (
+        <div className="callout-alarm" role="alert">
+          {error}
+        </div>
+      )}
       {success && (
-        <div className="bg-green-50 border border-green-300 text-green-800 text-sm p-3 rounded">
+        <div className="callout border-better/25 bg-better-tint text-better" role="status">
           Recalibration saved.
         </div>
       )}
@@ -94,11 +98,7 @@ export default function RecalibrationForm({
       <WellnessLevelSelector metric="gas_frequency" value={gasFrequency} onChange={setGasFrequency} />
       <WellnessLevelSelector metric="gas_odor" value={gasOdor} onChange={setGasOdor} />
 
-      <button
-        onClick={handleSubmit}
-        disabled={!hasAnySelection || submitting}
-        className="w-full bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg hover:bg-blue-700"
-      >
+      <button onClick={handleSubmit} disabled={!hasAnySelection || submitting} className="btn-primary btn-block">
         {submitting ? 'Saving…' : 'Save recalibration'}
       </button>
     </div>

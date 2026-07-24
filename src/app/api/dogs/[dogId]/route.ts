@@ -96,3 +96,72 @@ export async function PUT(
     );
   }
 }
+
+/**
+ * DELETE /api/dogs/[dogId] — removes a single dog from the owner's account.
+ *
+ * Anonymise, not hard-erase: this sets `owner_id = null` on the dog row
+ * rather than deleting it, matching the app's documented data-deletion model
+ * (architecture doc §10 / CLAUDE.md principle #5 — "Anonymise (nullable
+ * owner_id) dog records so they keep contributing to research/pooled
+ * signals"). It's the exact same mechanism src/lib/accountLifecycle.ts's
+ * deleteAccount() uses for every dog owned by a user whose whole account is
+ * being deleted; this route just scopes it to one dog instead of all of a
+ * user's dogs, leaving every other column (health/food/log history) intact.
+ *
+ * Flag for the orchestrator: deleteAccount() (whole-account deletion) always
+ * anonymises dogs — it never hard-erases them, because the account owner is
+ * also being hard-deleted at the same time and the dog's history is
+ * genuinely orphaned/anonymous at that point. A single-dog removal here is a
+ * different situation: the owner's account stays active, so this endpoint
+ * is intentionally choosing "anonymise" over "hard-erase" for consistency
+ * with that existing semantics rather than because it's obviously the right
+ * choice for a *voluntary single-dog removal while the account persists*.
+ * Whether that's the correct behaviour (vs. hard-deleting a dog the owner
+ * explicitly asked to remove, or offering the owner a choice) is a
+ * GDPR/product decision this task does not have the authority to make — it
+ * should be confirmed with the owner rather than silently assumed.
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { dogId: string } }
+) {
+  try {
+    const userId = request.headers.get('x-user-id');
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'User ID required' },
+        { status: 401 }
+      );
+    }
+
+    const { data: existing, error: lookupError } = await supabaseAdmin
+      .from('dogs')
+      .select('id')
+      .eq('id', params.dogId)
+      .eq('owner_id', userId)
+      .single();
+
+    if (lookupError || !existing) {
+      return NextResponse.json({ error: 'Dog not found' }, { status: 404 });
+    }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('dogs')
+      .update({ owner_id: null })
+      .eq('id', params.dogId)
+      .eq('owner_id', userId);
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ message: 'Dog removed' }, { status: 200 });
+  } catch (error) {
+    console.error('Delete dog error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

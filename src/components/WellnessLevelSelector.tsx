@@ -23,18 +23,16 @@ export default function WellnessLevelSelector({
   const descriptions = WELLNESS_INDICATOR_DESCRIPTIONS[metric];
 
   return (
-    <fieldset className="border border-gray-200 rounded-lg p-4">
-      <legend className="text-sm font-semibold text-gray-900 px-1">
-        {METRIC_TITLES[metric]}
-      </legend>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
+    <fieldset className="rounded-lg border border-line p-4">
+      <legend className="label px-1">{METRIC_TITLES[metric]}</legend>
+      <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {WELLNESS_LEVEL_OPTIONS.map((opt) => (
           <label
             key={opt.value}
-            className={`cursor-pointer rounded-lg border p-3 text-sm transition ${
+            className={`cursor-pointer rounded-lg border p-3 text-[14px] transition focus-within:border-pine focus-within:shadow-focus ${
               value === opt.value
-                ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600'
-                : 'border-gray-200 hover:border-gray-300'
+                ? 'border-pine bg-pine-tint'
+                : 'border-line hover:border-line-strong'
             }`}
           >
             <input
@@ -45,8 +43,8 @@ export default function WellnessLevelSelector({
               onChange={() => onChange(opt.value)}
               className="sr-only"
             />
-            <div className="font-medium text-gray-900">{opt.label}</div>
-            <div className="text-gray-600 mt-1">{descriptions[opt.value]}</div>
+            <div className="font-medium text-ink">{opt.label}</div>
+            <div className="mt-1 text-ink-soft">{descriptions[opt.value]}</div>
           </label>
         ))}
       </div>

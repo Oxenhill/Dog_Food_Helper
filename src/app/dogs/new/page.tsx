@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
 import { useEffect } from 'react';
 
@@ -69,139 +70,182 @@ export default function NewDogPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-lg mx-auto bg-white rounded-lg shadow p-6 space-y-4">
-        <h1 className="text-2xl font-bold text-gray-900">Add a dog</h1>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Breed</label>
-            <input
-              type="text"
-              value={breed}
-              onChange={(e) => setBreed(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Date of birth</label>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link href="/dogs" className="wordmark">
+            <span className="wordmark-dot" />
+            Dog Food Helper
+          </Link>
+        </div>
+      </header>
+
+      <main className="container-narrow">
+        <p className="eyebrow">New profile</p>
+        <h1 className="page-title mt-2">Add a dog</h1>
+        <p className="lead mt-2">
+          The essentials to get started — you can add allergies, health conditions and more detail
+          later.
+        </p>
+
+        <div className="card card-pad mt-6">
+          {error && (
+            <div className="callout-alarm mb-4" role="alert">
+              {error}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="field">
+              <label className="label" htmlFor="name">
+                Name *
+              </label>
               <input
-                type="date"
-                value={dateOfBirth}
-                onChange={(e) => setDateOfBirth(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg p-2 text-sm"
+                id="name"
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="input"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+            <div className="field">
+              <label className="label" htmlFor="breed">
+                Breed
+              </label>
               <input
+                id="breed"
+                type="text"
+                value={breed}
+                onChange={(e) => setBreed(e.target.value)}
+                className="input"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="field">
+                <label className="label" htmlFor="dateOfBirth">
+                  Date of birth
+                </label>
+                <input
+                  id="dateOfBirth"
+                  type="date"
+                  value={dateOfBirth}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="input metric"
+                />
+              </div>
+              <div className="field">
+                <label className="label" htmlFor="weightKg">
+                  Weight (kg)
+                </label>
+                <input
+                  id="weightKg"
+                  type="number"
+                  step="0.1"
+                  value={weightKg}
+                  onChange={(e) => setWeightKg(e.target.value)}
+                  className="input metric"
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="sizeCategory">
+                Size category
+              </label>
+              <select
+                id="sizeCategory"
+                value={sizeCategory}
+                onChange={(e) => setSizeCategory(e.target.value)}
+                className="select"
+              >
+                <option value="">Select…</option>
+                {SIZE_CATEGORIES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="field">
+                <label className="label" htmlFor="lifestyleRole">
+                  Lifestyle role
+                </label>
+                <select
+                  id="lifestyleRole"
+                  value={lifestyleRole}
+                  onChange={(e) => setLifestyleRole(e.target.value)}
+                  className="select"
+                >
+                  {LIFESTYLE_ROLES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label className="label" htmlFor="workType">
+                  Work type
+                </label>
+                <select
+                  id="workType"
+                  value={workType}
+                  onChange={(e) => setWorkType(e.target.value)}
+                  className="select"
+                >
+                  {WORK_TYPES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="dailyExerciseHours">
+                Daily exercise (hours)
+              </label>
+              <input
+                id="dailyExerciseHours"
                 type="number"
-                step="0.1"
-                value={weightKg}
-                onChange={(e) => setWeightKg(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg p-2 text-sm"
+                step="0.5"
+                value={dailyExerciseHours}
+                onChange={(e) => setDailyExerciseHours(e.target.value)}
+                className="input metric"
               />
             </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Size category</label>
-            <select
-              value={sizeCategory}
-              onChange={(e) => setSizeCategory(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            >
-              <option value="">Select…</option>
-              {SIZE_CATEGORIES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Lifestyle role</label>
-              <select
-                value={lifestyleRole}
-                onChange={(e) => setLifestyleRole(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-              >
-                {LIFESTYLE_ROLES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+            <div className="field">
+              <label className="label" htmlFor="currentFoodFreetext">
+                Current food
+              </label>
+              <input
+                id="currentFoodFreetext"
+                type="text"
+                placeholder="e.g. Canagan Grain-Free Chicken"
+                value={currentFoodFreetext}
+                onChange={(e) => setCurrentFoodFreetext(e.target.value)}
+                className="input"
+              />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Work type</label>
-              <select
-                value={workType}
-                onChange={(e) => setWorkType(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-              >
-                {WORK_TYPES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+            <div className="field">
+              <label className="label" htmlFor="monthlyFoodBudget">
+                Monthly food budget (£, optional)
+              </label>
+              <input
+                id="monthlyFoodBudget"
+                type="number"
+                step="1"
+                value={monthlyFoodBudget}
+                onChange={(e) => setMonthlyFoodBudget(e.target.value)}
+                className="input metric"
+              />
             </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Daily exercise (hours)
-            </label>
-            <input
-              type="number"
-              step="0.5"
-              value={dailyExerciseHours}
-              onChange={(e) => setDailyExerciseHours(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Current food</label>
-            <input
-              type="text"
-              placeholder="e.g. Canagan Grain-Free Chicken"
-              value={currentFoodFreetext}
-              onChange={(e) => setCurrentFoodFreetext(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Monthly food budget (£, optional)
-            </label>
-            <input
-              type="number"
-              step="1"
-              value={monthlyFoodBudget}
-              onChange={(e) => setMonthlyFoodBudget(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {submitting ? 'Creating…' : 'Create dog profile'}
-          </button>
-        </form>
-      </div>
-    </main>
+            <button type="submit" disabled={submitting} className="btn-primary btn-block mt-1">
+              {submitting ? 'Creating…' : 'Create dog profile'}
+            </button>
+          </form>
+        </div>
+      </main>
+    </div>
   );
 }

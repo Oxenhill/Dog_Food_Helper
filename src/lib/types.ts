@@ -61,6 +61,17 @@ export interface Food {
   suitable_size_max?: SizeCategory;
   price_per_kg?: number;
   calories_per_kg?: number;
+  // Guaranteed-analysis nutrients (%), used by the health-condition hard
+  // filter's nutrient-threshold rules. Nullable — owner/vet-populated, start
+  // NULL on existing rows. See supabase/migrations/*_food_nutrients.sql.
+  protein_pct?: number;
+  fat_pct?: number;
+  fibre_pct?: number;
+  moisture_pct?: number;
+  ash_pct?: number;
+  phosphorus_pct?: number;
+  sodium_pct?: number;
+  calcium_pct?: number;
   source_url?: string;
   source_domain?: string;
   last_verified_at?: string;

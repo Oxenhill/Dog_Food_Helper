@@ -2,16 +2,186 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    font-feature-settings: "cv05", "ss01";
+    line-height: 1.55;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display text-ink;
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+  }
+  /* Readings, scores, dates, money, sample sizes — the product is measurements */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  a {
+    color: inherit;
+  }
+  :focus-visible {
+    outline: none;
+    @apply shadow-focus rounded-sm;
+  }
+  ::selection {
+    background: rgba(30, 77, 69, 0.16);
+  }
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer components {
+  /* ---- Layout shell ---------------------------------------------------- */
+  .app-shell {
+    @apply min-h-screen bg-paper;
+  }
+  .container-page {
+    @apply mx-auto w-full max-w-3xl px-5 py-8 sm:px-6 sm:py-10;
+  }
+  .container-narrow {
+    @apply mx-auto w-full max-w-md px-5 py-8 sm:py-12;
+  }
+
+  /* ---- App header ------------------------------------------------------ */
+  .app-header {
+    @apply sticky top-0 z-20 border-b border-line bg-paper/85 backdrop-blur-sm;
+  }
+  .app-header-inner {
+    @apply mx-auto flex w-full max-w-3xl items-center justify-between px-5 py-3 sm:px-6;
+  }
+  .wordmark {
+    @apply flex items-center gap-2 font-display text-[15px] font-bold tracking-tight text-ink;
+  }
+  .wordmark-dot {
+    @apply inline-block h-2.5 w-2.5 rounded-full bg-pine;
+  }
+
+  /* ---- Typography helpers --------------------------------------------- */
+  .eyebrow {
+    @apply font-mono text-[11px] font-medium uppercase tracking-eyebrow text-pine-soft;
+  }
+  .page-title {
+    @apply font-display text-[26px] font-bold text-ink sm:text-[30px];
+  }
+  .section-title {
+    @apply font-display text-lg font-bold text-ink;
+  }
+  .lead {
+    @apply text-[15px] leading-relaxed text-ink-soft;
+  }
+  .muted {
+    @apply text-ink-soft;
+  }
+  .metric {
+    @apply font-mono tabular tracking-tight;
+  }
+
+  /* ---- Surfaces -------------------------------------------------------- */
+  .card {
+    @apply rounded-lg border border-line bg-surface shadow-card;
+  }
+  .card-pad {
+    @apply p-5 sm:p-6;
+  }
+  .card-link {
+    @apply block rounded-lg border border-line bg-surface p-5 shadow-card transition
+      hover:border-line-strong hover:shadow-raised focus-visible:border-pine;
+  }
+  .hairline {
+    @apply border-t border-line;
+  }
+
+  /* ---- Buttons --------------------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded font-sans text-[14px]
+      font-semibold transition disabled:cursor-not-allowed disabled:opacity-55;
+    padding: 0.6rem 1.1rem;
+  }
+  .btn-primary {
+    @apply btn bg-pine text-white hover:bg-pine-dark;
+  }
+  .btn-secondary {
+    @apply btn border border-line-strong bg-surface text-ink hover:bg-paper;
+  }
+  .btn-ghost {
+    @apply btn text-pine hover:bg-pine-tint;
+  }
+  .btn-danger {
+    @apply btn bg-alarm text-white hover:bg-alarm-dark;
+  }
+  .btn-block {
+    @apply w-full;
+  }
+  .btn-sm {
+    @apply text-[13px];
+    padding: 0.4rem 0.8rem;
+  }
+
+  /* ---- Forms ----------------------------------------------------------- */
+  .field {
+    @apply flex flex-col gap-1.5;
+  }
+  .label {
+    @apply font-sans text-[13px] font-semibold text-ink;
+  }
+  .input,
+  .select,
+  .textarea {
+    @apply w-full rounded border border-line-strong bg-surface px-3 py-2.5 text-[15px]
+      text-ink placeholder:text-ink-soft/70 transition
+      focus:border-pine focus:shadow-focus;
+  }
+  .textarea {
+    @apply min-h-[96px] resize-y;
+  }
+  .help-text {
+    @apply text-[12.5px] leading-snug text-ink-soft;
+  }
+  .error-text {
+    @apply text-[13px] font-medium text-alarm;
+  }
+
+  /* ---- Badges / signals ----------------------------------------------- */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
+      font-mono text-[11px] font-medium uppercase tracking-wide;
+  }
+  .badge-neutral {
+    @apply badge border-line-strong bg-paper text-ink-soft;
+  }
+  .badge-pine {
+    @apply badge border-pine/20 bg-pine-tint text-pine;
+  }
+  .signal-better {
+    @apply badge border-better/25 bg-better-tint text-better;
+  }
+  .signal-worse {
+    @apply badge border-worse/25 bg-worse-tint text-worse;
+  }
+  .signal-steady {
+    @apply badge border-steady/30 bg-steady-tint text-ink-soft;
+  }
+
+  /* ---- Callouts -------------------------------------------------------- */
+  .callout {
+    @apply rounded-lg border p-4 text-[14px] leading-relaxed;
+  }
+  .callout-info {
+    @apply callout border-line bg-surface text-ink-soft;
+  }
+  .callout-disclaimer {
+    @apply callout border-l-[3px] border-l-pine border-line bg-pine-tint/40 text-ink;
+  }
+  /* Red-flag / urgent — deliberately loud, never softened (Phase 2 rule) */
+  .callout-alarm {
+    @apply callout border-l-[4px] border-l-alarm border-alarm/30 bg-alarm-tint text-ink;
+  }
 }

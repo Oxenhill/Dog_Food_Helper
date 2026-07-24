@@ -37,50 +37,59 @@ export default function DogsPage() {
   }, [router]);
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-gray-900">Your dogs</h1>
-          <div className="flex items-center gap-3">
-            <Link href="/account" className="text-sm text-gray-600 underline">
-              Account
-            </Link>
-            <Link
-              href="/dogs/new"
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm"
-            >
-              Add a dog
-            </Link>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link href="/dogs" className="wordmark">
+            <span className="wordmark-dot" />
+            Dog Food Helper
+          </Link>
+          <Link href="/account" className="btn-ghost btn-sm">
+            Account
+          </Link>
+        </div>
+      </header>
+
+      <main className="container-page">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="eyebrow">Your household</p>
+            <h1 className="page-title mt-2">Your dogs</h1>
           </div>
+          <Link href="/dogs/new" className="btn-primary btn-sm shrink-0">
+            Add a dog
+          </Link>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {loading && <p className="text-gray-600">Loading…</p>}
+        {error && (
+          <div className="callout-alarm mt-6" role="alert">
+            {error}
+          </div>
+        )}
+        {loading && <p className="muted mt-6">Loading…</p>}
 
         {!loading && dogs.length === 0 && !error && (
-          <div className="bg-white rounded-lg shadow p-6 text-center space-y-3">
-            <p className="text-gray-600">No dog profiles yet.</p>
-            <Link href="/dogs/new" className="text-blue-600 underline">
-              Add your first dog →
+          <div className="card card-pad mt-6 text-center">
+            <p className="lead">No dog profiles yet.</p>
+            <Link href="/dogs/new" className="btn-primary mt-4 inline-flex">
+              Add your first dog
             </Link>
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {dogs.map((dog) => (
-            <Link
-              key={dog.id}
-              href={`/dogs/${dog.id}`}
-              className="bg-white rounded-lg shadow p-4 hover:shadow-md transition-shadow"
-            >
-              <h2 className="text-lg font-semibold text-gray-900">{dog.name}</h2>
-              <p className="text-sm text-gray-600">
-                {[dog.breed, dog.life_stage].filter(Boolean).join(' · ') || 'No details yet'}
-              </p>
-            </Link>
-          ))}
-        </div>
-      </div>
-    </main>
+        {!loading && dogs.length > 0 && (
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {dogs.map((dog) => (
+              <Link key={dog.id} href={`/dogs/${dog.id}`} className="card-link">
+                <h2 className="section-title">{dog.name}</h2>
+                <p className="muted mt-1 text-[14px]">
+                  {[dog.breed, dog.life_stage].filter(Boolean).join(' · ') || 'No details yet'}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

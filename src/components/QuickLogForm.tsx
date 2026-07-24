@@ -69,44 +69,56 @@ export default function QuickLogForm({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="bg-gray-50 border border-gray-200 p-3 rounded text-xs text-gray-600">
+    <div className="flex flex-col gap-5">
+      <div className="callout-info">
         A temporary dip in digestive readings during the first ~10 days after a food switch is
         common and expected — coat and body condition can take weeks to show real change too.
         This context is applied automatically behind the scenes.
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-300 text-red-800 text-sm p-3 rounded">
+        <div className="callout-alarm" role="alert">
           {error}
         </div>
       )}
       {success && (
-        <div className="bg-green-50 border border-green-300 text-green-800 text-sm p-3 rounded">
+        <div className="callout border-better/25 bg-better-tint text-better" role="status">
           Logged. Thanks for keeping this up to date.
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="card divide-y divide-line">
         {QUICK_LOG_METRICS.map(({ metric, label }) => (
-          <div key={metric} className="flex items-center justify-between border border-gray-200 rounded-lg p-3">
-            <span className="text-sm font-medium text-gray-900">{label}</span>
-            <div className="flex gap-2">
-              {TREND_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setTrend(metric, opt.value)}
-                  className={`px-3 py-1.5 rounded-md text-sm border transition ${
-                    selections[metric] === opt.value
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400'
-                  }`}
-                  aria-pressed={selections[metric] === opt.value}
-                >
-                  <span aria-hidden>{opt.emoji}</span> {opt.label}
-                </button>
-              ))}
+          <div key={metric} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-[14px] font-medium text-ink">{label}</span>
+            <div className="grid grid-cols-3 gap-2 sm:w-[280px]">
+              {TREND_OPTIONS.map((opt) => {
+                const isSelected = selections[metric] === opt.value;
+                const selectedTone =
+                  opt.value === 'better'
+                    ? 'border-better bg-better-tint text-better'
+                    : opt.value === 'worse'
+                      ? 'border-worse bg-worse-tint text-worse'
+                      : 'border-steady bg-steady-tint text-ink';
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setTrend(metric, opt.value)}
+                    className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-lg border px-2 py-2 text-[12.5px] font-semibold transition ${
+                      isSelected
+                        ? selectedTone
+                        : 'border-line-strong bg-surface text-ink-soft hover:bg-paper'
+                    }`}
+                    aria-pressed={isSelected}
+                  >
+                    <span aria-hidden className="text-base leading-none">
+                      {opt.emoji}
+                    </span>
+                    {opt.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
@@ -115,7 +127,7 @@ export default function QuickLogForm({
       <button
         onClick={handleSubmit}
         disabled={Object.keys(selections).length === 0 || submitting}
-        className="w-full bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg hover:bg-blue-700"
+        className="btn-primary btn-block"
       >
         {submitting ? 'Saving…' : 'Save log'}
       </button>

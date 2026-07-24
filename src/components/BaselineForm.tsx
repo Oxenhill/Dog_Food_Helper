@@ -71,17 +71,15 @@ export default function BaselineForm({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded">
-        <p className="text-sm text-gray-700">
-          This is a one-time full check-in used as the reference point everything else compares
-          against. Ongoing logging afterwards is a quick better/worse/no-change tap — this level
-          of detail isn&apos;t needed every day.
-        </p>
+    <div className="flex flex-col gap-6">
+      <div className="callout-disclaimer">
+        This is a one-time full check-in used as the reference point everything else compares
+        against. Ongoing logging afterwards is a quick better/worse/no-change tap — this level
+        of detail isn&apos;t needed every day.
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-300 text-red-800 text-sm p-3 rounded">
+        <div className="callout-alarm" role="alert">
           {error}
         </div>
       )}
@@ -93,25 +91,22 @@ export default function BaselineForm({
       <WellnessLevelSelector metric="gas_frequency" value={gasFrequency} onChange={setGasFrequency} />
       <WellnessLevelSelector metric="gas_odor" value={gasOdor} onChange={setGasOdor} />
 
-      <div>
-        <label className="block text-sm font-semibold text-gray-900 mb-1">
+      <div className="field">
+        <label className="label" htmlFor="behaviour-tags">
           Behaviour notes (optional)
         </label>
         <input
+          id="behaviour-tags"
           type="text"
           value={behaviourTags}
           onChange={(e) => setBehaviourTags(e.target.value)}
           placeholder="e.g. calm, anxious around food, normal energy"
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
+          className="input"
         />
-        <p className="text-xs text-gray-500 mt-1">Comma-separated tags, if any stand out.</p>
+        <p className="help-text">Comma-separated tags, if any stand out.</p>
       </div>
 
-      <button
-        onClick={handleSubmit}
-        disabled={!isComplete || submitting}
-        className="w-full bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg hover:bg-blue-700"
-      >
+      <button onClick={handleSubmit} disabled={!isComplete || submitting} className="btn-primary btn-block">
         {submitting ? 'Saving baseline…' : 'Save baseline'}
       </button>
     </div>

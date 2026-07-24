@@ -229,98 +229,168 @@ export default function IngredientReviewQueueAdmin() {
 
   if (!hasToken) {
     return (
-      <div className="max-w-md space-y-3">
-        <h1 className="text-xl font-bold">Ingredient review queue — admin sign in</h1>
-        <p className="text-sm text-gray-600">
+      <div className="mx-auto max-w-md">
+        <p className="eyebrow">Admin sign in</p>
+        <h1 className="page-title mt-2">Ingredient review queue</h1>
+        <p className="lead mt-2">
           Sign in with your Dog Food Helper account. Access is only granted if your account has
           admin status (user_profiles.is_admin) — see BUILD_PROGRESS.md for how to become the
           first admin.
         </p>
-        {signInError && <p className="text-sm text-red-600">{signInError}</p>}
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          placeholder="Email"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          placeholder="Password"
-        />
-        <button
-          type="button"
-          onClick={() => void signIn()}
-          disabled={signingIn}
-          className="bg-gray-800 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-50"
-        >
-          {signingIn ? 'Signing in…' : 'Sign in'}
-        </button>
+
+        <div className="card card-pad mt-6">
+          {signInError && (
+            <div className="callout-alarm mb-4" role="alert">
+              {signInError}
+            </div>
+          )}
+          <div className="flex flex-col gap-4">
+            <div className="field">
+              <label className="label" htmlFor="review-queue-admin-email">
+                Email
+              </label>
+              <input
+                id="review-queue-admin-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                autoComplete="email"
+              />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="review-queue-admin-password">
+                Password
+              </label>
+              <input
+                id="review-queue-admin-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                autoComplete="current-password"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void signIn()}
+              disabled={signingIn}
+              className="btn-primary btn-block"
+            >
+              {signingIn ? 'Signing in…' : 'Sign in'}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Ingredient review queue — pending ({items.length})</h1>
-        <button type="button" onClick={() => void loadQueue()} className="text-sm underline">
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="eyebrow">Admin</p>
+          <h1 className="page-title mt-1 text-[24px] sm:text-[26px]">
+            Review queue <span className="metric text-ink-soft">({items.length} pending)</span>
+          </h1>
+        </div>
+        <button type="button" onClick={() => void loadQueue()} className="btn-secondary btn-sm shrink-0">
           {loading ? 'Loading…' : 'Refresh'}
         </button>
       </div>
-      {statusMsg._global && <p className="text-red-600 text-sm">{statusMsg._global}</p>}
 
-      {items.length === 0 && !loading && <p className="text-gray-500 text-sm">Nothing pending.</p>}
+      {statusMsg._global && (
+        <div className="callout-alarm" role="alert">
+          {statusMsg._global}
+        </div>
+      )}
+
+      {items.length === 0 && !loading && <p className="muted text-[14px]">Nothing pending.</p>}
 
       {items.map((item) => {
         const c = corrections[item.id];
         if (!c) return null;
         const showDuplicateConfirm = duplicateConfirm[item.id];
         return (
-          <div key={item.id} className="border border-gray-300 rounded-xl p-4 space-y-3">
-            <div className="flex justify-between text-xs text-gray-500">
-              <span>queue_id: {item.id}</span>
-              <span>submitted: {new Date(item.created_at).toLocaleString()}</span>
+          <div key={item.id} className="card card-pad">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="metric text-[12px] text-ink-soft">queue_id: {item.id}</span>
+              <span className="metric text-[12px] text-ink-soft">
+                submitted: {new Date(item.created_at).toLocaleString()}
+              </span>
             </div>
 
             {item.raw_ocr_json._ocr_error && (
-              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-300 rounded p-2">
+              <div className="callout-info mt-3">
                 OCR extraction failed for this photo — review manually: {item.raw_ocr_json._ocr_error}
-              </p>
+              </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1 text-sm">
-                <div><span className="font-medium">Extracted brand:</span> {item.raw_ocr_json.brand ?? '—'}</div>
-                <div><span className="font-medium">Extracted product:</span> {item.raw_ocr_json.product_name ?? '—'}</div>
-                <div><span className="font-medium">Age suitability:</span> {item.raw_ocr_json.age_suitability ?? '—'}</div>
-                <div><span className="font-medium">Weight range:</span> {item.raw_ocr_json.weight_range ?? '—'}</div>
-                <div><span className="font-medium">Price:</span> {item.raw_ocr_json.price ?? '—'}</div>
-                <div><span className="font-medium">Notes:</span> {item.raw_ocr_json.notes ?? '—'}</div>
-                <div><span className="font-medium">Ingredients:</span> {(item.raw_ocr_json.ingredients ?? []).join(', ') || '—'}</div>
+            <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-2">
+              <div className="flex flex-col gap-1.5 text-[14px]">
+                <div>
+                  <span className="font-semibold text-ink">Extracted brand:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.brand ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Extracted product:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.product_name ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Age suitability:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.age_suitability ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Weight range:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.weight_range ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Price:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.price ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Notes:</span>{' '}
+                  <span className="text-ink-soft">{item.raw_ocr_json.notes ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-ink">Ingredients:</span>{' '}
+                  <span className="text-ink-soft">
+                    {(item.raw_ocr_json.ingredients ?? []).join(', ') || '—'}
+                  </span>
+                </div>
 
                 {item.raw_ocr_json._image_storage_path && (
-                  <div>
-                    <button type="button" onClick={() => void viewPhoto(item)} className="text-blue-600 underline">
+                  <div className="mt-1">
+                    <button
+                      type="button"
+                      onClick={() => void viewPhoto(item)}
+                      className="text-[13px] font-semibold text-pine hover:underline"
+                    >
                       View photo
                     </button>
                     {photoUrls[item.id] && (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={photoUrls[item.id]} alt="submitted packet" className="mt-2 max-h-64 rounded" />
+                      <img
+                        src={photoUrls[item.id]}
+                        alt="submitted packet"
+                        className="mt-2 max-h-64 max-w-full rounded-lg border border-line object-contain"
+                      />
                     )}
                   </div>
                 )}
 
                 {item.possible_duplicate && (
-                  <div className="bg-yellow-50 border border-yellow-300 rounded p-2">
-                    Possible duplicate: {item.possible_duplicate.brand} {item.possible_duplicate.name}
+                  <div className="callout-info mt-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="signal-worse">possible duplicate</span>
+                      <span>
+                        {item.possible_duplicate.brand} {item.possible_duplicate.name}
+                      </span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => void linkToExisting(item)}
-                      className="ml-2 text-blue-600 underline"
+                      className="mt-1.5 text-[13px] font-semibold text-pine hover:underline"
                     >
                       Link to existing instead
                     </button>
@@ -328,104 +398,163 @@ export default function IngredientReviewQueueAdmin() {
                 )}
               </div>
 
-              <div className="space-y-2 text-sm">
-                <p className="text-xs text-gray-500">
-                  Fields below map to the strict `foods` schema — OCR can&apos;t populate these reliably,
-                  fill in before approving.
+              <div className="flex flex-col gap-3">
+                <p className="help-text">
+                  Fields below map to the strict `foods` schema — OCR can&apos;t populate these
+                  reliably, fill in before approving.
                 </p>
-                <input
-                  placeholder="Brand"
-                  value={c.brand}
-                  onChange={(e) => updateCorrection(item.id, 'brand', e.target.value)}
-                  className="w-full border rounded p-1.5"
-                />
-                <input
-                  placeholder="Product name"
-                  value={c.name}
-                  onChange={(e) => updateCorrection(item.id, 'name', e.target.value)}
-                  className="w-full border rounded p-1.5"
-                />
-                <select
-                  value={c.food_type}
-                  onChange={(e) => updateCorrection(item.id, 'food_type', e.target.value)}
-                  className="w-full border rounded p-1.5"
-                >
-                  <option value="">food_type (required)…</option>
-                  {FOOD_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="field">
+                  <label className="label" htmlFor={`brand-${item.id}`}>
+                    Brand
+                  </label>
                   <input
-                    placeholder="Min age (months)"
-                    value={c.suitable_age_min_months}
-                    onChange={(e) => updateCorrection(item.id, 'suitable_age_min_months', e.target.value)}
-                    className="border rounded p-1.5"
-                  />
-                  <input
-                    placeholder="Max age (months)"
-                    value={c.suitable_age_max_months}
-                    onChange={(e) => updateCorrection(item.id, 'suitable_age_max_months', e.target.value)}
-                    className="border rounded p-1.5"
+                    id={`brand-${item.id}`}
+                    value={c.brand}
+                    onChange={(e) => updateCorrection(item.id, 'brand', e.target.value)}
+                    className="input"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="field">
+                  <label className="label" htmlFor={`name-${item.id}`}>
+                    Product name
+                  </label>
+                  <input
+                    id={`name-${item.id}`}
+                    value={c.name}
+                    onChange={(e) => updateCorrection(item.id, 'name', e.target.value)}
+                    className="input"
+                  />
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor={`food-type-${item.id}`}>
+                    Food type
+                  </label>
                   <select
-                    value={c.suitable_size_min}
-                    onChange={(e) => updateCorrection(item.id, 'suitable_size_min', e.target.value)}
-                    className="border rounded p-1.5"
+                    id={`food-type-${item.id}`}
+                    value={c.food_type}
+                    onChange={(e) => updateCorrection(item.id, 'food_type', e.target.value)}
+                    className="select"
                   >
-                    <option value="">size min…</option>
-                    {SIZE_CATEGORIES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                  <select
-                    value={c.suitable_size_max}
-                    onChange={(e) => updateCorrection(item.id, 'suitable_size_max', e.target.value)}
-                    className="border rounded p-1.5"
-                  >
-                    <option value="">size max…</option>
-                    {SIZE_CATEGORIES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    <option value="">food_type (required)…</option>
+                    {FOOD_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
                   </select>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    placeholder="price_per_kg"
-                    value={c.price_per_kg}
-                    onChange={(e) => updateCorrection(item.id, 'price_per_kg', e.target.value)}
-                    className="border rounded p-1.5"
-                  />
-                  <input
-                    placeholder="calories_per_kg"
-                    value={c.calories_per_kg}
-                    onChange={(e) => updateCorrection(item.id, 'calories_per_kg', e.target.value)}
-                    className="border rounded p-1.5"
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="field">
+                    <label className="label" htmlFor={`age-min-${item.id}`}>
+                      Min age (months)
+                    </label>
+                    <input
+                      id={`age-min-${item.id}`}
+                      value={c.suitable_age_min_months}
+                      onChange={(e) => updateCorrection(item.id, 'suitable_age_min_months', e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor={`age-max-${item.id}`}>
+                      Max age (months)
+                    </label>
+                    <input
+                      id={`age-max-${item.id}`}
+                      value={c.suitable_age_max_months}
+                      onChange={(e) => updateCorrection(item.id, 'suitable_age_max_months', e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="field">
+                    <label className="label" htmlFor={`size-min-${item.id}`}>
+                      Size min
+                    </label>
+                    <select
+                      id={`size-min-${item.id}`}
+                      value={c.suitable_size_min}
+                      onChange={(e) => updateCorrection(item.id, 'suitable_size_min', e.target.value)}
+                      className="select"
+                    >
+                      <option value="">size min…</option>
+                      {SIZE_CATEGORIES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor={`size-max-${item.id}`}>
+                      Size max
+                    </label>
+                    <select
+                      id={`size-max-${item.id}`}
+                      value={c.suitable_size_max}
+                      onChange={(e) => updateCorrection(item.id, 'suitable_size_max', e.target.value)}
+                      className="select"
+                    >
+                      <option value="">size max…</option>
+                      {SIZE_CATEGORIES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="field">
+                    <label className="label" htmlFor={`price-${item.id}`}>
+                      Price per kg
+                    </label>
+                    <input
+                      id={`price-${item.id}`}
+                      value={c.price_per_kg}
+                      onChange={(e) => updateCorrection(item.id, 'price_per_kg', e.target.value)}
+                      className="input metric"
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="label" htmlFor={`calories-${item.id}`}>
+                      Calories per kg
+                    </label>
+                    <input
+                      id={`calories-${item.id}`}
+                      value={c.calories_per_kg}
+                      onChange={(e) => updateCorrection(item.id, 'calories_per_kg', e.target.value)}
+                      className="input metric"
+                    />
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor={`ingredients-${item.id}`}>
+                    Ingredients (comma-separated, in packet order)
+                  </label>
+                  <textarea
+                    id={`ingredients-${item.id}`}
+                    value={c.ingredients}
+                    onChange={(e) => updateCorrection(item.id, 'ingredients', e.target.value)}
+                    className="textarea"
+                    rows={2}
                   />
                 </div>
-                <textarea
-                  placeholder="Ingredients (comma-separated, in packet order)"
-                  value={c.ingredients}
-                  onChange={(e) => updateCorrection(item.id, 'ingredients', e.target.value)}
-                  className="w-full border rounded p-1.5"
-                  rows={2}
-                />
               </div>
             </div>
 
-            {statusMsg[item.id] && <p className="text-sm text-gray-700">{statusMsg[item.id]}</p>}
+            {statusMsg[item.id] && <p className="muted mt-3 text-[14px]">{statusMsg[item.id]}</p>}
 
-            <div className="flex gap-3">
+            <div className="mt-4 flex gap-3">
               <button
                 type="button"
                 onClick={() => void approve(item, showDuplicateConfirm)}
-                className="bg-green-700 text-white rounded-lg px-4 py-2 text-sm"
+                className="btn-primary btn-sm"
               >
                 {showDuplicateConfirm ? 'Confirm — create as new food' : 'Approve'}
               </button>
-              <button
-                type="button"
-                onClick={() => void reject(item)}
-                className="bg-red-700 text-white rounded-lg px-4 py-2 text-sm"
-              >
+              <button type="button" onClick={() => void reject(item)} className="btn-danger btn-sm">
                 Reject
               </button>
             </div>

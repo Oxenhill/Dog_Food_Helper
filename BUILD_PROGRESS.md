@@ -1,7 +1,59 @@
 # Dog Food Platform — Build Progress
 
 **Last updated:** 2026-07-24
-**Current phase:** Phase 6 + post-Phase-6 hardening complete. This session (2026-07-24) added the sign-in/sign-up flow (Task 1), migrated AI provider calls to Vercel AI Gateway (Task 2), and added the missing dog-profile UI (list/create/hub — see "Dog profile UI" below). **Owner action still needed:** enable OIDC Federation on the Vercel project (or set `AI_GATEWAY_API_KEY`) before the Gateway-routed calls will work in production — untested live in this session, no Gateway credentials were available in this sandbox. A separate handover prompt for a fresh orchestrated session is being prepared to finish remaining gaps and do a full UI design pass — see the end of this file once that's added.
+**Current phase:** Phase 6 complete + full finish-and-redesign pass done (see "Finish-and-redesign session" below). This session (Opus-orchestrated): fixed a production-down recommendations 500; found and fixed that **Tailwind never compiled** (no `postcss.config.js` — the whole app was unstyled); built a design system and redesigned every page; added dog edit/delete, the allergies/health-conditions UI, and the deterministic health-condition hard-filter mechanism; applied the missing RAG RPC; and **verified all three AI Gateway paths live**. Everything is verified but **staged/uncommitted, held for one coherent deploy** (the recommendations hotfix is the one piece already live). **Owner action needed before deploy:** give the go to commit + push to main; see this session's "Needs owner input" for the research-layer cost design and the vet-gated clinical mappings.
+
+---
+
+## Finish-and-redesign session (2026-07-24, Opus-orchestrated)
+
+Opus orchestrator + four Sonnet subagents (parallel, disjoint file sets). Closed the remaining functional gaps and did a full visual redesign. **All work verified live/locally; not yet deployed — held for one coherent deploy per owner (see "Deploy" below).**
+
+### 1. Production hotfix — recommendations was 500ing for every user (DEPLOYED)
+- Live test of the deployed dog flow found `POST /api/recommendations` returning **500 for every dog**. Root cause: `retrieveResearchFor()` (ragRetrieval.ts) called `generateEmbedding()` and the `match_research_chunks` RPC unconditionally and threw on failure — but the embedding path throws in production without Gateway auth, and the RPC had never been applied to the live DB. An *optional* research enhancement was a *hard* dependency of getting any recommendation.
+- Fix: `retrieveResearchFor()` now fail-softs to `[]` (no research context) on either an embedding or RPC failure — recommendations always return, degrading only the optional research factor (researchScoring already returns an honest 0 for empty chunks, no LLM call). **Committed (58a15b4) and pushed to main → deployed → verified live 200** with real results before continuing.
+
+### 2. Root-caused why the whole UI looked unstyled — Tailwind never compiled
+- **There was no `postcss.config.js` in the repo at all.** Next.js therefore never ran Tailwind's PostCSS plugin: the deployed CSS shipped `@tailwind base/components/utilities;` as literal, uncompiled text, so *every* utility class in the entire app was inert. The app had been serving browser-default HTML this whole time — the real reason it looked "ugly."
+- Fix: added `postcss.config.js` (tailwindcss plugin; autoprefixer intentionally omitted — not installed in this checkout, Tailwind compiles fine without it, add later when deps can be installed safely). This single file makes the entire app styled.
+
+### 3. Design system + full redesign (Workstream 2)
+- Established a design system (owner approved the direction): deep **petrol-pine** (`#1E4D45`) on warm-neutral **paper** (`#F4F3EE`); **Bricolage Grotesque** display + **IBM Plex Sans** body + **IBM Plex Mono for every metric** (scores, dates, £, sample sizes — the signature); a disciplined semantic **signal system** (better/worse/steady + a deliberately loud red-flag **alarm** register). Central tokens in `tailwind.config.ts`, a reusable component-class vocabulary in `globals.css` (`.card`, `.btn-*`, `.field/.label/.input`, `.signal-*`, `.callout-*`, etc.), fonts wired via `next/font` in `layout.tsx`.
+- Redesigned **every** page/component onto that system: landing, signin/signup/account, dogs list/new/hub, baseline/quick-log/recalibrate/red-flag + their selector components, photo submissions, and both admin pages (review queue, chart illustrations). Logic/data-flow untouched (visual pass only). Red-flag flow kept **more** alarming, not less (`bg-alarm-tint`, `border-4`, `role="alert"`) per the Phase-2 safety requirement.
+
+### 4. Dog profile edit + delete (Workstream 1 item 2)
+- New `/dogs/[dogId]/edit` page (pre-fills from GET, submits via existing PUT; `life_stage` stays server-derived). New `DELETE /api/dogs/[dogId]` handler that **anonymises** (`owner_id = null`) rather than hard-deletes, matching the documented data model (dog records are kept anonymously for pooled research, same as the account-deletion job). Hub gained a confirm-guarded "Remove dog" action. **Owner review:** whether a *voluntary single-dog removal* (while the account persists) should instead hard-erase for GDPR is a product/legal call — flagged, defaulted to anonymise.
+
+### 5. Allergies / health-conditions management UI + APIs (Workstream 1 item 3)
+- New `/dogs/[dogId]/restrictions` page + `RestrictionsManager` component managing both `dog_restrictions` and `dog_health_conditions`. Added `GET`+`DELETE` to `/api/restrictions` and a new `/api/health-conditions` route (`POST/GET/DELETE`) — all ownership-checked (return 404 not 403 to avoid leaking row existence). This is the first UI that lets an owner populate the hard-filter safety layer at all.
+
+### 6. Health-condition hard-filter exclusion — mechanism built (Workstream 1 item 4, safety)
+- Owner chose BOTH mechanisms. Migration `add_condition_contraindications_and_food_nutrients` (applied live + saved to `supabase/migrations/`): new `condition_contraindications` table (condition → either a contraindicated ingredient OR a nutrient-threshold rule; `approved` gate) and eight nullable nutrient `%` columns on `foods`.
+- `hardFilter.ts` rewritten to deterministically exclude foods for a dog's conditions using **only approved** contraindication rows (ingredient `ilike` match, or `foods.<nutrient> <comparator> threshold`; foods with a NULL nutrient are never excluded). No LLM — stays in the deterministic safety layer.
+- **The clinical mappings and per-food nutrient values are intentionally empty and were NOT invented** (owner/vet-gated). Until a vet approves rows, health-condition exclusion contributes nothing (identical to before) — but the mechanism is now in place and one row away from active. Behaviour-preserving verified: Scout (no conditions) → 0 excluded, all 30 candidates, same as before.
+
+### 7. RAG completion + Gateway verification (Workstream 1 item 1 — the headline priority)
+- Applied the missing `match_research_chunks` RPC to the live DB (migration `add_match_research_chunks_rpc`, saved to `supabase/migrations/`).
+- **All three AI Gateway paths verified live** (OIDC on the deployed project; `AI_GATEWAY_API_KEY` added locally by owner): embeddings (`openai/text-embedding-3-small`) via `npm run seed:phase4` (real vectors written) and query retrieval (5 chunks, similarity 0.615); Sonnet (`claude-sonnet-5`) via a recommendations run that produced real relevance scores (0.55) and coherent reasoning. (Haiku/OCR path not exercised — would need a real photo; same Gateway auth mechanism as the two verified paths.)
+- **Placeholder research seeded for the test was then deleted** (0 docs/0 chunks remain). Per owner steer: the research base must be built deliberately over weeks with real content, not rushed — and leaving approved research in place fires **one Sonnet call per candidate food per recommendation request** (~53s + real cost). See "Needs owner input" for the cost-scaling design point.
+
+### Dog UI verified end-to-end (Workstream 1 item 1, first subsystem)
+- Full flow verified against real data (deployed app + local prod build on the same live DB): signup → `/dogs` → create dog (server-derived `life_stage=adult` confirmed) → hub → recommendations (200, 10 sensible results). Admin bootstrap (item 5) verified: `user_profiles` = 1 row, `is_admin=true` landed for the owner's account.
+
+### Verification performed
+- `npx tsc --noEmit` — clean across the whole project (all 4 packages + safety/RAG/design changes together).
+- `next build` — passes; all routes compiled incl. the new ones.
+- Live/local walkthrough at **mobile (375px) and desktop (1280px)**: landing, signin, `/dogs`, hub (all new nav cards + remove-dog + recommendations), restrictions manager (both sections, correct enums, APIs working), red-flag (alarm register confirmed loud). No console errors. Design tokens confirmed applied via computed styles.
+- Security advisor after the migration: only the expected INFO "RLS enabled, no policy" on `condition_contraindications` (deliberate, service-role-only like `source_domain_allowlist`); no new errors.
+
+### Needs owner input / owner review (new this session)
+- **Deploy trigger:** everything is staged and verified but uncommitted (except the recommendations hotfix, already live). Owner asked to hold for one coherent deploy — awaiting go to commit + push to main (which transforms the whole app, since the postcss fix + design land together).
+- **Research-layer cost design — DECIDED (owner, 2026-07-24): use the Batch API.** research scoring fires one Sonnet call per candidate food per request today. Owner's chosen fix: move research scoring to the **Batch API** (async, ~50% cheaper) — precompute research-relevance scores offline into a cache/table, and have the synchronous recommendation read the cached score instead of calling Sonnet per food. Reuse the existing `src/lib/batchApiHelper.ts` (the food-discovery job already uses Anthropic Message Batches; stays a direct Anthropic call — the Gateway has no batch endpoint). Build deliberately over weeks with real, cited research; this is the top follow-up task.
+- **Health-condition clinical mappings + food nutrient values:** the mechanism is built but empty; a vet must supply/approve `condition_contraindications` rows and the per-food nutrient `%` values before health-condition exclusion does anything.
+- **Single-dog "Remove" = anonymise, not erase** — confirm this is the intended GDPR behaviour (vs. hard-erase) for a voluntary single-dog removal.
+- **autoprefixer** not installed (postcss config omits it) — add when deps can be installed safely.
+- **ESLint**: still no config; `next lint` prompts interactively. Verified with `tsc` + `next build` instead. Pick a config before relying on lint in CI.
+- Carried forward unchanged: real research corpus content (Phase 4); Batch API live verification (Phase 6, 24h batch); Bristol/BCS artwork; `wellness_indicator_reference` research backing; legal/GDPR review; `/docs/*` still missing from the checkout; Supabase Auth "leaked password protection" is off (advisor WARN — owner toggle).
 
 ---
 

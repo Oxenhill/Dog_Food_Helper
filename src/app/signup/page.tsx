@@ -61,53 +61,84 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-md mx-auto bg-white rounded-lg shadow p-6 space-y-4">
-        <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <input
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            placeholder="Display name (optional)"
-            autoComplete="name"
-          />
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            placeholder="Email"
-            autoComplete="email"
-          />
-          <input
-            type="password"
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            placeholder="Password"
-            autoComplete="new-password"
-          />
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
-          >
-            {submitting ? 'Creating account…' : 'Sign Up'}
-          </button>
-        </form>
-        <p className="text-sm text-gray-600">
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link href="/" className="wordmark">
+            <span className="wordmark-dot" />
+            Dog Food Helper
+          </Link>
+        </div>
+      </header>
+
+      <main className="container-narrow">
+        <p className="eyebrow">Get started</p>
+        <h1 className="page-title mt-2">Create your account</h1>
+        <p className="lead mt-2">Start tracking what actually works for your dog.</p>
+
+        <div className="card card-pad mt-6">
+          {error && (
+            <div className="callout-alarm mb-4" role="alert">
+              {error}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="field">
+              <label className="label" htmlFor="displayName">
+                Display name <span className="muted font-normal">(optional)</span>
+              </label>
+              <input
+                id="displayName"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="input"
+                autoComplete="name"
+              />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                autoComplete="email"
+              />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="password">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                autoComplete="new-password"
+              />
+              <p className="help-text">At least 6 characters.</p>
+            </div>
+            <button type="submit" disabled={submitting} className="btn-primary btn-block mt-1">
+              {submitting ? 'Creating account…' : 'Create account'}
+            </button>
+          </form>
+        </div>
+
+        <p className="muted mt-5 text-[14px]">
           Already have an account?{' '}
-          <Link href="/signin" className="text-blue-600 underline">
+          <Link href="/signin" className="font-semibold text-pine underline-offset-2 hover:underline">
             Sign in
           </Link>
         </p>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

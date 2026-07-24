@@ -3,52 +3,69 @@ import { HardFilterResult } from './types';
 
 /**
  * Hard-filter logic (Phase 1, critical safety layer)
- * Excludes any food touching a dog's restrictions or contraindicated health conditions
- * This is deterministic, rule-based SQL — never probabilistic, never uses LLM
+ *
+ * Excludes any food touching a dog's ingredient restrictions OR a
+ * vet-approved contraindication for one of the dog's health conditions.
+ * This is deterministic, rule-based SQL — never probabilistic, never uses an
+ * LLM (architecture doc §2: the safety layer is completely separate from the
+ * inference/scoring layer).
+ *
+ * Health-condition exclusion (added this pass) is driven entirely by the
+ * `condition_contraindications` reference table. ONLY rows with approved=true
+ * affect exclusions — an unreviewed/draft mapping never silently changes what
+ * a dog is allowed to eat. The clinical mappings themselves are owner/vet
+ * data-entry and are intentionally never machine-generated; until an approved
+ * mapping exists for a dog's condition, health-condition exclusion contributes
+ * nothing (identical to the previous behaviour), but the mechanism is now in
+ * place and deterministic.
  */
+
+const COMPARATOR_TO_PG_OP: Record<string, string> = {
+  '>': 'gt',
+  '>=': 'gte',
+  '<': 'lt',
+  '<=': 'lte',
+};
+
+interface Contraindication {
+  condition: string;
+  contraindicated_ingredient: string | null;
+  nutrient: string | null;
+  comparator: string | null;
+  threshold: number | null;
+}
+
 export async function applyHardFilter(dogId: string): Promise<HardFilterResult> {
   const excluded_foods = new Set<string>();
   const excluded_reasons: { food_id: string; reason: string }[] = [];
 
+  const addExcluded = (foodId: string, reason: string) => {
+    if (!excluded_foods.has(foodId)) {
+      excluded_foods.add(foodId);
+      excluded_reasons.push({ food_id: foodId, reason });
+    }
+  };
+
   try {
-    // Fetch dog's restrictions and health conditions
-    const { data: restrictions, error: restrictionError } = await supabaseAdmin
-      .from('dog_restrictions')
-      .select('substance')
-      .eq('dog_id', dogId);
+    // Fetch the dog's ingredient restrictions and diagnosed health conditions.
+    const [{ data: restrictions, error: restrictionError }, { data: conditions, error: conditionError }] =
+      await Promise.all([
+        supabaseAdmin.from('dog_restrictions').select('substance').eq('dog_id', dogId),
+        supabaseAdmin.from('dog_health_conditions').select('condition').eq('dog_id', dogId),
+      ]);
 
     if (restrictionError) throw restrictionError;
-
-    // Fetch dog's health conditions
-    const { data: conditions, error: conditionError } = await supabaseAdmin
-      .from('dog_health_conditions')
-      .select('condition')
-      .eq('dog_id', dogId);
-
     if (conditionError) throw conditionError;
 
-    // NOTE (Phase 3 verification pass): `conditions` is fetched but not yet
-    // used to exclude anything. Health-condition exclusion needs a
-    // condition -> contraindicated-ingredient/nutrient mapping, and there is
-    // no such table in Part A's schema — `foods`/`food_ingredients` has no
-    // nutrient columns (protein/fat/sodium/etc.) and there's no
-    // condition_contraindications reference table. Guessing a free-text
-    // condition -> ingredient mapping here would be exactly the kind of
-    // silent, safety-relevant assumption CLAUDE.md's "stop and log" rule
-    // exists to prevent, so this is left unimplemented and flagged in
-    // BUILD_PROGRESS.md under "Needs owner input" rather than invented.
-    void conditions;
-
-    // Get all foods
+    // Get all foods (the candidate universe).
     const { data: foods, error: foodError } = await supabaseAdmin
       .from('foods')
       .select('id, brand, name');
 
     if (foodError) throw foodError;
-
     if (!foods) return { excluded_foods: [], excluded_reasons: [], suitable_food_ids: [] };
 
-    // For each restriction, find foods containing that ingredient
+    // --- 1) Ingredient restrictions (allergy / intolerance / preference) ----
     if (restrictions && restrictions.length > 0) {
       for (const restriction of restrictions) {
         const { data: ingredientMatches, error: ingredientError } = await supabaseAdmin
@@ -58,21 +75,77 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
 
         if (ingredientError) throw ingredientError;
 
-        if (ingredientMatches) {
-          for (const match of ingredientMatches) {
-            if (!excluded_foods.has(match.food_id)) {
-              excluded_foods.add(match.food_id);
-              excluded_reasons.push({
-                food_id: match.food_id,
-                reason: `Contains restricted ingredient: ${restriction.substance}`,
-              });
-            }
+        for (const match of ingredientMatches ?? []) {
+          addExcluded(match.food_id, `Contains restricted ingredient: ${restriction.substance}`);
+        }
+      }
+    }
+
+    // --- 2) Health-condition contraindications (vet-approved only) ----------
+    if (conditions && conditions.length > 0) {
+      // Case-insensitive set of the dog's condition names.
+      const dogConditions = new Set(
+        conditions.map((c) => c.condition.toLowerCase().trim()).filter(Boolean)
+      );
+
+      // Pull only approved rules; match to this dog's conditions in memory
+      // (case-insensitive). Approved-only is enforced here so a draft mapping
+      // can never affect a real recommendation.
+      const { data: contraRows, error: contraError } = await supabaseAdmin
+        .from('condition_contraindications')
+        .select('condition, contraindicated_ingredient, nutrient, comparator, threshold')
+        .eq('approved', true);
+
+      if (contraError) throw contraError;
+
+      const applicable = ((contraRows ?? []) as Contraindication[]).filter((row) =>
+        dogConditions.has(row.condition.toLowerCase().trim())
+      );
+
+      for (const rule of applicable) {
+        if (rule.contraindicated_ingredient) {
+          // Ingredient-based contraindication: exclude foods containing it.
+          const { data: matches, error: matchError } = await supabaseAdmin
+            .from('food_ingredients')
+            .select('food_id')
+            .ilike('ingredient_name', `%${rule.contraindicated_ingredient}%`);
+
+          if (matchError) throw matchError;
+
+          for (const match of matches ?? []) {
+            addExcluded(
+              match.food_id,
+              `Not suitable for ${rule.condition}: contains ${rule.contraindicated_ingredient}`
+            );
+          }
+        } else if (rule.nutrient && rule.comparator && rule.threshold != null) {
+          // Nutrient-threshold contraindication: exclude foods whose nutrient
+          // value breaches the bound. Foods with a NULL value for that nutrient
+          // are NOT excluded (we can't assert a breach on unknown data — a data
+          // completeness caveat, not a safety guess: nutrient columns are
+          // owner/vet-populated and start NULL).
+          const pgOp = COMPARATOR_TO_PG_OP[rule.comparator];
+          if (!pgOp) continue;
+
+          const { data: matches, error: matchError } = await supabaseAdmin
+            .from('foods')
+            .select('id')
+            .not(rule.nutrient, 'is', null)
+            .filter(rule.nutrient, pgOp, rule.threshold);
+
+          if (matchError) throw matchError;
+
+          for (const match of matches ?? []) {
+            addExcluded(
+              match.id,
+              `Not suitable for ${rule.condition}: ${rule.nutrient.replace('_pct', '')} ${rule.comparator} ${rule.threshold}%`
+            );
           }
         }
       }
     }
 
-    // Suitable food IDs = all foods - excluded foods
+    // Suitable food IDs = all foods − excluded foods.
     const suitable_food_ids = foods
       .filter((f) => !excluded_foods.has(f.id))
       .map((f) => f.id);
@@ -89,7 +162,7 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
 }
 
 /**
- * Check if a specific food is suitable for a dog (given restrictions/conditions)
+ * Check if a specific food is suitable for a dog (given restrictions/conditions).
  */
 export async function isFoodSuitable(dogId: string, foodId: string): Promise<boolean> {
   const result = await applyHardFilter(dogId);

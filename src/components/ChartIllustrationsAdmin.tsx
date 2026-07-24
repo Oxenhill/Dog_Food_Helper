@@ -106,35 +106,57 @@ export default function ChartIllustrationsAdmin() {
 
   if (!hasToken) {
     return (
-      <div className="max-w-md space-y-3">
-        <h1 className="text-xl font-bold">Chart illustrations — admin sign in</h1>
-        <p className="text-sm text-gray-600">
+      <div className="mx-auto max-w-md">
+        <p className="eyebrow">Admin sign in</p>
+        <h1 className="page-title mt-2">Chart illustrations</h1>
+        <p className="lead mt-2">
           Sign in with an admin account (user_profiles.is_admin) to upload Bristol/BCS chart
           illustrations.
         </p>
-        {signInError && <p className="text-sm text-red-600">{signInError}</p>}
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          placeholder="Email"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-          placeholder="Password"
-        />
-        <button
-          type="button"
-          onClick={() => void signIn()}
-          disabled={signingIn}
-          className="bg-gray-800 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-50"
-        >
-          {signingIn ? 'Signing in…' : 'Sign in'}
-        </button>
+
+        <div className="card card-pad mt-6">
+          {signInError && (
+            <div className="callout-alarm mb-4" role="alert">
+              {signInError}
+            </div>
+          )}
+          <div className="flex flex-col gap-4">
+            <div className="field">
+              <label className="label" htmlFor="charts-admin-email">
+                Email
+              </label>
+              <input
+                id="charts-admin-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                autoComplete="email"
+              />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="charts-admin-password">
+                Password
+              </label>
+              <input
+                id="charts-admin-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                autoComplete="current-password"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void signIn()}
+              disabled={signingIn}
+              className="btn-primary btn-block"
+            >
+              {signingIn ? 'Signing in…' : 'Sign in'}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -143,18 +165,21 @@ export default function ChartIllustrationsAdmin() {
     const key = `${chartType}-${value}`;
     const currentUrl = manifest[chartType][String(value)];
     return (
-      <div key={key} className="border border-gray-200 rounded-lg p-3 flex items-center gap-4">
-        <div className="w-24 h-24 flex items-center justify-center bg-gray-50 rounded border border-gray-100 shrink-0">
+      <div key={key} className="card card-pad flex items-center gap-4">
+        <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded border border-line bg-paper">
           {currentUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={currentUrl} alt={label} className="max-w-full max-h-full" />
+            <img src={currentUrl} alt={label} className="max-h-full max-w-full object-contain" />
           ) : (
-            <span className="text-xs text-gray-400">No image</span>
+            <span className="text-[11px] text-ink-soft">No image</span>
           )}
         </div>
-        <div className="flex-1 space-y-1">
-          <div className="text-sm font-medium">{label}</div>
+        <div className="flex-1">
+          <label className="label" htmlFor={`chart-upload-${key}`}>
+            {label}
+          </label>
           <input
+            id={`chart-upload-${key}`}
             type="file"
             accept="image/png,image/svg+xml"
             disabled={uploading[key]}
@@ -163,32 +188,35 @@ export default function ChartIllustrationsAdmin() {
               if (file) void upload(chartType, value, file);
               e.target.value = '';
             }}
-            className="text-xs"
+            className="input mt-1.5 text-[13px]"
           />
-          {statusMsg[key] && <p className="text-xs text-gray-600">{statusMsg[key]}</p>}
+          {statusMsg[key] && <p className="help-text mt-1.5">{statusMsg[key]}</p>}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
-      <h1 className="text-xl font-bold">Chart illustrations — admin</h1>
-      <p className="text-sm text-gray-600">
-        Upload original SVG/PNG illustrations only. Never upload an existing brand&apos;s or
-        body&apos;s published chart artwork.
-      </p>
+    <div className="flex flex-col gap-8">
+      <div>
+        <p className="eyebrow">Admin</p>
+        <h1 className="page-title mt-1 text-[24px] sm:text-[26px]">Chart illustrations</h1>
+        <p className="lead mt-2">
+          Upload original SVG/PNG illustrations only. Never upload an existing brand&apos;s or
+          body&apos;s published chart artwork.
+        </p>
+      </div>
 
       <div>
-        <h2 className="font-semibold mb-2">Bristol stool scale (1–7)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <h2 className="section-title mb-3">Bristol stool scale (1–7)</h2>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {BRISTOL_STOOL_TYPES.map((opt) => renderSlot('bristol', opt.value, opt.label))}
         </div>
       </div>
 
       <div>
-        <h2 className="font-semibold mb-2">Body condition score (1–9)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <h2 className="section-title mb-3">Body condition score (1–9)</h2>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {BCS_LEVELS.map((opt) => renderSlot('bcs', opt.value, opt.label))}
         </div>
       </div>

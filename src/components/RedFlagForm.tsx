@@ -49,26 +49,29 @@ export default function RedFlagForm({ dogId }: { dogId: string }) {
   if (selectedFlag) {
     const flagInfo = RED_FLAG_TYPES.find((f) => f.value === selectedFlag);
     return (
-      <div className="border-4 border-red-600 bg-red-50 rounded-xl p-6 space-y-4">
+      <div
+        className="flex flex-col gap-4 rounded-xl border-4 border-alarm bg-alarm-tint p-6"
+        role="alert"
+      >
         <div className="flex items-center gap-3">
           <span className="text-4xl" aria-hidden>
             ⚠️
           </span>
-          <h2 className="text-2xl font-extrabold text-red-800">
+          <h2 className="font-display text-2xl font-extrabold text-alarm-dark">
             This may need urgent veterinary attention
           </h2>
         </div>
-        <p className="text-red-900 font-medium">
-          You&apos;ve flagged: <span className="font-bold">{flagInfo?.label}</span>. Please contact
-          your vet, or an emergency vet service if it&apos;s outside normal hours, rather than
-          waiting to see if it settles.
+        <p className="text-[15px] font-medium text-ink">
+          You&apos;ve flagged: <span className="font-bold text-alarm-dark">{flagInfo?.label}</span>.
+          Please contact your vet, or an emergency vet service if it&apos;s outside normal hours,
+          rather than waiting to see if it settles.
         </p>
-        <p className="text-red-800 text-sm">
+        <p className="text-[13px] text-ink-soft">
           Dog Food Helper is a decision-support tool, not a diagnostic or veterinary service — this
           symptom is outside what it can assess. Your vet is the right next step.
         </p>
 
-        <div className="text-sm text-red-700">
+        <div className="text-[13px] font-semibold text-alarm-dark">
           {saveState === 'saving' && 'Saving this to your dog’s record…'}
           {saveState === 'saved' && 'Recorded to your dog’s record.'}
           {saveState === 'error' && 'Recorded on-screen — the save to your record failed, please try again.'}
@@ -81,7 +84,7 @@ export default function RedFlagForm({ dogId }: { dogId: string }) {
             setNotes('');
             setSaveState('idle');
           }}
-          className="text-sm text-red-700 underline"
+          className="self-start text-[13px] font-semibold text-alarm-dark underline underline-offset-2"
         >
           Log a different urgent symptom
         </button>
@@ -90,33 +93,36 @@ export default function RedFlagForm({ dogId }: { dogId: string }) {
   }
 
   return (
-    <div className="border-2 border-red-300 bg-red-50/50 rounded-xl p-6 space-y-4">
-      <h2 className="text-xl font-bold text-red-800">Report an urgent symptom</h2>
-      <p className="text-sm text-gray-700">
+    <div className="flex flex-col gap-4 rounded-xl border-2 border-alarm bg-alarm-tint p-6">
+      <h2 className="font-display text-xl font-bold text-alarm-dark">Report an urgent symptom</h2>
+      <p className="text-[14px] text-ink">
         Use this only for something that feels seriously wrong, not routine day-to-day logging.
       </p>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {RED_FLAG_TYPES.map((flag) => (
           <button
             key={flag.value}
             type="button"
             onClick={() => handleSelect(flag.value as RedFlagType)}
-            className="text-left border-2 border-red-400 bg-white hover:bg-red-100 rounded-lg p-4 transition"
+            className="rounded-lg border-2 border-alarm/40 bg-surface p-4 text-left transition hover:border-alarm hover:bg-alarm-tint"
           >
-            <div className="font-bold text-red-800">{flag.label}</div>
-            <div className="text-xs text-gray-600 mt-1">{flag.helper}</div>
+            <div className="font-bold text-alarm-dark">{flag.label}</div>
+            <div className="mt-1 text-[12.5px] text-ink-soft">{flag.helper}</div>
           </button>
         ))}
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+      <div className="field">
+        <label className="label" htmlFor="red-flag-notes">
+          Notes (optional)
+        </label>
         <textarea
+          id="red-flag-notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="w-full border border-gray-300 rounded-lg p-2 text-sm"
+          className="textarea"
           placeholder="Anything else worth noting for your vet"
         />
       </div>

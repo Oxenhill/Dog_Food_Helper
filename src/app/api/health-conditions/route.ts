@@ -11,16 +11,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const {
-      dog_id,
-      restriction_type,
-      substance,
-      source,
-      confidence,
-      test_document_ref,
-    } = await request.json();
+    const { dog_id, condition, source, diagnosed_date, notes } =
+      await request.json();
 
-    if (!dog_id || !restriction_type || !substance || !source) {
+    if (!dog_id || !condition || !source) {
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -43,14 +37,13 @@ export async function POST(request: NextRequest) {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('dog_restrictions')
+      .from('dog_health_conditions')
       .insert({
         dog_id,
-        restriction_type,
-        substance,
+        condition,
         source,
-        confidence,
-        test_document_ref,
+        diagnosed_date,
+        notes,
       })
       .select()
       .single();
@@ -61,13 +54,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        message: 'Restriction added',
-        restriction: data,
+        message: 'Health condition added',
+        condition: data,
       },
       { status: 201 }
     );
   } catch (error) {
-    console.error('Add restriction error:', error);
+    console.error('Add health condition error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -109,7 +102,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('dog_restrictions')
+      .from('dog_health_conditions')
       .select('*')
       .eq('dog_id', dogId)
       .order('created_at', { ascending: false });
@@ -118,9 +111,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ restrictions: data ?? [] }, { status: 200 });
+    return NextResponse.json({ conditions: data ?? [] }, { status: 200 });
   } catch (error) {
-    console.error('List restrictions error:', error);
+    console.error('List health conditions error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -155,16 +148,16 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Verify the restriction's dog belongs to the user before deleting.
-    const { data: restriction } = await supabaseAdmin
-      .from('dog_restrictions')
+    // Verify the condition's dog belongs to the user before deleting.
+    const { data: condition } = await supabaseAdmin
+      .from('dog_health_conditions')
       .select('id, dog_id')
       .eq('id', id)
       .single();
 
-    if (!restriction) {
+    if (!condition) {
       return NextResponse.json(
-        { error: 'Restriction not found' },
+        { error: 'Health condition not found' },
         { status: 404 }
       );
     }
@@ -172,19 +165,19 @@ export async function DELETE(request: NextRequest) {
     const { data: dog } = await supabaseAdmin
       .from('dogs')
       .select('id')
-      .eq('id', restriction.dog_id)
+      .eq('id', condition.dog_id)
       .eq('owner_id', userId)
       .single();
 
     if (!dog) {
       return NextResponse.json(
-        { error: 'Restriction not found' },
+        { error: 'Health condition not found' },
         { status: 404 }
       );
     }
 
     const { error } = await supabaseAdmin
-      .from('dog_restrictions')
+      .from('dog_health_conditions')
       .delete()
       .eq('id', id);
 
@@ -193,11 +186,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { message: 'Restriction removed' },
+      { message: 'Health condition removed' },
       { status: 200 }
     );
   } catch (error) {
-    console.error('Delete restriction error:', error);
+    console.error('Delete health condition error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

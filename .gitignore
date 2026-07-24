@@ -22,3 +22,6 @@ tsconfig.phase6check.json
 .DS_Store
 *.log
 npm-debug.log*
+
+# Isolated preview dev-server build output (see next.config.mjs NEXT_PREVIEW_DISTDIR)
+.next-preview/

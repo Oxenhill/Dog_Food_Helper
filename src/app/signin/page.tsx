@@ -49,44 +49,69 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-md mx-auto bg-white rounded-lg shadow p-6 space-y-4">
-        <h1 className="text-2xl font-bold text-gray-900">Sign In</h1>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            placeholder="Email"
-            autoComplete="email"
-          />
-          <input
-            type="password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg p-2 text-sm"
-            placeholder="Password"
-            autoComplete="current-password"
-          />
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {submitting ? 'Signing in…' : 'Sign In'}
-          </button>
-        </form>
-        <p className="text-sm text-gray-600">
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link href="/" className="wordmark">
+            <span className="wordmark-dot" />
+            Dog Food Helper
+          </Link>
+        </div>
+      </header>
+
+      <main className="container-narrow">
+        <p className="eyebrow">Welcome back</p>
+        <h1 className="page-title mt-2">Sign in</h1>
+        <p className="lead mt-2">Pick up where you left off with your dogs.</p>
+
+        <div className="card card-pad mt-6">
+          {error && (
+            <div className="callout-alarm mb-4" role="alert">
+              {error}
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="field">
+              <label className="label" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                autoComplete="email"
+              />
+            </div>
+            <div className="field">
+              <label className="label" htmlFor="password">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                autoComplete="current-password"
+              />
+            </div>
+            <button type="submit" disabled={submitting} className="btn-primary btn-block mt-1">
+              {submitting ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        </div>
+
+        <p className="muted mt-5 text-[14px]">
           New here?{' '}
-          <Link href="/signup" className="text-blue-600 underline">
+          <Link href="/signup" className="font-semibold text-pine underline-offset-2 hover:underline">
             Create an account
           </Link>
         </p>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
