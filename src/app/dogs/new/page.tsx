@@ -20,7 +20,8 @@ export default function NewDogPage() {
   const router = useRouter();
   const [name, setName] = useState('');
   const [breed, setBreed] = useState('');
-  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [ageYears, setAgeYears] = useState('');
+  const [ageMonths, setAgeMonths] = useState('');
   const [weightKg, setWeightKg] = useState('');
   const [sizeCategory, setSizeCategory] = useState<string>('');
   const [lifestyleRole, setLifestyleRole] = useState<string>('pet');
@@ -46,7 +47,8 @@ export default function NewDogPage() {
         body: JSON.stringify({
           name,
           breed: breed || undefined,
-          date_of_birth: dateOfBirth || undefined,
+          age_years: ageYears ? Number(ageYears) : undefined,
+          age_months: ageMonths ? Number(ageMonths) : undefined,
           weight_kg: weightKg ? Number(weightKg) : undefined,
           size_category: sizeCategory || undefined,
           lifestyle_role: lifestyleRole,
@@ -122,16 +124,33 @@ export default function NewDogPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="field">
-                <label className="label" htmlFor="dateOfBirth">
-                  Date of birth
+                <label className="label" htmlFor="ageYears">
+                  Age
                 </label>
-                <input
-                  id="dateOfBirth"
-                  type="date"
-                  value={dateOfBirth}
-                  onChange={(e) => setDateOfBirth(e.target.value)}
-                  className="input metric"
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="ageYears"
+                    type="number"
+                    min={0}
+                    value={ageYears}
+                    onChange={(e) => setAgeYears(e.target.value)}
+                    className="input metric"
+                    placeholder="yrs"
+                    aria-label="Age in years"
+                  />
+                  <input
+                    id="ageMonths"
+                    type="number"
+                    min={0}
+                    max={11}
+                    value={ageMonths}
+                    onChange={(e) => setAgeMonths(e.target.value)}
+                    className="input metric"
+                    placeholder="mths"
+                    aria-label="Additional months"
+                  />
+                </div>
+                <p className="help-text">Approximate is fine — years and months.</p>
               </div>
               <div className="field">
                 <label className="label" htmlFor="weightKg">

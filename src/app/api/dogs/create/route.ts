@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
-import { deriveLifeStage } from '@/lib/lifeStage';
+import { ageToApproxDob, deriveLifeStage } from '@/lib/lifeStage';
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,7 +17,9 @@ export async function POST(request: NextRequest) {
     const {
       name,
       breed,
-      date_of_birth,
+      date_of_birth: date_of_birth_input,
+      age_years,
+      age_months,
       weight_kg,
       size_category,
       lifestyle_role = 'pet',
@@ -34,6 +36,15 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Owners enter an approximate age (years + months) rather than a date of
+    // birth — convert that to date_of_birth here so deriveLifeStage() and the
+    // rest of the schema keep working unchanged. Falls back to an explicit
+    // date_of_birth for callers that still send one and no age fields.
+    const date_of_birth =
+      age_years !== undefined || age_months !== undefined
+        ? ageToApproxDob(Number(age_years) || 0, Number(age_months) || 0)
+        : date_of_birth_input;
 
     // life_stage is system-derived (Part C item 1) — computed server-side here
     // rather than left null, since Phase 3's recommendation scoring needs it.

@@ -47,6 +47,38 @@ export function ageInMonths(dateOfBirth: string, asOf: Date = new Date()): numbe
 }
 
 /**
+ * Converts an owner-entered approximate age (years + months) into an
+ * approximate date_of_birth, so forms can collect the age people actually
+ * know while `dogs.date_of_birth` / deriveLifeStage() keep working unchanged.
+ *
+ * Day-of-month convention: pinned to the 1st of the resulting month (not
+ * today's day-of-month), so the same age input always yields the same
+ * date_of_birth regardless of what day it's submitted on.
+ */
+export function ageToApproxDob(
+  years: number,
+  months: number,
+  asOf: Date = new Date()
+): string {
+  const totalMonths = Math.max(0, Math.round(years) * 12 + Math.round(months));
+  const result = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), 1));
+  result.setUTCMonth(result.getUTCMonth() - totalMonths);
+  const yyyy = result.getUTCFullYear();
+  const mm = String(result.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(result.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Inverse of ageToApproxDob: derives whole years + remaining months from a date_of_birth. */
+export function dobToAge(
+  dateOfBirth: string,
+  asOf: Date = new Date()
+): { years: number; months: number } {
+  const totalMonths = ageInMonths(dateOfBirth, asOf);
+  return { years: Math.floor(totalMonths / 12), months: totalMonths % 12 };
+}
+
+/**
  * Derives life_stage from date_of_birth + size_category per
  * breed_life_stage_thresholds. Returns null if either input, or the
  * thresholds reference row, is missing — callers should treat null as

@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
-import { deriveLifeStage } from '@/lib/lifeStage';
+import { ageToApproxDob, deriveLifeStage } from '@/lib/lifeStage';
 
 export async function GET(
   request: NextRequest,
@@ -55,6 +55,21 @@ export async function PUT(
     const updates = await request.json();
     // Never allow direct updates to life_stage — it's system-derived
     delete updates.life_stage;
+
+    // Owners enter an approximate age (years + months) rather than a date of
+    // birth — convert that to date_of_birth here so deriveLifeStage() and the
+    // rest of the schema keep working unchanged. age_years/age_months aren't
+    // dogs columns, so they're removed from `updates` after conversion.
+    // Falls back to an explicit date_of_birth for callers that still send
+    // one and no age fields.
+    if ('age_years' in updates || 'age_months' in updates) {
+      updates.date_of_birth = ageToApproxDob(
+        Number(updates.age_years) || 0,
+        Number(updates.age_months) || 0
+      );
+      delete updates.age_years;
+      delete updates.age_months;
+    }
 
     // If date_of_birth or size_category are changing, re-derive life_stage
     // server-side so it doesn't go stale (fetch current values for whichever

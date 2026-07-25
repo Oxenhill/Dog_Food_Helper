@@ -45,7 +45,6 @@ export default function RestrictionsManager({ dogId }: { dogId: string }) {
   // Add-condition form state
   const [condition, setCondition] = useState('');
   const [conditionSource, setConditionSource] = useState<EvidenceSource>('owner_reported');
-  const [diagnosedDate, setDiagnosedDate] = useState('');
   const [notes, setNotes] = useState('');
   const [conditionSubmitting, setConditionSubmitting] = useState(false);
   const [conditionError, setConditionError] = useState('');
@@ -146,7 +145,6 @@ export default function RestrictionsManager({ dogId }: { dogId: string }) {
           dog_id: dogId,
           condition,
           source: conditionSource,
-          diagnosed_date: diagnosedDate || undefined,
           notes: notes || undefined,
         }),
       });
@@ -157,7 +155,6 @@ export default function RestrictionsManager({ dogId }: { dogId: string }) {
       }
       setCondition('');
       setConditionSource('owner_reported');
-      setDiagnosedDate('');
       setNotes('');
       await loadAll();
     } catch {
@@ -305,11 +302,6 @@ export default function RestrictionsManager({ dogId }: { dogId: string }) {
                   <p className="text-[14px] font-medium text-ink">{c.condition}</p>
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     <span className="badge-neutral">{formatSource(c.source)}</span>
-                    {c.diagnosed_date && (
-                      <span className="metric text-[11px] text-ink-soft">
-                        diagnosed {new Date(c.diagnosed_date).toLocaleDateString()}
-                      </span>
-                    )}
                   </div>
                   {c.notes && <p className="help-text mt-1.5 max-w-prose">{c.notes}</p>}
                 </div>
@@ -345,36 +337,22 @@ export default function RestrictionsManager({ dogId }: { dogId: string }) {
               placeholder="e.g. Pancreatitis"
             />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="field">
-              <label className="label" htmlFor="condition_source">
-                Source
-              </label>
-              <select
-                id="condition_source"
-                value={conditionSource}
-                onChange={(e) => setConditionSource(e.target.value as EvidenceSource)}
-                className="select"
-              >
-                {EVIDENCE_SOURCES.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label className="label" htmlFor="diagnosed_date">
-                Diagnosed (optional)
-              </label>
-              <input
-                id="diagnosed_date"
-                type="date"
-                value={diagnosedDate}
-                onChange={(e) => setDiagnosedDate(e.target.value)}
-                className="input"
-              />
-            </div>
+          <div className="field">
+            <label className="label" htmlFor="condition_source">
+              Source
+            </label>
+            <select
+              id="condition_source"
+              value={conditionSource}
+              onChange={(e) => setConditionSource(e.target.value as EvidenceSource)}
+              className="select"
+            >
+              {EVIDENCE_SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="field">
             <label className="label" htmlFor="notes">
