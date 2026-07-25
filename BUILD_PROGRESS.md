@@ -5,6 +5,48 @@
 
 ---
 
+## Full ingredient detail + unified food view (2026-07-25, later)
+
+Continues the entry below after owner clarification. **Committed and deployed** (`80c8e6f`, `2b53f17`).
+
+### Owner requirement (verbatim intent)
+"For every dog food we need to know every ingredient, quantities if they exist... so the correlation engine can find correlations and so people understand exactly what is in each food, because a beef flavoured food might still contain chicken. We need that level of detail, it's really important."
+
+### Corrections the owner made, and what changed
+1. **"Fibre does not describe carbs."** Right. The NFE formula does subtract fibre, so fibre wasn't being counted as carbohydrate — but printed "crude fibre" is mostly *insoluble* fibre and understates total dietary fibre, so soluble/prebiotic fractions (inulin, FOS, chicory, psyllium, beet pulp) land in the NFE figure and it **overstates digestible carbohydrate**. It also cannot describe fibre *type* at all. `carbohydrate.ts` now documents this plainly and the figure is labelled "Digestible carbohydrate (estimated, excl. crude fibre)" — a coarse screen, subordinate to the ingredient list.
+2. **"Neither table has the level of detail to capture all the ingredients."** Half misunderstanding, half real gap. `food_ingredients` is a child table — one row *per ingredient* — so it already scaled to any list length. But it genuinely had nowhere to record the percentages UK labels print, qualifiers, or compound ingredients.
+3. **"There only needs to be one database for everything related to food."** Clarified: it is one database, two tables. Rather than collapse them (which would break the cross-food ingredient queries the allergy filter and correlation engine depend on), added a unified **view**.
+
+### Schema (applied live, saved to `supabase/migrations/`)
+- `food_ingredients` + `inclusion_pct` (numeric, 0–100 constrained), `note` (text), `parent_ingredient_id` (self-FK, cascade). All nullable/additive; existing rows untouched. Partial index on `parent_ingredient_id`.
+- **`public.food_full` view** — one row per food, all ingredients nested as JSON (percentages, notes, sub-ingredients) plus `est_digestible_carbohydrate_pct`. Created `with (security_invoker = true)` so it respects the caller's RLS rather than running as definer.
+
+### Why sub-ingredients are real rows
+A beef-flavoured food may declare chicken only inside "Animal Derivatives (Chicken 4%)". Both `hardFilter.ts` and `correlationEngine.ts` match `ingredient_name` across **all** rows without filtering on parent, so a nested ingredient is found by both with **no change to either file** — verified.
+
+### Verified live (then fully reverted)
+- Worklist → POST by `food_id` with percentages, a note, and a nested sub-ingredient → `food_full` returned it as one nested record.
+- The allergy query returned: `Acana Grasslands Beef & Venison | Chicken | HIDDEN inside a compound` — the owner's exact scenario, caught.
+- Every SQL statement in the population prompt was run **verbatim** against the live DB before handing it over (worklist, delete, multi-row insert, nested insert, verification).
+- Import guards: unknown category rejected · **empty list refuses to wipe existing rows** · ambiguous brand+name rejected · idempotent (re-import replaces, doesn't duplicate) · non-admin 404.
+- `tsc` clean, `build` exit 0. **Database left exactly as found each time** (24 rows, 0 test users) — confirmed by count query.
+
+### Population approach (owner decision)
+Ingredient data is being populated by the **owner's separate Claude session on their monthly subscription**, not by API credits. This session's job was to make the schema and write path ready. Two briefs written:
+- `INGREDIENT_POPULATION_PROMPT.md` — for a session with the **Supabase connector** (direct SQL, no credentials). Names the correct project id, warns off the sibling project, restricts to INSERT/DELETE on `food_ingredients`, gives the delete-then-insert pattern and the separate parent-then-child statement for compound ingredients.
+- `INGREDIENT_IMPORT.md` — the HTTP endpoint alternative.
+Both carry the **transcribe-never-infer** rule and require a report of skipped foods.
+
+### Groundwork for the composition pie (next session)
+`dataviz` skill consulted. A pie is legitimate for guaranteed analysis (part-to-whole at a glance, ≤6 segments); it would be an anti-pattern for ingredients (20–40 items). Palette validated with the skill's script: `#2a78d6, #eb6834, #1baf7a, #eda100, #e87ba4, #008300` → **ALL CHECKS PASS**, with a non-dismissable **contrast WARN** obligating visible labels. Recorded in `HANDOVER_PROMPT.md` so it isn't re-derived.
+
+### Owner review
+- Hand `INGREDIENT_POPULATION_PROMPT.md` to the populating session.
+- The allergy filter stays inert until that data lands — highest-value item outstanding.
+- Old seed stubs carry legacy category values (`protein`, `vegetable`) outside the new vocabulary; they're replaced as each food is populated, so this self-resolves.
+
+---
+
 ## Ingredient data path + carbohydrate derivation (2026-07-25)
 
 ### THE FINDING — no food has a real ingredient list, and the allergy filter is inert
