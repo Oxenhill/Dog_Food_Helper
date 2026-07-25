@@ -85,6 +85,17 @@ export interface FoodIngredient {
   ingredient_name: string;
   ingredient_category?: string;
   position_in_list: number;
+  // Printed inclusion percentage (e.g. "Fresh Chicken (26%)" -> 26). Null when
+  // the label doesn't state one — never inferred.
+  inclusion_pct?: number | null;
+  // Label qualifier: "dried", "min 4%", "as a preservative".
+  note?: string | null;
+  // Set on a sub-ingredient of a compound ingredient, pointing at its parent
+  // row (e.g. "Chicken" inside "Animal Derivatives"). Null for top-level
+  // ingredients. Both the allergy hard filter and the correlation engine match
+  // ingredient_name across ALL rows, so a nested ingredient is still found —
+  // which is how a beef-flavoured food's hidden chicken gets caught.
+  parent_ingredient_id?: string | null;
 }
 
 export interface HardFilterResult {

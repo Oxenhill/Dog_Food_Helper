@@ -77,9 +77,26 @@ POST /api/admin/food-ingredients/import
 ```
 
 - Match a food by `food_id` (preferred, unambiguous) **or** by exact `brand` + `name`.
-- An ingredient may be a plain string or `{ "name", "category" }`. `category` is
-  optional — omit it rather than guessing.
+- An ingredient may be a plain string or an object with `name`, and optionally
+  `category`, `inclusion_pct`, `note`, and `sub_ingredients`.
+- `inclusion_pct` is the printed percentage (0–100). **Never estimate one** — omit
+  it if the label doesn't state it.
+- `sub_ingredients` nest under a compound ingredient, e.g.
+  `"Animal Derivatives (Chicken 4%)"`. This is how hidden allergens get caught: a
+  beef-flavoured food may only declare chicken inside a compound. Both the allergy
+  filter and the correlation engine match names across **all** rows, so a nested
+  ingredient is still found.
 - Up to 100 items per request, 200 ingredients per food.
+
+### Reading it back as one record
+
+`public.food_full` is a view giving one row per food with all ingredients nested
+inside (percentages, notes, sub-ingredients), plus an estimated digestible-carbohydrate
+figure:
+
+```sql
+select * from public.food_full where brand = 'Acana';
+```
 
 ### Behaviour you can rely on
 

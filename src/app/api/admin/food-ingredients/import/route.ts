@@ -21,14 +21,29 @@ import { isIngredientCategory, INGREDIENT_CATEGORY_VALUES } from '@/lib/ingredie
  *     "name": "Regional Red",
  *     "ingredients": [
  *       "Beef",                                   // plain string, or…
- *       { "name": "Chicory root", "category": "fibre_soluble" }
+ *       { "name": "Fresh Chicken", "inclusion_pct": 26, "category": "protein_animal" },
+ *       { "name": "Chicken Fat", "note": "as a preservative" },
+ *       {
+ *         "name": "Animal Derivatives",           // compound ingredient
+ *         "inclusion_pct": 20,
+ *         "sub_ingredients": [
+ *           { "name": "Chicken", "inclusion_pct": 4 }
+ *         ]
+ *       }
  *     ]
  *   }
  *
  * Rules:
  *   - `position_in_list` is assigned from array order (1-based) — order is the
  *     label order and carries meaning (most prevalent first), so the caller must
- *     preserve it.
+ *     preserve it. Sub-ingredients are numbered 1..m within their parent.
+ *   - `inclusion_pct` is the printed percentage (0-100) or omitted. NEVER
+ *     estimate one: an absent percentage must stay absent.
+ *   - `sub_ingredients` nest under a compound ingredient via
+ *     `parent_ingredient_id`. This matters for hidden allergens — a
+ *     beef-flavoured food may declare chicken only inside "animal derivatives",
+ *     and both the allergy hard filter and the correlation engine match on
+ *     `ingredient_name` across all rows, so a nested ingredient is still found.
  *   - A food's existing rows are replaced ONLY when the incoming list is
  *     non-empty, so an empty payload can never wipe data.
  *   - `category` is optional but must be from the known vocabulary if given.
@@ -42,6 +57,85 @@ const MAX_NAME_LENGTH = 200;
 interface ImportIngredient {
   name: string;
   category: string | null;
+  inclusion_pct: number | null;
+  note: string | null;
+  sub: ImportIngredient[];
+}
+
+/**
+ * Parse one ingredient entry (string, or object possibly carrying
+ * `sub_ingredients`). Returns an error message instead of throwing so the
+ * caller can report per-item. `depth` guards against a pathological payload.
+ */
+function parseIngredient(
+  entry: unknown,
+  depth: number,
+): { value: ImportIngredient } | { error: string } {
+  if (depth > 2) return { error: 'Sub-ingredients may not nest more than one level deep.' };
+
+  if (typeof entry === 'string') {
+    const name = entry.trim();
+    if (!name) return { error: 'Each ingredient needs a non-empty name.' };
+    if (name.length > MAX_NAME_LENGTH) {
+      return { error: `Ingredient name exceeds ${MAX_NAME_LENGTH} characters.` };
+    }
+    return { value: { name, category: null, inclusion_pct: null, note: null, sub: [] } };
+  }
+
+  if (!entry || typeof entry !== 'object') {
+    return { error: 'Each ingredient must be a string or an object.' };
+  }
+
+  const obj = entry as {
+    name?: unknown;
+    category?: unknown;
+    inclusion_pct?: unknown;
+    note?: unknown;
+    sub_ingredients?: unknown;
+  };
+
+  const name = typeof obj.name === 'string' ? obj.name.trim() : '';
+  if (!name) return { error: 'Each ingredient needs a non-empty name.' };
+  if (name.length > MAX_NAME_LENGTH) {
+    return { error: `Ingredient name exceeds ${MAX_NAME_LENGTH} characters.` };
+  }
+
+  let category: string | null = null;
+  if (obj.category != null) {
+    if (!isIngredientCategory(obj.category)) {
+      return {
+        error: `Unknown category "${String(obj.category)}". Allowed: ${INGREDIENT_CATEGORY_VALUES.join(', ')}.`,
+      };
+    }
+    category = obj.category;
+  }
+
+  let inclusionPct: number | null = null;
+  if (obj.inclusion_pct != null) {
+    const value =
+      typeof obj.inclusion_pct === 'number' ? obj.inclusion_pct : Number(obj.inclusion_pct);
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      return { error: `inclusion_pct for "${name}" must be a number between 0 and 100.` };
+    }
+    inclusionPct = value;
+  }
+
+  const note =
+    typeof obj.note === 'string' && obj.note.trim() !== '' ? obj.note.trim() : null;
+
+  const sub: ImportIngredient[] = [];
+  if (obj.sub_ingredients != null) {
+    if (!Array.isArray(obj.sub_ingredients)) {
+      return { error: `sub_ingredients for "${name}" must be an array.` };
+    }
+    for (const child of obj.sub_ingredients) {
+      const parsed = parseIngredient(child, depth + 1);
+      if ('error' in parsed) return parsed;
+      sub.push(parsed.value);
+    }
+  }
+
+  return { value: { name, category, inclusion_pct: inclusionPct, note, sub } };
 }
 
 interface ItemResult {
@@ -154,32 +248,12 @@ export async function POST(request: NextRequest) {
     const parsed: ImportIngredient[] = [];
     let invalid: string | null = null;
     for (const entry of item.ingredients) {
-      let ingredientName: string | null = null;
-      let category: string | null = null;
-
-      if (typeof entry === 'string') {
-        ingredientName = entry.trim();
-      } else if (entry && typeof entry === 'object') {
-        const obj = entry as { name?: unknown; category?: unknown };
-        if (typeof obj.name === 'string') ingredientName = obj.name.trim();
-        if (obj.category != null) {
-          if (!isIngredientCategory(obj.category)) {
-            invalid = `Unknown category "${String(obj.category)}". Allowed: ${INGREDIENT_CATEGORY_VALUES.join(', ')}.`;
-            break;
-          }
-          category = obj.category;
-        }
-      }
-
-      if (!ingredientName) {
-        invalid = 'Each ingredient needs a non-empty name.';
+      const result = parseIngredient(entry, 1);
+      if ('error' in result) {
+        invalid = result.error;
         break;
       }
-      if (ingredientName.length > MAX_NAME_LENGTH) {
-        invalid = `Ingredient name exceeds ${MAX_NAME_LENGTH} characters.`;
-        break;
-      }
-      parsed.push({ name: ingredientName, category });
+      parsed.push(result.value);
     }
 
     if (invalid) {
@@ -242,22 +316,70 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    const rows = parsed.map((ingredient, index) => ({
+    // Insert top-level ingredients first so their ids can parent the
+    // sub-ingredients of any compound entry.
+    const topRows = parsed.map((ingredient, index) => ({
       food_id: foodId,
       ingredient_name: ingredient.name,
       ingredient_category: ingredient.category,
+      inclusion_pct: ingredient.inclusion_pct,
+      note: ingredient.note,
+      parent_ingredient_id: null,
       position_in_list: index + 1,
     }));
 
-    const { error: insertError } = await supabaseAdmin.from('food_ingredients').insert(rows);
+    const { data: insertedTop, error: insertError } = await supabaseAdmin
+      .from('food_ingredients')
+      .insert(topRows)
+      .select('id, position_in_list');
+
     if (insertError) {
       result.error = insertError.message;
       results.push(result);
       continue;
     }
 
-    result.ingredients_written = rows.length;
-    totalWritten += rows.length;
+    let written = insertedTop?.length ?? 0;
+
+    // Map each inserted parent back to its source entry by position, then
+    // insert that entry's sub-ingredients numbered 1..m within the parent.
+    const idByPosition = new Map<number, string>();
+    for (const row of (insertedTop ?? []) as { id: string; position_in_list: number }[]) {
+      idByPosition.set(row.position_in_list, row.id);
+    }
+
+    const subRows: Record<string, unknown>[] = [];
+    parsed.forEach((ingredient, index) => {
+      if (ingredient.sub.length === 0) return;
+      const parentId = idByPosition.get(index + 1);
+      if (!parentId) return;
+      ingredient.sub.forEach((child, childIndex) => {
+        subRows.push({
+          food_id: foodId,
+          ingredient_name: child.name,
+          ingredient_category: child.category,
+          inclusion_pct: child.inclusion_pct,
+          note: child.note,
+          parent_ingredient_id: parentId,
+          position_in_list: childIndex + 1,
+        });
+      });
+    });
+
+    if (subRows.length > 0) {
+      const { error: subError } = await supabaseAdmin.from('food_ingredients').insert(subRows);
+      if (subError) {
+        result.error = `Top-level ingredients written, but sub-ingredients failed: ${subError.message}`;
+        result.ingredients_written = written;
+        totalWritten += written;
+        results.push(result);
+        continue;
+      }
+      written += subRows.length;
+    }
+
+    result.ingredients_written = written;
+    totalWritten += written;
     results.push(result);
   }
 
