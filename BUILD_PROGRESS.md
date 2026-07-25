@@ -5,6 +5,39 @@
 
 ---
 
+## Ingredient data path + carbohydrate derivation (2026-07-25)
+
+### THE FINDING — no food has a real ingredient list, and the allergy filter is inert
+Live check: **259 of 265 foods have zero `food_ingredients` rows; the other 6 have 4-item seed stubs** ("Beef, Beef Meal, Lamb, Peas") — placeholders, not labels (real lists run 15–40+ items). **No food in the database has a real ingredient list.**
+
+**This is a safety gap, not a display gap.** `hardFilter.ts` excludes foods for a dog's allergies by matching `food_ingredients.ingredient_name`. With no ingredients recorded, allergy exclusion matches nothing — a dog allergic to chicken is currently offered chicken foods. Fixing ingredient coverage is the highest-value item outstanding.
+
+### Owner's steer (2026-07-25) — why ingredients matter beyond allergies
+The owner's own dog's gut-biome report called for dramatically reducing carbohydrates. Their correction, which is right and is now reflected in the code: a guaranteed-analysis panel cannot say *which* carbohydrate a food uses, and cannot describe fibre **type** at all — "crude fibre" is mostly insoluble fibre, so soluble/prebiotic fibres (inulin, FOS, chicory, psyllium, beet pulp) are missed entirely. **The ingredient list is the primary data; an aggregate percentage is at best a coarse screen.**
+
+### Built
+- **`src/lib/carbohydrate.ts`** — carbohydrate by difference (NFE): `100 − protein − fat − fibre − moisture − ash`. Verified against the live DB: **derivable for 264/265 foods today with zero AI cost**, range ~0% (raw/wet) to 51% (Pedigree Senior 7+), mean 32.5%. Returns null on an incomplete panel (never partially guesses), clamps at 0 and flags when label fractions sum >100. Header documents plainly what it is *not*: it subtracts fibre so it isn't counting fibre as carbohydrate, but because crude fibre understates total dietary fibre it **overstates digestible carbohydrate**, and it says nothing about type. Labelled throughout as "Digestible carbohydrate (estimated, excl. crude fibre)".
+- **`hardFilter.ts` extended** with a derived `carbohydrate_pct` rule so "reduce carbohydrate" can be a real approved exclusion. Deterministic arithmetic in memory — no LLM, safety-layer separation preserved. Foods with an incomplete panel are never excluded (same "unknown is not a breach" rule as stored columns). Sizing check: a `> 30%` rule would exclude 210 of 265 foods, `> 20%` excludes 214.
+- **`src/lib/ingredientCategories.ts`** — an 11-value vocabulary for the previously-undefined `ingredient_category`, deliberately separating `fibre_soluble` / `fibre_insoluble` / `fibre_mixed` so fibre type is capturable. Structural classification only; asserts nothing clinical.
+- **`POST|GET /api/admin/food-ingredients/import`** — admin-gated bulk write path so a separate session can populate ingredients without SQL. Matches by `food_id` or exact brand+name; stores label order as `position_in_list`.
+- **`INGREDIENT_IMPORT.md`** — the brief to hand to that session (worklist endpoint, payload shape, category table, transcribe-never-infer rule).
+- **`src/lib/ingredientBackfill.ts`** + `/api/admin/ingredient-backfill` — automated Batch-API extraction (Haiku, ~£1.50 for all 265). Built and type-checks but **NOT run**: needs a direct `ANTHROPIC_API_KEY` (currently empty; the Gateway key present has no batch endpoint). Kept as an option.
+
+### Decision (owner, 2026-07-25)
+**Ingredient data will be populated by a separate Claude session on the owner's monthly subscription, not via API credits.** This session's job was to make the schema and write path ready — done. Do not spend on bulk extraction.
+
+### Verification
+- `tsc --noEmit` clean; `npm run build` exit 0.
+- Carbohydrate derivation unit-checked against live rows: Pedigree Senior 7+ → 51.0, Chudleys Complete Adult → 48.5 (both match SQL exactly); incomplete panel → null; over-subscribed → clamped to 0 and flagged.
+- Import path verified end-to-end against the real DB with a **hand-made payload (zero AI spend)**: worklist returned 265 foods + 11 categories; an 11-item categorised list replaced Acana's 4-item stub. Guards all pass — unknown category rejected, **empty list refuses to wipe existing rows**, unmatched food reported cleanly, ambiguous brand+name rejected, import idempotent (3 written on both runs, not 6), non-admin → 404.
+- **Database restored exactly as found** afterwards: Acana back to its 4-item stub, 24 total ingredient rows, 0 test users.
+
+### Owner review
+- Hand `INGREDIENT_IMPORT.md` to the populating session. Progress is visible via `GET /api/admin/food-ingredients/import?missing=1`.
+- A carbohydrate contraindication rule still has to be entered and **approved** by a vet in `/admin/contraindications` before it excludes anything — the mechanism is ready, deliberately empty.
+
+---
+
 ## WS2 admin surfaces + WS4 tweaks (2026-07-25, Opus-orchestrated)
 
 Built on WS1's unified auth. **Uncommitted — awaiting owner go to deploy.**

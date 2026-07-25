@@ -1,5 +1,15 @@
 import { supabaseAdmin } from './supabase';
 import { HardFilterResult } from './types';
+import { estimateCarbohydrate } from './carbohydrate';
+
+/**
+ * Virtual nutrient: carbohydrate is never printed on a guaranteed-analysis
+ * panel, so it has no `foods` column. It is derived by difference from the five
+ * printed fractions (see src/lib/carbohydrate.ts) and compared in memory. This
+ * stays fully deterministic arithmetic — no LLM — so it does not breach the
+ * safety-layer separation.
+ */
+const CARBOHYDRATE_NUTRIENT = 'carbohydrate_pct';
 
 /**
  * Hard-filter logic (Phase 1, critical safety layer)
@@ -117,6 +127,41 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
               match.food_id,
               `Not suitable for ${rule.condition}: contains ${rule.contraindicated_ingredient}`
             );
+          }
+        } else if (
+          rule.nutrient === CARBOHYDRATE_NUTRIENT &&
+          rule.comparator &&
+          rule.threshold != null
+        ) {
+          // Derived-carbohydrate rule (e.g. a gut-biome or metabolic finding
+          // calling for reduced carbohydrate). Computed by difference from the
+          // printed fractions; foods with an incomplete panel yield null and
+          // are NEVER excluded — same "unknown is not a breach" rule as the
+          // stored-column path below.
+          const { data: nutrientRows, error: nutrientError } = await supabaseAdmin
+            .from('foods')
+            .select('id, protein_pct, fat_pct, fibre_pct, moisture_pct, ash_pct');
+
+          if (nutrientError) throw nutrientError;
+
+          for (const row of nutrientRows ?? []) {
+            const estimate = estimateCarbohydrate(row as Record<string, number | null>);
+            if (!estimate) continue;
+
+            const value = estimate.percent;
+            const threshold = rule.threshold;
+            const breached =
+              (rule.comparator === '>' && value > threshold) ||
+              (rule.comparator === '>=' && value >= threshold) ||
+              (rule.comparator === '<' && value < threshold) ||
+              (rule.comparator === '<=' && value <= threshold);
+
+            if (breached) {
+              addExcluded(
+                (row as { id: string }).id,
+                `Not suitable for ${rule.condition}: estimated carbohydrate ${rule.comparator} ${threshold}%`,
+              );
+            }
           }
         } else if (rule.nutrient && rule.comparator && rule.threshold != null) {
           // Nutrient-threshold contraindication: exclude foods whose nutrient

@@ -14,6 +14,16 @@
 // API routes and the admin page import the same single source of truth.
 
 export const CONTRA_NUTRIENTS = [
+  // Derived, not a stored column: carbohydrate is never printed on a
+  // guaranteed-analysis panel, so hardFilter computes it by difference from the
+  // five printed fractions (see src/lib/carbohydrate.ts). It EXCLUDES crude
+  // fibre but still overstates digestible carbohydrate, because crude fibre
+  // understates total dietary fibre — and it says nothing about carbohydrate or
+  // fibre TYPE. Treat it as a coarse screen; the ingredient list is primary.
+  {
+    column: 'carbohydrate_pct',
+    label: 'Digestible carbohydrate (estimated, excl. crude fibre)',
+  },
   { column: 'protein_pct', label: 'Protein' },
   { column: 'fat_pct', label: 'Fat' },
   { column: 'fibre_pct', label: 'Fibre' },
