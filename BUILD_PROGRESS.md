@@ -4,9 +4,11 @@
 **Current phase:** Phase 6 complete. Latest session (below) delivered WS4 #3/#4/#5 and WS3 #2:
 clients can now see a food's full ingredient list, a validated composition pie, recommendations
 persist per owner+dog with a Regenerate action, and research scoring reads a precomputed cache
-instead of calling Sonnet once per candidate food. All verified, **uncommitted, awaiting owner go
-to deploy.** Ingredient population by the owner's separate session is live and working (31 foods
-fully populated as of this session, up from 0).
+instead of calling Sonnet once per candidate food. A follow-up in the same session removed the
+Anthropic key from the platform entirely — **all AI now routes through the Vercel AI Gateway** — and
+enriched the scoring prompt with real ingredient data. **Committed and pushed as `75df1f1`.**
+Ingredient population by the owner's separate session is live and working (31 foods fully populated
+as of this session, up from 0).
 
 ---
 
