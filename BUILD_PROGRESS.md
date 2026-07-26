@@ -1,5 +1,98 @@
 # Dog Food Platform — Build Progress
 
+## Packet scanning + chart illustration fixes (2026-07-26, later)
+
+### THE FINDING THAT SHOULD DRIVE STRATEGY — web research has hit a wall
+The owner's separate session audited all 272 foods and recorded, per row, why the data could not be
+verified. The result:
+
+| `ingredient_data_status` | count |
+|---|---|
+| `complete` | **31** |
+| `identity_ambiguous` | 134 |
+| `ambiguous_formula` | 70 |
+| `source_unavailable` | 37 |
+
+**Only 31 of 272 foods (11%) have verified ingredient data**, and the recorded reasons are not
+fixable by better scraping: the product name maps to several different recipes ("Generic Iams adult
+chicken name does not identify one current breed-size formula"), the current published formula
+conflicts with the stored one, or the manufacturer's domain no longer resolves.
+
+**A packet photo resolves all three failure modes at once** — it identifies the exact variant, it IS
+the current formula, and it does not depend on a website existing. That, not cost, is the argument
+for owner-submitted photos. Per-item AI cost is near-identical either way (~$0.005/photo vs
+~$0.008/scrape; a pound or two across the whole catalogue).
+
+### Owner decisions (2026-07-26)
+- **The submitter verifies their own extraction — no admin review queue.** They are holding the
+  packet, so they can check an OCR result better than a reviewer looking at it later. The owner's
+  words: *"surely the person that uploaded it can verify it… if they see the extracted text they can
+  adjust and/or confirm it themselves."*
+- **Account login required** (not anonymous): attributable submissions, and an endpoint that spends
+  credits is not left open.
+- **No photos are stored at all.** Not "deleted after" — never written. The image is held in memory
+  for the extraction and discarded. Removes the GDPR surface of holding client images entirely.
+- **Shared catalogue is protected without a bottleneck:** provenance is recorded and an existing food
+  is never silently overwritten.
+
+### Built
+- **`src/lib/labelExtraction.ts`** — multi-image (front + back + optional third) extraction in ONE
+  Gateway call. Cheaper than one call per face and lets the model reconcile the two faces. Schema
+  extended to capture the **guaranteed analysis**, which the old single-image OCR never did — without
+  it, photo-sourced foods would have had no composition pie and nothing for the nutrient hard filter.
+- **`POST /api/ingredients/extract`** — stateless. No DB row, no stored photo. EXIF still stripped
+  before the bytes go to the provider. Returns the draft plus a duplicate warning.
+- **`POST /api/ingredients/confirm`** — the only write. New product → created immediately with
+  `ingredient_source='label_photo'`, `submitted_by`, and the audit columns set
+  (`ingredient_data_status='complete'`, `recipe_version_status='current'`). Existing product → **never
+  overwritten**; recorded as a second observation in `ingredient_review_queue`. Rolls the food back if
+  the ingredient insert fails, so a food row can never exist looking complete with no ingredients.
+- **`/foods/add` + `LabelCapture.tsx`** — capture → review/correct → confirm. Ingredients edited as
+  one line per ingredient; nutrients left blank rather than guessed.
+- **Treats.** New `foods.is_treat`. Treats are **excluded from the meal-recommendation candidate
+  universe** in `hardFilter.ts` — a chew must never be suggested as dinner — while still being logged
+  and available to the correlation engine.
+
+### Chart illustrations — TWO bugs, both fixed (owner-reported: "Bristol Type 4 doesn't show")
+1. **Lost manifest entry (last-write-wins race).** `uploadChartIllustration()` wrote the file then did
+   a read-modify-write on a shared `manifest.json`. Concurrent uploads read the same version and the
+   last write dropped the others. `bristol/4.png` was in Storage (HTTP 200, 235,544 bytes) but absent
+   from the manifest. **Fixed by deleting the manifest** — paths are deterministic, so the bucket is
+   the index. Self-healed Type 4 with no re-upload.
+2. **The endpoint was prerendered at build time.** `/api/charts/illustrations` takes no parameters, so
+   Next made it a static route: the response was frozen to build time and **any newly uploaded image
+   never appeared until the next deploy.** This is the better explanation for "I uploaded them all and
+   none showed." Now `force-dynamic` + `no-store`.
+
+### Verification
+- `tsc` clean; `npm run build` exit 0.
+- **Charts:** Bristol 1–7 all present and rendering (Type 4 confirmed loaded at 383×513). Five BCS
+  images uploaded **concurrently** — the exact case that used to lose entries — all appeared. Build
+  output confirms the route is now `ƒ` dynamic. Test images and the obsolete manifest.json removed;
+  `bcs` left empty as the owner has not uploaded any.
+- **Confirm path (no AI cost):** validation rejects missing brand, bad food type and an empty
+  ingredient list; out-of-range nutrient (999%) stored as null, not nonsense; new food created with
+  correct provenance and audit columns; **resubmitting the same product with different ingredients left
+  the original untouched** and recorded the conflict separately.
+- **Treat exclusion proved by count:** 274 foods, 273 candidates, 1 treat — and the recommendation
+  response reported `total_candidates: 273`.
+- **Photo extraction verified live (owner-approved, ~$0.01):** rendered front+back labels put through
+  the real endpoint returned brand and product name from the FRONT, all 11 ingredients verbatim and in
+  order with percentages from the BACK, every printed nutrient, `calories_per_kg: 3720` correctly
+  converted from "372 kcal/100g", and **`sodium_pct: null` because it wasn't printed** — the honesty
+  rule holding under test. `photos_stored: false`. This closes the long-standing "Haiku/OCR path never
+  exercised" flag. Call took ~13s for two images.
+- **Database restored** — 4 users, 4 dogs, 272 foods, 0 treats, empty queues. One recommendation set
+  belonging to a REAL user (dog "Harry") was found during cleanup and deliberately left alone.
+
+### Owner review
+- **The old `/dogs/[dogId]/submissions` flow still exists** and still stores photos + queues for admin
+  review. The dog hub now links to `/foods/add` instead. Decide whether to retire the old flow, or
+  keep it as an admin-side path.
+- **Treats need a logging UI.** `dog_food_events` already supports `event_type='treat'`, and treats can
+  now be catalogued, but there is no owner-facing screen to log one against a dog.
+- ~13s for a two-image read is fine but noticeable; consider a progress hint if clients report it.
+
 **Last updated:** 2026-07-26 (deployed)
 **Current phase:** Phase 6 complete. Latest session (below) delivered WS4 #3/#4/#5 and WS3 #2:
 clients can now see a food's full ingredient list, a validated composition pie, recommendations

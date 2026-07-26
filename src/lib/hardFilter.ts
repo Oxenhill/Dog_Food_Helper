@@ -67,10 +67,17 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     if (restrictionError) throw restrictionError;
     if (conditionError) throw conditionError;
 
-    // Get all foods (the candidate universe).
+    // Get the candidate universe.
+    //
+    // Treats are excluded here rather than filtered out later: this is a MEAL
+    // recommendation, and offering a treat or chew as a dog's main food would
+    // be wrong regardless of how well it scored. Treats are still logged as
+    // food events and still feed the correlation engine — they are simply not
+    // candidates for "what should I feed my dog".
     const { data: foods, error: foodError } = await supabaseAdmin
       .from('foods')
-      .select('id, brand, name');
+      .select('id, brand, name')
+      .eq('is_treat', false);
 
     if (foodError) throw foodError;
     if (!foods) return { excluded_foods: [], excluded_reasons: [], suitable_food_ids: [] };

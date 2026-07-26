@@ -206,9 +206,9 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
             <h2 className="section-title text-[15px] text-alarm">Red flag</h2>
             <p className="muted mt-1 text-[13px]">Log an urgent symptom</p>
           </Link>
-          <Link href={`/dogs/${params.dogId}/submissions`} className="card-link">
-            <h2 className="section-title text-[15px]">Photo submissions</h2>
-            <p className="muted mt-1 text-[13px]">Submit or review a food label photo</p>
+          <Link href={`/foods/add?dog=${params.dogId}`} className="card-link">
+            <h2 className="section-title text-[15px]">Scan a packet</h2>
+            <p className="muted mt-1 text-[13px]">Add a food or treat from its label</p>
           </Link>
           <Link href={`/dogs/${params.dogId}/edit`} className="card-link">
             <h2 className="section-title text-[15px]">Edit profile</h2>
