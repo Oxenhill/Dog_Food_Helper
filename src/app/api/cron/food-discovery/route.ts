@@ -1,40 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isCronAuthorized } from '@/lib/cronAuth';
-import { submitDiscoveryBatch } from '@/lib/foodDiscovery';
+import { runFoodDiscovery, hasGatewayAuth } from '@/lib/foodDiscovery';
 
 /**
- * POST /api/cron/food-discovery — Phase 6 weekly food discovery job, phase 1
- * (submit). Intended to run weekly (e.g. Sunday 2 AM UTC — see vercel.json).
+ * POST|GET /api/cron/food-discovery — weekly food discovery (Phase 6).
+ * Scheduled Sunday 02:00 UTC in vercel.json.
  *
  * Crawls `source_domain_allowlist` (approved=true) for candidate product
- * pages, submits a Batch API request per page (50% token discount per the
- * spec's explicit instruction to use the Batch API), and returns the batch
- * id + domain/url manifest.
+ * pages, extracts each through the **Vercel AI Gateway**, and inserts new
+ * foods after duplicate + required-field checks (Tier 1, architecture doc §7).
  *
- * **Important operational note (see src/lib/foodDiscovery.ts's header
- * comment and BUILD_PROGRESS.md):** there is no persistence table for
- * in-flight batches in Part A's schema. The response body's `manifest` MUST
- * be retained externally (cron job logs, or ideally a future
- * `food_discovery_batches` tracking table) and passed to
- * POST /api/cron/food-discovery/process once the batch has ended (Batch API
- * turnaround can be up to ~24h) — this route does not itself wait for or
- * process results.
+ * This used to be a two-phase submit/process pair because it ran on
+ * Anthropic's async Message Batches API. It no longer does: this platform uses
+ * the Gateway exclusively and holds no Anthropic key, and the Gateway has no
+ * batch endpoint — so discovery is a single synchronous run with bounded
+ * concurrency. The companion `/process` route is gone.
+ *
+ * Cost is bounded by MAX_PAGES_PER_RUN (50) inside the job — one Haiku call
+ * per candidate page.
  */
-export async function POST(request: NextRequest) {
+async function handle(request: NextRequest) {
   if (!(await isCronAuthorized(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  if (!hasGatewayAuth()) {
+    return NextResponse.json(
+      {
+        error:
+          'No AI Gateway auth configured. Set AI_GATEWAY_API_KEY, or deploy on Vercel with OIDC Federation enabled (VERCEL_OIDC_TOKEN), before running food discovery.',
+      },
+      { status: 503 }
+    );
+  }
+
   try {
-    const result = await submitDiscoveryBatch();
+    const result = await runFoodDiscovery();
     return NextResponse.json(result, { status: 200 });
   } catch (error) {
-    console.error('[food-discovery] submit error:', error);
+    console.error('[food-discovery] run error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// Vercel Cron triggers scheduled jobs with a GET request (see vercel.json) —
-// exposed as an alias for POST so this route works both as a cron target
-// and as a manually-POSTed admin action.
-export const GET = POST;
+export const POST = handle;
+// Vercel Cron triggers scheduled jobs with GET (see vercel.json).
+export const GET = handle;

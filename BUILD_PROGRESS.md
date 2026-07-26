@@ -1,6 +1,254 @@
 # Dog Food Platform — Build Progress
 
-**Last updated:** 2026-07-24
+**Last updated:** 2026-07-26 (deployed)
+**Current phase:** Phase 6 complete. Latest session (below) delivered WS4 #3/#4/#5 and WS3 #2:
+clients can now see a food's full ingredient list, a validated composition pie, recommendations
+persist per owner+dog with a Regenerate action, and research scoring reads a precomputed cache
+instead of calling Sonnet once per candidate food. All verified, **uncommitted, awaiting owner go
+to deploy.** Ingredient population by the owner's separate session is live and working (31 foods
+fully populated as of this session, up from 0).
+
+---
+
+## Food contents for clients, composition pie, saved recommendations, research cache (2026-07-26, Opus-orchestrated)
+
+WS4 #3, WS4 #4, WS4 #5 and WS3 #2 in one pass. **Uncommitted — awaiting owner go to deploy.**
+No subagents were used; all work done directly, every claim below verified by this session.
+
+### DATA CHANGE OBSERVED MID-SESSION — ingredient population is live and working
+At the start of this session the live DB had **24 ingredient rows across 6 foods** (all 4-item
+seed stubs), matching the previous handover. **Ninety minutes later it had 766 rows and 31 foods
+with real, full ingredient lists** — the owner's separate populating session is running and
+writing correctly. Food count also moved 265 → 272.
+
+Coverage at the end of this session: **31 populated (>=5 ingredients) · 2 stubs · 239 empty · 272 total.**
+
+The data landing is genuinely good: real UK label language, compound ingredients nested as real
+rows, printed percentages, and label qualifiers preserved. **The owner's exact stated scenario now
+works end-to-end** — `Bakers Beef & Vegetables` declares `Meat and animal derivatives` with **`beef`
+nested inside it at 4%**, and `Vegetables` nesting `dried pea` / `dried carrot`. That is precisely the
+"a beef flavoured food might still contain chicken" case, and both the hard filter and the
+correlation engine match `ingredient_name` across all rows including nested ones.
+
+**Consequence: the allergy hard filter is no longer inert for those 31 foods.** It remains inert for
+the other 241.
+
+### 1. Clients can see what is in a food (WS4 #3)
+- **`src/lib/foodFull.ts`** — the single read path over the `public.food_full` view. Maps one row to
+  a typed `FoodFull` (nested ingredients in label order, all 8 nutrients, derived carbohydrate +
+  band). `fetchFoodFull(id)` and `fetchFoodFullMany(ids)` (one query for a whole page of results).
+  Defensive numeric coercion returns `null` rather than `NaN` — a nutrient we cannot read must never
+  render as a number.
+- **`GET /api/foods/[foodId]`** — owner-facing, `requireUser`-gated. Distinct from the admin
+  `/api/admin/foods/[foodId]`, which is for record review. Foods are shared reference data so there
+  is no per-owner ownership check, but a verified session IS required (not an anonymous catalogue).
+- **`/foods/[foodId]` page** + **`src/components/IngredientList.tsx`** — the ordered list is the
+  primary content, rendered first, above composition. Never re-sorted or grouped. Sub-ingredients
+  nest visually under a "CONTAINS" rule. Percentages appear **only** where the label printed one.
+- **`POST /api/recommendations` now returns `ingredients` + `nutrients` per result**, and the dog hub
+  shows the first 6 ingredients inline with "+N more" and a link to the full page.
+- **Empty state is honest and load-bearing** (still the majority case at 239/272): "No ingredient
+  list recorded yet … We only ever show ingredients copied directly from the manufacturer's label —
+  we won't guess."
+
+### 2. Composition pie (WS4 #4) — `src/components/CompositionPie.tsx`
+Dependency-free inline SVG; no charting library, no new node_modules.
+- Six fixed slots (protein, fat, carbohydrate, fibre, moisture, ash). **Hue follows the fraction, not
+  its rank** — a food with more fat than protein does not repaint.
+- Reused the **already-validated** palette (`#2a78d6, #eb6834, #1baf7a, #eda100, #e87ba4, #008300`);
+  not re-derived. The recorded non-dismissable **contrast WARN obligates visible labels**, so a keyed
+  table beside the chart carries **name + value for every segment**, and segments >=8% also carry
+  their value on the mark. Inline label colour is chosen by computing WCAG relative luminance of the
+  fill and picking whichever of white/ink actually clears contrast — verified live: white on the blue
+  segment, ink on the pink one.
+- Separator is a **2px gap in the surface colour**, not an ink border (the mark spec's mechanism).
+- **Returns `null` when the panel is incomplete.** This is deliberate: carbohydrate is derived by
+  difference, so if any printed fraction is missing the six values do not sum to the whole and a
+  part-to-whole chart would misstate the food. An absent chart is honest; a partial circle is not.
+- Discloses when printed fractions sum to >100 (rounded labels) rather than silently normalising.
+
+### 3. Recommendations persist per owner + dog (WS4 #5)
+- New **`dog_recommendation_sets`** (dog_id, nullable owner_id, generated_at, jsonb payload).
+- `POST /api/recommendations` saves on generate; **new `GET /api/recommendations?dog_id=`** returns the
+  latest saved set. The dog hub loads it on mount, labels it "Showing your saved results from
+  <date>", and the button is now an explicit **Regenerate**. A save failure logs but still returns the
+  results the caller is waiting for.
+- **Deletion semantics matched to the existing model:** `owner_id` is nullable and is set to null
+  alongside the dog in BOTH the single-dog `DELETE /api/dogs/[dogId]` and `deleteAccount()`. Sets hold
+  no personal data (food scores only) and are regenerable, so this is link severance, not data loss.
+
+### 4. Research scoring moved off the request path (WS3 #2) — via the Vercel AI Gateway
+**The synchronous per-food Sonnet call is gone, not merely discouraged — the call site was deleted.**
+
+**PROVIDER CORRECTION (owner, 2026-07-26): everything uses the Vercel AI Gateway. No
+`ANTHROPIC_API_KEY`, no direct api.anthropic.com calls.** The first pass of this work was built on the
+Anthropic Message Batches API (for the 50% discount) and was reworked on the owner's instruction.
+
+**Gateway batch support — settled empirically, not from docs.** Vercel's docs were ambiguous and a
+third-party source claimed the Gateway proxies Anthropic's batch endpoints, so it was probed directly:
+```
+GET  https://ai-gateway.vercel.sh/v1/messages/batches -> 404 not_found_error
+GET  https://ai-gateway.vercel.sh/v1/batches          -> 404 not_found_error
+POST https://ai-gateway.vercel.sh/v1/messages         -> 400 (endpoint reached, validation error)
+```
+Identical 404s with and without auth, so it is genuinely "no such route", not an auth failure.
+**The Gateway has no batch endpoint; the 50% batch discount is not available through it.**
+
+**That loses the discount but not the main saving.** The large win was never the batch discount — it
+was moving from *one call per candidate food on every request* (~270 calls/request) to *one call per
+(food, research context), once, ever*. The cache still delivers that in full.
+
+- `researchScoring.ts` is now the **shared prompt definition only** (system prompt, zod schema, honest
+  defaults, `buildResearchScoringPrompt`). It calls no model. One definition is imported by both the
+  reader and the writer, because a cache entry is only valid if the prompt that produced it is the
+  prompt the reader believes it used.
+- **`researchScoreCache.ts`** (read side, in-request): one query for all candidates against
+  `research_score_cache`; misses are queued in `research_score_queue` and score an honest 0.
+- **Key is a context hash, not a version number:** `(food_id, sha256(profile_signature + sorted chunk
+  ids))`. Change the approved corpus and the retrieved chunk ids change, so the hash changes, so a
+  stale score is **structurally unreachable**. There is no version column that could drift.
+- Two distinct honest defaults, deliberately different copy: `NO_RESEARCH_RESULT` ("no approved
+  research applies") vs `NOT_YET_SCORED_RESULT` ("not assessed yet, queued"). Conflating them would
+  misrepresent the state of the evidence.
+- **`researchScoreWorker.ts`** (write side, offline; replaces the deleted `researchScoreBatch.ts`) +
+  **`POST|GET /api/cron/research-scoring`**. Ordinary Gateway `generateObject()` calls with **bounded
+  concurrency (default 4)** and a **per-run `?limit=` cap (default 100, max 500)** — the limit is the
+  spend control, since each row is one Sonnet call. `?dry=1` reports queue depth and **costs nothing**,
+  so the cost of a full drain can be checked before spending. Rows are claimed before scoring so
+  overlapping runs can't double-charge, and `requeueStaleRows()` recovers rows stranded by a crashed
+  run. Re-asserts approved-only on chunks at scoring time, and writes **no score at all** for a
+  malformed/out-of-range result rather than a guessed one.
+- `scoreFood()` now takes a precomputed `ResearchRelevanceResult`. **Scoring cost no longer scales with
+  catalogue size.** Route returns 503 with a clear message if Gateway auth is absent.
+- `batchApiHelper.ts` is untouched and still direct-Anthropic — see the flag below.
+
+### Verification (all performed this session, against the real DB)
+- `npx tsc --noEmit` **clean**; `npm run build` **exit 0**, all new routes compiled
+  (`/api/foods/[foodId]`, `/foods/[foodId]`, `/api/cron/research-scoring`). `git diff --check` clean.
+- **Live, prod build on :3177 with a throwaway account:** recommendations over **272 candidates in
+  3.4s with zero model calls**; ingredients attached incl. nesting + percentages; foods without
+  ingredients return `[]`. `GET` returned the saved set with ingredients intact through the jsonb
+  round-trip. Auth: no-token GET → **401**, no-token food detail → **401**, unknown food → **404**.
+- **Gateway write path proven with one real call (owner-approved, ~$0.003).** Staged a single queue row
+  and ran `/api/cron/research-scoring?limit=1` → `{"queue_rows_claimed":1,"scores_written":1,"failed":0,
+  "model":"anthropic/claude-sonnet-5"}` in 5.5s. It wrote a genuine, conservative result: **score 0.10**
+  with the reasoning that the snippet *"can't be directly linked to recommending this specific product"*
+  — correct refusal to overstate, exactly what the system prompt asks for. Auth gate verified (401
+  unauthenticated); `?dry=1` returns queue depth free of charge. **The Gateway write path is now proven,
+  not assumed.**
+- **Research cache read path exercised end-to-end at ZERO API cost.** Ran in dev mode (where
+  `embeddingPipeline`'s deterministic pseudo-embedding fallback is permitted; it is correctly blocked
+  in production) with a temporary approved research fixture. Results: retrieval returned the chunk →
+  **272 queue rows written, one per candidate, single context hash, correct profile signature**; a
+  second identical run left it at **272 (idempotent)**; seeding one cache row made that food return
+  **exactly 0.73 with its cached summary** and lifted its overall score 0.628 → 0.811 so it correctly
+  outranked, while uncached foods stayed at an honest 0. Server log confirmed **no Anthropic/Gateway
+  call at any point**.
+- **Browser, mobile (375px) and desktop (1280px):** pie renders 6 correctly-ordered segments with the
+  2px surface gap; luminance-picked label colours confirmed; **no horizontal overflow at 375px**; no
+  console errors. Verified the populated food, the empty-ingredient food, and the dog hub.
+- **Database restored exactly as found** — auth.users 4, user_profiles 4, dogs 4, and all of
+  `dog_recommendation_sets` / `research_score_cache` / `research_score_queue` / `research_documents` /
+  `research_chunks` back to **0**. Confirmed by count query. `food_ingredients` was never touched
+  (another session is actively writing it).
+
+### Migration
+`supabase/migrations/20260725100000_add_recommendation_sets_and_research_score_cache.sql` — applied
+live and saved. Purely additive: three new tables, RLS enabled with no policy (service-role only,
+fail-closed, same pattern as `condition_contraindications`). No existing table or column altered.
+
+---
+
+## Follow-up in the same session: no Anthropic key anywhere + richer scoring prompt
+
+Owner instruction, verbatim intent: *"All AI calls are done via the vercel AI… anthropic key should
+not be needed anywhere in this platform, it is never needed."* Plus: make the prompt improvement, then
+deploy.
+
+### 5. `ANTHROPIC_API_KEY` removed from the platform entirely
+The owner believed the Gateway could take a batch call. It cannot — probed six candidate paths in both
+Anthropic and OpenAI batch shapes, GET and POST, all 404, **including `/v1/files`** which any
+OpenAI-style batch flow requires. `/v1/messages` returns 400 (endpoint reached), so the Gateway is
+reachable and doing synchronous inference only. Reported plainly, then delivered the actual
+requirement, which is fully achievable:
+
+- **`foodDiscovery.ts` converted to the Gateway and made single-phase.** The two-phase
+  submit/process split existed *only* because the Batch API was async; with synchronous calls it
+  collapses into one run: crawl → extract (bounded concurrency 4) → dedupe/validate → insert. Capped by
+  `MAX_PAGES_PER_RUN` (50). Hand-written Anthropic tool schema replaced with a zod schema.
+- **`ingredientBackfill.ts` converted the same way** — one `runIngredientBackfill(limit?)` pass. All
+  its safety rules preserved verbatim: never invents an ingredient or nutrient; only replaces
+  ingredient rows when the extraction returned a non-empty list; fills NULL nutrient columns only.
+- **`src/lib/batchApiHelper.ts` DELETED**, along with the now-meaningless
+  `/api/cron/food-discovery/process` route. `/api/admin/ingredient-backfill` takes `action: 'run'`.
+- **`ANTHROPIC_HAIKU_MODEL` / `ANTHROPIC_SONNET_MODEL` are gone.** Everything reads
+  `AI_GATEWAY_HAIKU_MODEL` / `AI_GATEWAY_SONNET_MODEL` (the `provider/model` form).
+- **Verified:** `grep -rn "ANTHROPIC_API_KEY" src/` returns **only comments** stating it is not used.
+  Zero live references. The env var can be removed from Vercel.
+
+### 6. Research prompt now sees the actual food — with a cache key that can't go stale
+The prompt previously sent only brand/name/type/calories. Live evidence it mattered: with a gut-biome
+fibre snippet, Sonnet scored **0.10** and said it *"can't be directly linked… no information given
+about this food's fiber or starch content."* It was right.
+
+Now the prompt carries the **ordered ingredient list and the guaranteed-analysis panel**. Same food,
+same research, after the change: **0.35**, citing specifics — *"lists cereals as the first ingredient
+with no beet pulp, inulin, or chicory root evident."* Grounded, and it even down-weighted the fixture
+for looking like a placeholder. Absence is stated explicitly ("NOT RECORDED… do not penalise the food
+for the missing list") so a food without ingredients isn't marked down for it.
+
+**Two real bugs were caught by verification during this change — both fixed:**
+1. **The cache would never have hit in production.** Folding the food fingerprint into `context_hash`
+   gave every food a distinct hash, so the lookup needed two `IN()` lists of ~270 values and blew
+   PostgREST's URL limit → **400 Bad Request**. The fail-soft dutifully reported "not yet scored" for
+   every food, hiding it. Fixed by keeping `context_hash` as the single per-request base hash and
+   adding a **`food_fingerprint` column** compared per row. Re-verified at full scale: 272 rows, 1 base
+   hash, 198 distinct fingerprints, no errors.
+2. **Re-queued misses kept a stale fingerprint.** `ignoreDuplicates: true` skipped updating the
+   existing row, so a food edited after being queued would never be rescored. Fixed to upsert.
+
+**Invalidation proven end-to-end (zero AI cost):** seeded a cache hit → recommendation returned
+**0.99**; added one ingredient to that food → it dropped out of the top 10, cached fingerprint
+`16f5922087e8b562` vs requeued `ef6b36bd5f5a7581`, status back to `pending`.
+
+Migration `20260726090000_add_food_fingerprint_to_research_score_tables.sql` (applied live + saved).
+Additive only.
+
+### Needs owner input / owner review
+- **`ANTHROPIC_API_KEY` can be deleted from the Vercel project** — nothing reads it any more. Confirm
+  `AI_GATEWAY_API_KEY` is set in Vercel, **or** enable OIDC Federation, or every AI path returns a
+  clear 503.
+- **Schedule the job:** `/api/cron/research-scoring` is not in `vercel.json`. Only schedule it once a
+  real research corpus exists — with the corpus empty it is a no-op. Use `?dry=1` (free) to see queue
+  depth, then `?limit=N` to control spend.
+- **Food discovery is now synchronous** and runs inside one cron invocation. With 50 pages at ~4
+  concurrent Haiku calls it should finish well inside a Vercel function timeout, but **it has never
+  been run live** (the domain allowlist is empty). Watch the first real run.
+- **Carried forward, deliberately not done:** `autoprefixer` and ESLint are still entirely uninstalled
+  (`eslint`, `eslint-config-next`, `autoprefixer`, `postcss` all absent). Fixing either is a dependency
+  change plus, for autoprefixer, altered CSS output — wrong thing to bundle into a feature deploy.
+  Recommend a separate change: `npm install -D eslint eslint-config-next autoprefixer postcss`, add
+  `.eslintrc.json` = `{"extends": "next/core-web-vitals"}`, re-add autoprefixer to
+  `postcss.config.js`, then diff the CSS output.
+- **Carried forward, deliberately NOT done this session** (re-logged, not silently dropped):
+  `autoprefixer` and **ESLint are both entirely uninstalled** (`eslint`, `eslint-config-next`,
+  `autoprefixer`, `postcss` are all absent from package.json). Fixing either means a dependency change
+  plus, for autoprefixer, a change to generated CSS — I judged it wrong to bundle that into a feature
+  deploy at the end of a session, given this checkout's recurring node_modules corruption and a
+  currently-verified-good build. Recommend a separate, dedicated change:
+  `npm install -D eslint eslint-config-next autoprefixer postcss` then add
+  `.eslintrc.json` = `{"extends": "next/core-web-vitals"}` and re-add autoprefixer to
+  `postcss.config.js`, re-running the full build to compare CSS output.
+- Still open and unchanged (carried into the follow-up section below): single-dog "Remove = anonymise
+  vs hard-erase" GDPR confirmation ·
+  `/docs/*` missing from the checkout · Supabase Auth "leaked password protection" toggle ·
+  Bristol/BCS artwork · `wellness_indicator_reference` research backing · legal/GDPR review ·
+  vet-approved `condition_contraindications` rules (still deliberately empty) · Haiku/OCR path still
+  never exercised with a real photo.
+
+---
+
+**Status as of 2026-07-24 (superseded by the entry at the top of this file — kept for history):**
 **Current phase:** Phase 6 complete + full finish-and-redesign pass done (see "Finish-and-redesign session" below). This session (Opus-orchestrated): fixed a production-down recommendations 500; found and fixed that **Tailwind never compiled** (no `postcss.config.js` — the whole app was unstyled); built a design system and redesigned every page; added dog edit/delete, the allergies/health-conditions UI, and the deterministic health-condition hard-filter mechanism; applied the missing RAG RPC; and **verified all three AI Gateway paths live**. Everything is verified but **staged/uncommitted, held for one coherent deploy** (the recommendations hotfix is the one piece already live). **Owner action needed before deploy:** give the go to commit + push to main; see this session's "Needs owner input" for the research-layer cost design and the vet-gated clinical mappings.
 
 ---

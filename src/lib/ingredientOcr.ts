@@ -25,13 +25,13 @@ import { OcrExtractionResult } from './types';
  * `anthropic/claude-haiku-4.5` verbatim — this resolves the long-standing
  * "exact model-id string unconfirmed" flag from Phase 4/5 for Haiku, since
  * the Gateway's friendly id matches CLAUDE.md's product name exactly.
- * Configurable via AI_GATEWAY_HAIKU_MODEL — deliberately a *different* env
- * var from ANTHROPIC_HAIKU_MODEL, which foodDiscovery.ts/batchApiHelper.ts
- * still read for the *direct* (non-Gateway) Anthropic Batch API call — that
- * one needs a raw dated Anthropic model id (e.g.
- * "claude-haiku-4-5-20251001"), not this Gateway-format "provider/model" id;
- * reusing the same env var for both would silently break whichever one
- * read it second.
+ * Configurable via AI_GATEWAY_HAIKU_MODEL.
+ *
+ * As of 2026-07-26 this is the ONLY Haiku model env var in the project.
+ * `ANTHROPIC_HAIKU_MODEL` and the direct-Anthropic Batch API path it served
+ * are gone: foodDiscovery.ts and ingredientBackfill.ts were converted to the
+ * Gateway and `batchApiHelper.ts` was deleted, so no code here holds an
+ * Anthropic key or uses a raw dated Anthropic model id any more.
  */
 
 const HAIKU_MODEL = process.env.AI_GATEWAY_HAIKU_MODEL || 'anthropic/claude-haiku-4.5';

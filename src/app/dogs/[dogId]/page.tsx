@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
 import { Dog } from '@/lib/types';
+import type { FoodFullIngredient } from '@/lib/foodFull';
 
 interface Recommendation {
   food_id: string;
@@ -15,6 +16,9 @@ interface Recommendation {
   confidence: number;
   reason: string;
   estimated_monthly_cost: number | null;
+  // WS4 #3 — clients need to see what's actually in a recommended food.
+  // Empty means no ingredient list has been recorded yet, never "no ingredients".
+  ingredients: FoodFullIngredient[];
 }
 
 interface RecommendationsResponse {
@@ -23,7 +27,12 @@ interface RecommendationsResponse {
   disclaimer: string;
   excluded_count: number;
   total_candidates: number;
+  /** Present on a saved set and on a fresh generate. */
+  generated_at?: string;
 }
+
+/** How many ingredients to preview inline before deferring to the detail page. */
+const INGREDIENT_PREVIEW_COUNT = 6;
 
 /**
  * Dog hub page — was entirely missing (BUILD_PROGRESS.md flagged no
@@ -40,6 +49,10 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
   const [recs, setRecs] = useState<RecommendationsResponse | null>(null);
   const [recsLoading, setRecsLoading] = useState(false);
   const [recsError, setRecsError] = useState('');
+  // True while the previously-saved set is being fetched on mount, and true
+  // for a set that came from storage rather than this page view.
+  const [savedLoading, setSavedLoading] = useState(true);
+  const [isSaved, setIsSaved] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
 
@@ -59,6 +72,30 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
     })();
   }, [params.dogId, router]);
 
+  // Load the most recently SAVED recommendation set (WS4 #5). Scoring a whole
+  // catalogue on every visit is wasteful and slow, so a returning owner sees
+  // their last results immediately and re-runs only when they choose to.
+  useEffect(() => {
+    if (!getUserId()) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/recommendations?dog_id=${params.dogId}`, {
+          headers: authHeaders(),
+        });
+        if (!res.ok) return; // no saved set is an empty state, not an error
+        const json = await res.json();
+        if (json.saved) {
+          setRecs(json.saved);
+          setIsSaved(true);
+        }
+      } catch {
+        // Non-fatal: the owner can still generate a fresh set.
+      } finally {
+        setSavedLoading(false);
+      }
+    })();
+  }, [params.dogId]);
+
   async function getRecommendations() {
     setRecsError('');
     setRecsLoading(true);
@@ -74,6 +111,7 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
         return;
       }
       setRecs(json);
+      setIsSaved(false);
     } catch {
       setRecsError('Something went wrong. Please try again.');
     } finally {
@@ -191,9 +229,23 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
               disabled={recsLoading}
               className="btn-primary btn-sm shrink-0"
             >
-              {recsLoading ? 'Scoring…' : recs ? 'Refresh' : 'Get recommendations'}
+              {recsLoading ? 'Scoring…' : recs ? 'Regenerate' : 'Get recommendations'}
             </button>
           </div>
+
+          {/* A saved set is explicitly labelled as such, with its date, so the
+              owner always knows whether they're looking at fresh results. */}
+          {recs && isSaved && recs.generated_at && (
+            <p className="help-text mt-2">
+              Showing your saved results from{' '}
+              <span className="metric">
+                {new Date(recs.generated_at).toLocaleDateString('en-GB')}
+              </span>
+              . Regenerate to score against the latest food data.
+            </p>
+          )}
+
+          {savedLoading && !recs && <p className="muted mt-3 text-[14px]">Checking for saved results…</p>}
 
           {recsError && (
             <div className="callout-alarm mt-4" role="alert">
@@ -205,24 +257,57 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
             <div className="mt-4 flex flex-col gap-4">
               <p className="help-text italic">{recs.disclaimer}</p>
               {recs.message && <p className="muted text-[14px]">{recs.message}</p>}
-              {recs.recommendations.map((r, i) => (
-                <div key={r.food_id} className="hairline pt-4 first:border-0 first:pt-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="font-semibold text-ink">
-                      <span className="metric text-ink-soft">#{i + 1}</span> {r.brand} {r.name}
-                    </h3>
-                    <span className="badge-pine metric shrink-0 normal-case">
-                      score {r.score.toFixed(2)} · {(r.confidence * 100).toFixed(0)}% confidence
-                    </span>
+              {recs.recommendations.map((r, i) => {
+                const ingredients = r.ingredients ?? [];
+                const preview = ingredients.slice(0, INGREDIENT_PREVIEW_COUNT);
+                const remaining = ingredients.length - preview.length;
+                return (
+                  <div key={r.food_id} className="hairline pt-4 first:border-0 first:pt-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="font-semibold text-ink">
+                        <span className="metric text-ink-soft">#{i + 1}</span> {r.brand} {r.name}
+                      </h3>
+                      <span className="badge-pine metric shrink-0 normal-case">
+                        score {r.score.toFixed(2)} · {(r.confidence * 100).toFixed(0)}% confidence
+                      </span>
+                    </div>
+                    <p className="lead mt-1">{r.reason}</p>
+                    {r.estimated_monthly_cost != null && (
+                      <p className="metric help-text mt-1">
+                        Est. £{r.estimated_monthly_cost.toFixed(2)}/month
+                      </p>
+                    )}
+
+                    {/* What's actually in it — the owner's request. Never
+                        fabricated: an unrecorded list says so. */}
+                    <div className="mt-2">
+                      {ingredients.length > 0 ? (
+                        <p className="help-text">
+                          <span className="font-semibold text-ink">Ingredients:</span>{' '}
+                          {preview.map((ing) => ing.name).join(', ')}
+                          {remaining > 0 && (
+                            <>
+                              {' '}
+                              <span className="metric">+{remaining}</span> more
+                            </>
+                          )}
+                        </p>
+                      ) : (
+                        <p className="help-text">
+                          Ingredient list not recorded yet — we only show ingredients copied from
+                          the manufacturer&apos;s label.
+                        </p>
+                      )}
+                      <Link
+                        href={`/foods/${r.food_id}?dog=${params.dogId}`}
+                        className="mt-1 inline-block text-[13px] font-semibold text-pine hover:underline"
+                      >
+                        See full ingredients &amp; composition →
+                      </Link>
+                    </div>
                   </div>
-                  <p className="lead mt-1">{r.reason}</p>
-                  {r.estimated_monthly_cost != null && (
-                    <p className="metric help-text mt-1">
-                      Est. £{r.estimated_monthly_cost.toFixed(2)}/month
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

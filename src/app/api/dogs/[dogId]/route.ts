@@ -175,6 +175,23 @@ export async function DELETE(
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
+    // Saved recommendation sets carry owner_id too, so they follow the dog:
+    // anonymised alongside it, never left pointing at an owner who no longer
+    // has this dog. They hold no personal data (food scores only) and are
+    // regenerable, so this is a link severance, not a data loss.
+    const { error: setsError } = await supabaseAdmin
+      .from('dog_recommendation_sets')
+      .update({ owner_id: null })
+      .eq('dog_id', params.dogId)
+      .eq('owner_id', userId);
+
+    if (setsError) {
+      console.error(
+        `Dog ${params.dogId} anonymised but its saved recommendation sets were not:`,
+        setsError
+      );
+    }
+
     return NextResponse.json({ message: 'Dog removed' }, { status: 200 });
   } catch (error) {
     console.error('Delete dog error:', error);

@@ -1,36 +1,32 @@
+import { generateObject } from 'ai';
+import { z } from 'zod';
 import { supabaseAdmin } from './supabase';
 import { findDuplicateFood } from './foodDuplicates';
 import { FoodType } from './types';
-import {
-  BatchRequestItem,
-  createMessageBatch,
-  extractToolInput,
-  getBatchResults,
-  getBatchStatus,
-  MessageBatch,
-} from './batchApiHelper';
 
 /**
  * Weekly food discovery job (Phase 6, architecture doc §11, Tier 1 per §7).
  *
- * Two-phase design, split across two API routes because the Batch API is
- * async (processing can take up to ~24h):
- *   1. submitDiscoveryBatch() — crawl approved domains for candidate product
- *      pages, build a batch manifest, submit it to the Batch API, return the
- *      batch id + manifest.
- *   2. processDiscoveryBatch() — once the batch has ended, fetch results,
- *      dedupe-check + required-field-check each candidate, and insert
- *      directly into foods/food_ingredients (Tier 1 — no review queue, per
- *      architecture doc §7).
+ * ---------------------------------------------------------------------------
+ * PROVIDER: Vercel AI Gateway ONLY. No ANTHROPIC_API_KEY anywhere (owner
+ * decision, 2026-07-26 — the key is never needed in this platform).
  *
- * **Batch tracking (previously flagged gap, now fixed):** submitDiscoveryBatch()
- * persists {batch_id, manifest, status} to `batch_submissions` immediately
- * after the batch is created; processDiscoveryBatch() reads the manifest back
- * from that table instead of requiring the caller to hold onto the submit
- * route's response body. getPendingBatchSubmissions() lets the process route
- * discover and process every outstanding batch on its own (needed because a
- * cron-triggered GET request has no body to carry a batch_id/manifest in at
- * all — the previous design could only be driven manually via POST).
+ * This job was previously TWO-PHASE because it used Anthropic's Message
+ * Batches API, which is async (~24h): submit a batch, then process it later
+ * from a second route. The Gateway has no batch endpoint — probed live across
+ * six candidate paths in both Anthropic and OpenAI batch shapes, GET and POST,
+ * all 404 (including /v1/files, which any OpenAI-style batch flow needs).
+ *
+ * So discovery is now SINGLE-PHASE: crawl, extract and insert in one run,
+ * using ordinary Gateway calls with bounded concurrency. Simpler than the old
+ * design — there is no in-flight batch to track, no manifest to persist and
+ * reload, and no second cron route. The run is still recorded in
+ * `batch_submissions` for auditability.
+ *
+ * Cost control: MAX_PAGES_PER_DOMAIN caps the crawl and MAX_PAGES_PER_RUN caps
+ * the whole run, so a newly-approved domain list can't trigger an unbounded
+ * spend. Each page is one Haiku call.
+ * ---------------------------------------------------------------------------
  *
  * **Flagged deviation from "Haiku vision":** the spec says extraction should
  * use "Haiku vision... against web pages," mirroring Phase 5's OCR. Actually
@@ -50,8 +46,13 @@ import {
  * parts instead of text, same shape as ingredientOcr.ts's Phase 5 call.
  */
 
-const HAIKU_MODEL = process.env.ANTHROPIC_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
+/** Gateway model id ("provider/model"), never a raw dated Anthropic id. */
+const HAIKU_MODEL = process.env.AI_GATEWAY_HAIKU_MODEL || 'anthropic/claude-haiku-4.5';
 const MAX_PAGES_PER_DOMAIN = 5;
+/** Hard cap on model calls per run — the spend control for this job. */
+const MAX_PAGES_PER_RUN = 50;
+/** Parallel Gateway calls. Background job; kept deliberately modest. */
+const EXTRACTION_CONCURRENCY = 4;
 const MAX_PAGE_TEXT_CHARS = 6000;
 const VALID_FOOD_TYPES: FoodType[] = ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other'];
 
@@ -137,305 +138,272 @@ function stripHtmlToText(html: string): string {
   return decoded.replace(/\s+/g, ' ').trim().slice(0, MAX_PAGE_TEXT_CHARS);
 }
 
-const EXTRACTION_TOOL = {
-  name: 'extract_food_product',
-  description:
-    'Extract structured dog food product data from a brand product page, if the page text describes a specific dog food product.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      is_product_page: {
-        type: 'boolean',
-        description: 'True only if this page text actually describes one specific dog food product for sale.',
-      },
-      brand: { type: 'string', description: 'Brand name, or empty string if not determinable.' },
-      name: { type: 'string', description: 'Specific product/variety name, or empty string if not determinable.' },
-      food_type: {
-        type: 'string',
-        enum: ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other', ''],
-        description: 'Best-judgement classification of the food type from the page text, or empty string if truly indeterminable.',
-      },
-      ingredients: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Ingredient list in the order given on the page, most prevalent first. Empty array if no ingredient list is present.',
-      },
-      suitable_age_min_months: { type: ['number', 'null'], description: 'Minimum suitable age in months, or null if not stated.' },
-      suitable_age_max_months: { type: ['number', 'null'], description: 'Maximum suitable age in months, or null if not stated.' },
-      suitable_size_min: { type: 'string', enum: ['toy', 'small', 'medium', 'large', 'giant', ''], description: 'Minimum suitable size category, or empty string if not stated.' },
-      suitable_size_max: { type: 'string', enum: ['toy', 'small', 'medium', 'large', 'giant', ''], description: 'Maximum suitable size category, or empty string if not stated.' },
-      price_per_kg: { type: ['number', 'null'], description: 'Price per kg in GBP if it can be computed/read from the page, or null.' },
-      calories_per_kg: { type: ['number', 'null'], description: 'Calories per kg if stated on the page, or null.' },
-    },
-    required: ['is_product_page', 'brand', 'name', 'food_type', 'ingredients'],
-  },
-};
+/**
+ * Structured-output schema for page extraction. Zod (for the AI SDK's
+ * generateObject) rather than a hand-written Anthropic tool schema — the
+ * Gateway path uses the SDK, not raw tool-use JSON.
+ *
+ * Every optional field is nullable and the model is told to use null rather
+ * than guess: an invented price or calorie figure would silently become
+ * "data" in the foods table.
+ */
+const ExtractionSchema = z.object({
+  is_product_page: z
+    .boolean()
+    .describe('True only if this page text actually describes one specific dog food product for sale.'),
+  brand: z.string().describe('Brand name, or empty string if not determinable.'),
+  name: z.string().describe('Specific product/variety name, or empty string if not determinable.'),
+  food_type: z
+    .enum(['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other', ''])
+    .describe('Best-judgement classification from the page text, or empty string if truly indeterminable.'),
+  ingredients: z
+    .array(z.string())
+    .describe(
+      'Ingredient list in the order given on the page, most prevalent first. Empty array if no ingredient list is present.'
+    ),
+  suitable_age_min_months: z
+    .number()
+    .nullable()
+    .describe('Minimum suitable age in months, or null if not stated.'),
+  suitable_age_max_months: z
+    .number()
+    .nullable()
+    .describe('Maximum suitable age in months, or null if not stated.'),
+  suitable_size_min: z
+    .enum(['toy', 'small', 'medium', 'large', 'giant', ''])
+    .describe('Minimum suitable size category, or empty string if not stated.'),
+  suitable_size_max: z
+    .enum(['toy', 'small', 'medium', 'large', 'giant', ''])
+    .describe('Maximum suitable size category, or empty string if not stated.'),
+  price_per_kg: z
+    .number()
+    .nullable()
+    .describe('Price per kg in GBP if it can be read or computed from the page, or null.'),
+  calories_per_kg: z
+    .number()
+    .nullable()
+    .describe('Calories per kg if stated on the page, or null.'),
+});
 
-interface DiscoveryManifestEntry {
-  custom_id: string;
+type ExtractionResult = z.infer<typeof ExtractionSchema>;
+
+const EXTRACTION_SYSTEM =
+  'You extract structured dog food product data from raw web page text for a decision-support tool. Only report fields you can actually read from the text — never guess or invent a value. If the page does not describe a specific dog food product, set is_product_page to false and leave the other fields empty.';
+
+interface DiscoveryCandidate {
   domain: string;
   url: string;
+  pageText: string;
 }
 
-export interface SubmitDiscoveryResult {
-  batch_id: string;
+export interface RunDiscoveryResult {
+  run_id: string;
   domains_checked: number;
   candidate_pages_found: number;
-  manifest: DiscoveryManifestEntry[];
-}
-
-interface BatchSubmissionRow {
-  id: string;
-  batch_id: string;
-  manifest: DiscoveryManifestEntry[];
-  status: string;
-  created_at: string;
-  completed_at: string | null;
-  result_summary: unknown;
-}
-
-/** Every batch_submissions row not yet marked processed/failed — the process
- * route uses this to discover outstanding batches without needing a caller
- * to supply batch_id/manifest (e.g. a cron-triggered GET with no body). */
-export async function getPendingBatchSubmissions(): Promise<BatchSubmissionRow[]> {
-  const { data, error } = await supabaseAdmin
-    .from('batch_submissions')
-    .select('*')
-    .in('status', ['submitted', 'in_progress']);
-
-  if (error) throw error;
-  return (data ?? []) as BatchSubmissionRow[];
-}
-
-/**
- * Phase 1 of the discovery job: crawl approved domains for candidate pages,
- * fetch + strip each to text, build one Batch API request per page, submit
- * the batch, and return its id + the domain/url manifest (see file header —
- * no tracking table exists yet, so the caller must retain this manifest for
- * the later process step).
- */
-export async function submitDiscoveryBatch(): Promise<SubmitDiscoveryResult> {
-  const domains = await getApprovedDomains();
-  const manifest: DiscoveryManifestEntry[] = [];
-  const requests: BatchRequestItem[] = [];
-
-  let pageIndex = 0;
-  for (const entry of domains) {
-    const urls = await discoverProductPageUrls(entry.domain);
-    for (const url of urls) {
-      let pageText: string;
-      try {
-        const res = await fetch(url, { headers: { 'user-agent': 'DogFoodHelperBot/1.0' } });
-        if (!res.ok) continue;
-        pageText = stripHtmlToText(await res.text());
-        if (pageText.length < 50) continue; // near-empty page, not worth a batch request
-      } catch (err) {
-        console.error(`submitDiscoveryBatch: failed to fetch ${url}`, err);
-        continue;
-      }
-
-      const customId = `req-${pageIndex}`;
-      pageIndex += 1;
-      manifest.push({ custom_id: customId, domain: entry.domain, url });
-      requests.push({
-        custom_id: customId,
-        params: {
-          model: HAIKU_MODEL,
-          max_tokens: 1024,
-          system:
-            'You extract structured dog food product data from raw web page text for a decision-support tool. Only report fields you can actually read from the text — never guess or invent a value. If the page does not describe a specific dog food product, set is_product_page to false and leave other fields empty.',
-          messages: [{ role: 'user', content: `Page URL: ${url}\n\nPage text:\n${pageText}` }],
-          tools: [EXTRACTION_TOOL],
-          tool_choice: { type: 'tool', name: 'extract_food_product' },
-        },
-      });
-    }
-  }
-
-  console.log(
-    `[food-discovery] domains checked: ${domains.length}, candidate pages found: ${manifest.length}`
-  );
-
-  if (requests.length === 0) {
-    return { batch_id: '', domains_checked: domains.length, candidate_pages_found: 0, manifest: [] };
-  }
-
-  const batch = await createMessageBatch(requests);
-  console.log(`[food-discovery] submitted batch ${batch.id} with ${requests.length} requests`);
-
-  const { error: trackingError } = await supabaseAdmin.from('batch_submissions').insert({
-    batch_id: batch.id,
-    manifest,
-    status: 'submitted',
-  });
-  if (trackingError) {
-    // Don't fail the whole submission over a tracking-row insert failure —
-    // the batch has already been created on Anthropic's side and the response
-    // below still carries the manifest for a manual fallback. Log loudly so
-    // it isn't silently lost.
-    console.error(`[food-discovery] failed to persist batch_submissions row for ${batch.id}`, trackingError);
-  }
-
-  return {
-    batch_id: batch.id,
-    domains_checked: domains.length,
-    candidate_pages_found: manifest.length,
-    manifest,
-  };
-}
-
-export interface ProcessDiscoveryResult {
-  batch_status: MessageBatch['processing_status'];
   candidates_seen: number;
+  extraction_failed: number;
   duplicates_skipped: number;
   missing_required_fields_skipped: number;
   not_product_page_skipped: number;
   inserted: number;
   inserted_food_ids: string[];
+  model: string;
+}
+
+/** True when Gateway auth is available (API key locally, OIDC on Vercel). */
+export function hasGatewayAuth(): boolean {
+  return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN);
+}
+
+/** Crawl approved domains and collect candidate pages, capped for cost. */
+async function collectCandidates(): Promise<{
+  candidates: DiscoveryCandidate[];
+  domainsChecked: number;
+}> {
+  const domains = await getApprovedDomains();
+  const candidates: DiscoveryCandidate[] = [];
+
+  for (const entry of domains) {
+    if (candidates.length >= MAX_PAGES_PER_RUN) break;
+    const urls = await discoverProductPageUrls(entry.domain);
+    for (const url of urls) {
+      if (candidates.length >= MAX_PAGES_PER_RUN) break;
+      try {
+        const res = await fetch(url, { headers: { 'user-agent': 'DogFoodHelperBot/1.0' } });
+        if (!res.ok) continue;
+        const pageText = stripHtmlToText(await res.text());
+        if (pageText.length < 50) continue; // near-empty page, not worth a model call
+        candidates.push({ domain: entry.domain, url, pageText });
+      } catch (err) {
+        console.error(`[food-discovery] failed to fetch ${url}`, err);
+      }
+    }
+  }
+
+  return { candidates, domainsChecked: domains.length };
 }
 
 /**
- * Phase 2 of the discovery job: given a batch id, checks whether the batch
- * has ended; if so, fetches results, and for each successfully-extracted
- * product runs duplicate detection (Phase 5's findDuplicateFood, reused as-is)
- * + required-field checks, then inserts directly into foods/food_ingredients
- * (Tier 1 — no review queue, per architecture doc §7). If the batch hasn't
- * ended yet, returns early with batch_status so the caller can retry later.
- *
- * `manifest` is optional — if omitted, it's read back from the
- * `batch_submissions` row created by submitDiscoveryBatch(). Passing it
- * explicitly still works (backward-compatible) but is no longer required.
- * Updates the tracking row's status/result_summary/completed_at as a side
- * effect so getPendingBatchSubmissions() reflects reality afterward.
+ * Insert one extracted product (Tier 1 — auto-merge after duplicate and
+ * required-field checks, no review queue, per architecture doc §7).
+ * Returns the new food id, or null when the candidate was rejected.
  */
-export async function processDiscoveryBatch(
-  batchId: string,
-  manifest?: DiscoveryManifestEntry[]
-): Promise<ProcessDiscoveryResult> {
-  const batch = await getBatchStatus(batchId);
-  const result: ProcessDiscoveryResult = {
-    batch_status: batch.processing_status,
+async function insertExtractedFood(
+  extracted: ExtractionResult,
+  candidate: DiscoveryCandidate,
+  result: RunDiscoveryResult
+): Promise<string | null> {
+  if (extracted.is_product_page !== true) {
+    result.not_product_page_skipped += 1;
+    return null;
+  }
+
+  const brand = extracted.brand.trim();
+  const name = extracted.name.trim();
+  const foodType = extracted.food_type.trim();
+
+  if (!brand || !name || !VALID_FOOD_TYPES.includes(foodType as FoodType)) {
+    result.missing_required_fields_skipped += 1;
+    return null;
+  }
+
+  const duplicate = await findDuplicateFood(brand, name);
+  if (duplicate) {
+    result.duplicates_skipped += 1;
+    return null;
+  }
+
+  const { data: newFood, error: foodError } = await supabaseAdmin
+    .from('foods')
+    .insert({
+      brand,
+      name,
+      food_type: foodType,
+      suitable_age_min_months: extracted.suitable_age_min_months,
+      suitable_age_max_months: extracted.suitable_age_max_months,
+      suitable_size_min: extracted.suitable_size_min || null,
+      suitable_size_max: extracted.suitable_size_max || null,
+      price_per_kg: extracted.price_per_kg,
+      calories_per_kg: extracted.calories_per_kg,
+      source_url: candidate.url,
+      source_domain: candidate.domain,
+      last_verified_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (foodError || !newFood) {
+    console.error('[food-discovery] insert failed', foodError);
+    return null;
+  }
+
+  if (extracted.ingredients.length > 0) {
+    const ingredientRows = extracted.ingredients
+      .map((ingredient_name, index) => ({
+        food_id: newFood.id,
+        ingredient_name: ingredient_name.trim(),
+        ingredient_category: null,
+        position_in_list: index + 1,
+      }))
+      .filter((r) => r.ingredient_name.length > 0);
+
+    if (ingredientRows.length > 0) {
+      const { error: ingredientsError } = await supabaseAdmin
+        .from('food_ingredients')
+        .insert(ingredientRows);
+      if (ingredientsError) {
+        console.error(
+          `[food-discovery] food_ingredients insert failed for ${newFood.id}`,
+          ingredientsError
+        );
+      }
+    }
+  }
+
+  return newFood.id as string;
+}
+
+/**
+ * The whole discovery job in one run: crawl -> extract via the Gateway
+ * (bounded concurrency) -> dedupe/validate -> insert. Replaces the old
+ * submitDiscoveryBatch/processDiscoveryBatch pair, which only existed because
+ * the Batch API was asynchronous.
+ */
+export async function runFoodDiscovery(): Promise<RunDiscoveryResult> {
+  const runId = `gw-${Date.now()}`;
+  const result: RunDiscoveryResult = {
+    run_id: runId,
+    domains_checked: 0,
+    candidate_pages_found: 0,
     candidates_seen: 0,
+    extraction_failed: 0,
     duplicates_skipped: 0,
     missing_required_fields_skipped: 0,
     not_product_page_skipped: 0,
     inserted: 0,
     inserted_food_ids: [],
+    model: HAIKU_MODEL,
   };
 
-  let resolvedManifest = manifest;
-  if (!resolvedManifest) {
-    const { data: row, error } = await supabaseAdmin
-      .from('batch_submissions')
-      .select('manifest')
-      .eq('batch_id', batchId)
-      .maybeSingle();
-    if (error) throw error;
-    if (!row) {
-      throw new Error(
-        `No batch_submissions row found for batch ${batchId} and no manifest was supplied — cannot process`
-      );
-    }
-    resolvedManifest = row.manifest as DiscoveryManifestEntry[];
-  }
+  const { candidates, domainsChecked } = await collectCandidates();
+  result.domains_checked = domainsChecked;
+  result.candidate_pages_found = candidates.length;
 
-  if (batch.processing_status !== 'ended') {
-    await supabaseAdmin
-      .from('batch_submissions')
-      .update({ status: 'in_progress' })
-      .eq('batch_id', batchId);
+  if (candidates.length === 0) {
+    console.log('[food-discovery] no candidate pages found — nothing to extract');
     return result;
   }
 
-  const manifestById = new Map(resolvedManifest.map((m) => [m.custom_id, m]));
-  const lines = await getBatchResults(batch);
-
-  for (const line of lines) {
-    result.candidates_seen += 1;
-    const manifestEntry = manifestById.get(line.custom_id);
-    const input = extractToolInput(line);
-    if (!input) {
-      console.error(`[food-discovery] no tool output for ${line.custom_id} (${manifestEntry?.url})`);
-      continue;
-    }
-
-    if (input.is_product_page !== true) {
-      result.not_product_page_skipped += 1;
-      continue;
-    }
-
-    const brand = typeof input.brand === 'string' ? input.brand.trim() : '';
-    const name = typeof input.name === 'string' ? input.name.trim() : '';
-    const foodType = typeof input.food_type === 'string' ? input.food_type.trim() : '';
-
-    if (!brand || !name || !VALID_FOOD_TYPES.includes(foodType as FoodType)) {
-      result.missing_required_fields_skipped += 1;
-      continue;
-    }
-
-    const duplicate = await findDuplicateFood(brand, name);
-    if (duplicate) {
-      result.duplicates_skipped += 1;
-      continue;
-    }
-
-    const ingredients = Array.isArray(input.ingredients) ? (input.ingredients as string[]) : [];
-    const suitableSizeMin = typeof input.suitable_size_min === 'string' && input.suitable_size_min ? input.suitable_size_min : null;
-    const suitableSizeMax = typeof input.suitable_size_max === 'string' && input.suitable_size_max ? input.suitable_size_max : null;
-
-    const { data: newFood, error: foodError } = await supabaseAdmin
-      .from('foods')
-      .insert({
-        brand,
-        name,
-        food_type: foodType,
-        suitable_age_min_months: input.suitable_age_min_months ?? null,
-        suitable_age_max_months: input.suitable_age_max_months ?? null,
-        suitable_size_min: suitableSizeMin,
-        suitable_size_max: suitableSizeMax,
-        price_per_kg: input.price_per_kg ?? null,
-        calories_per_kg: input.calories_per_kg ?? null,
-        source_url: manifestEntry?.url ?? null,
-        source_domain: manifestEntry?.domain ?? null,
-        last_verified_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (foodError || !newFood) {
-      console.error('[food-discovery] insert failed', foodError);
-      continue;
-    }
-
-    if (ingredients.length > 0) {
-      const ingredientRows = ingredients.map((ingredient_name, index) => ({
-        food_id: newFood.id,
-        ingredient_name,
-        ingredient_category: null,
-        position_in_list: index + 1,
-      }));
-      const { error: ingredientsError } = await supabaseAdmin.from('food_ingredients').insert(ingredientRows);
-      if (ingredientsError) {
-        console.error(`[food-discovery] food_ingredients insert failed for ${newFood.id}`, ingredientsError);
+  // Bounded concurrency: a fixed pool pulling from one cursor. Each candidate
+  // is independent, and findDuplicateFood runs immediately before its own
+  // insert, so two near-simultaneous extractions of the same product still
+  // collapse to one row in practice.
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(EXTRACTION_CONCURRENCY, candidates.length) }, async () => {
+      while (cursor < candidates.length) {
+        const candidate = candidates[cursor++];
+        result.candidates_seen += 1;
+        try {
+          const { object } = await generateObject({
+            model: HAIKU_MODEL,
+            schema: ExtractionSchema,
+            system: EXTRACTION_SYSTEM,
+            prompt: `Page URL: ${candidate.url}\n\nPage text:\n${candidate.pageText}`,
+          });
+          const foodId = await insertExtractedFood(object, candidate, result);
+          if (foodId) {
+            result.inserted += 1;
+            result.inserted_food_ids.push(foodId);
+          }
+        } catch (err) {
+          // Never invent a product from a failed extraction — skip and log.
+          result.extraction_failed += 1;
+          console.error(`[food-discovery] extraction failed for ${candidate.url}`, err);
+        }
       }
-    }
-
-    result.inserted += 1;
-    result.inserted_food_ids.push(newFood.id);
-  }
-
-  console.log(
-    `[food-discovery] processed batch ${batchId}: seen=${result.candidates_seen} duplicates=${result.duplicates_skipped} missing_fields=${result.missing_required_fields_skipped} not_product=${result.not_product_page_skipped} inserted=${result.inserted}`
+    })
   );
 
-  await supabaseAdmin
-    .from('batch_submissions')
-    .update({
-      status: 'processed',
-      completed_at: new Date().toISOString(),
-      result_summary: result,
-    })
-    .eq('batch_id', batchId);
+  console.log(
+    `[food-discovery] run ${runId}: domains=${result.domains_checked} pages=${result.candidate_pages_found} ` +
+      `inserted=${result.inserted} duplicates=${result.duplicates_skipped} ` +
+      `missing_fields=${result.missing_required_fields_skipped} not_product=${result.not_product_page_skipped} ` +
+      `failed=${result.extraction_failed}`
+  );
+
+  // Audit record. Reuses the existing batch_submissions table (no schema
+  // change); `manifest` holds the pages actually considered this run.
+  const { error: trackingError } = await supabaseAdmin.from('batch_submissions').insert({
+    batch_id: runId,
+    manifest: candidates.map((c) => ({ domain: c.domain, url: c.url })),
+    status: 'processed',
+    completed_at: new Date().toISOString(),
+    result_summary: result,
+  });
+  if (trackingError) {
+    console.error(`[food-discovery] failed to persist run record for ${runId}`, trackingError);
+  }
 
   return result;
 }

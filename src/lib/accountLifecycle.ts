@@ -119,6 +119,16 @@ export async function deleteAccount(userId: string): Promise<{ dogs_anonymised: 
     if (anonymiseError) throw anonymiseError;
   }
 
+  // Saved recommendation sets are derived data (food scores, no personal
+  // detail) but they carry owner_id, so they are anonymised on the same rule
+  // as the dogs they belong to. Done before the auth.users delete so nothing
+  // is left referencing a user id that no longer exists.
+  const { error: recSetsError } = await supabaseAdmin
+    .from('dog_recommendation_sets')
+    .update({ owner_id: null })
+    .eq('owner_id', userId);
+  if (recSetsError) throw recSetsError;
+
   // Hard-delete the profile row first (references auth.users.id — deleting
   // the auth user would cascade-orphan or fail depending on FK config, so
   // delete the dependent row explicitly rather than relying on cascade

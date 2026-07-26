@@ -2,8 +2,7 @@ import { supabaseAdmin } from './supabase';
 import { Dog, Food, IngredientOutcomeSignal } from './types';
 import { DerResult, NutritionalFitResult, scoreNutritionalFitForFood } from './nutritionalScoring';
 import { BudgetFitResult, scoreBudgetFit } from './budgetScoring';
-import { RetrievedResearchChunk } from './ragRetrieval';
-import { researchScoring } from './researchScoring';
+import { type ResearchRelevanceResult } from './researchScoring';
 import { scoreCorrelationSignalForFood } from './correlationScoring';
 
 /**
@@ -87,11 +86,18 @@ export interface ScoredFood {
 }
 
 /**
- * Per-food scoring. Async since Phase 4 (research_relevance needs a Claude
- * Sonnet call per food); as of Phase 6 also takes this dog's
- * ingredient_outcome_signals (fetchDogCorrelationSignals — dog-level,
- * fetched once per request and reused across every candidate food, same
- * pattern as der/weights/researchChunks).
+ * Per-food scoring.
+ *
+ * `research` is now a PRECOMPUTED result, looked up from
+ * `research_score_cache` once per request for all candidates
+ * (src/lib/researchScoreCache.ts). It used to be a live Claude Sonnet call
+ * made here, once per candidate food per request — that is gone. This
+ * function makes no model calls at all, so scoring cost no longer scales with
+ * the size of the food catalogue.
+ *
+ * As of Phase 6 it also takes this dog's ingredient_outcome_signals
+ * (fetchDogCorrelationSignals — dog-level, fetched once per request and
+ * reused across every candidate food, same pattern as der/weights).
  */
 export async function scoreFood(
   dog: Dog,
@@ -99,16 +105,12 @@ export async function scoreFood(
   der: DerResult,
   weights: ScoringWeights,
   monthlyBudget: number | null | undefined,
-  researchChunks: RetrievedResearchChunk[],
+  research: ResearchRelevanceResult,
   dogCorrelationSignals: IngredientOutcomeSignal[] = []
 ): Promise<ScoredFood> {
   const nutritional_fit = scoreNutritionalFitForFood(dog, food, der);
   const budget_fit = scoreBudgetFit(food, der, monthlyBudget);
-  const { score: research_relevance, summary: research_summary } = await researchScoring(
-    dog,
-    food,
-    researchChunks
-  );
+  const { score: research_relevance, summary: research_summary } = research;
   const { score: correlation_signal, summary: correlation_summary } = await scoreCorrelationSignalForFood(
     food,
     dogCorrelationSignals
