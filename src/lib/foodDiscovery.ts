@@ -183,12 +183,67 @@ const ExtractionSchema = z.object({
     .number()
     .nullable()
     .describe('Calories per kg if stated on the page, or null.'),
+
+  // Guaranteed analysis / "Analytical Constituents". These feed the
+  // health-condition nutrient-threshold rules in hardFilter.ts, so a scraped
+  // food with all-null nutrients can never satisfy a renal or pancreatitis
+  // threshold rule and is effectively invisible to those filters. UK/EU pages
+  // label this block "Analytical Constituents"; US pages "Guaranteed
+  // Analysis" — both namings are given to the model because the block is
+  // found by its heading.
+  protein_pct: z
+    .number()
+    .nullable()
+    .describe(
+      'Crude protein as a percentage, from the Analytical Constituents / Guaranteed Analysis block. Number only (24.5 for "24.5%"). Null if not printed.'
+    ),
+  fat_pct: z
+    .number()
+    .nullable()
+    .describe(
+      'Crude fat / crude oils and fats as a percentage. Null if not printed. Some pages say "Fat content" — that is this field.'
+    ),
+  fibre_pct: z
+    .number()
+    .nullable()
+    .describe('Crude fibre / crude fibres as a percentage. Null if not printed.'),
+  moisture_pct: z
+    .number()
+    .nullable()
+    .describe('Moisture as a percentage. Null if not printed. Usually stated for wet and raw food.'),
+  ash_pct: z
+    .number()
+    .nullable()
+    .describe(
+      'Crude ash / inorganic matter as a percentage. Null if not printed. Do not confuse with fibre.'
+    ),
+  calcium_pct: z
+    .number()
+    .nullable()
+    .describe('Calcium as a percentage. Null if not printed.'),
+  phosphorus_pct: z
+    .number()
+    .nullable()
+    .describe('Phosphorus as a percentage. Null if not printed.'),
+  sodium_pct: z
+    .number()
+    .nullable()
+    .describe('Sodium as a percentage. Null if not printed.'),
+
+  // A brand's product listing mixes complete meals with treats, chews, dental
+  // sticks and toppers. Without this, every one of them was inserted at the
+  // is_treat default of false and became recommendable as a dog's whole diet.
+  is_treat: z
+    .boolean()
+    .describe(
+      'True if this product is a treat, chew, biscuit, dental stick, topper or supplement rather than a complete meal. False only for a food intended as a complete diet. If the page says "complementary pet food" it is usually a treat; "complete pet food" is a meal.'
+    ),
 });
 
 type ExtractionResult = z.infer<typeof ExtractionSchema>;
 
 const EXTRACTION_SYSTEM =
-  'You extract structured dog food product data from raw web page text for a decision-support tool. Only report fields you can actually read from the text — never guess or invent a value. If the page does not describe a specific dog food product, set is_product_page to false and leave the other fields empty.';
+  'You extract structured dog food product data from raw web page text for a decision-support tool. Only report fields you can actually read from the text — never guess or invent a value. A percentage you cannot find must be null, not a typical value for this kind of food: these figures are used to decide whether a food is safe for a dog with a diagnosed condition, so an invented one is worse than a missing one. If the page does not describe a specific dog food product, set is_product_page to false and leave the other fields empty.';
 
 interface DiscoveryCandidate {
   domain: string;
@@ -285,6 +340,19 @@ async function insertExtractedFood(
       suitable_size_max: extracted.suitable_size_max || null,
       price_per_kg: extracted.price_per_kg,
       calories_per_kg: extracted.calories_per_kg,
+      protein_pct: extracted.protein_pct,
+      fat_pct: extracted.fat_pct,
+      fibre_pct: extracted.fibre_pct,
+      moisture_pct: extracted.moisture_pct,
+      ash_pct: extracted.ash_pct,
+      calcium_pct: extracted.calcium_pct,
+      phosphorus_pct: extracted.phosphorus_pct,
+      sodium_pct: extracted.sodium_pct,
+      is_treat: extracted.is_treat === true,
+      // Was left at the 'unknown' default, which made a scraped row
+      // indistinguishable from a seed stub or a hand-entered one. This IS the
+      // manufacturer-page path, so it should say so.
+      ingredient_source: 'manufacturer_page',
       source_url: candidate.url,
       source_domain: candidate.domain,
       last_verified_at: new Date().toISOString(),

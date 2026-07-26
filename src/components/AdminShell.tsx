@@ -21,6 +21,7 @@ const NAV: { href: string; label: string }[] = [
   { href: '/admin/contraindications', label: 'Contraindications' },
   { href: '/admin/research', label: 'Research' },
   { href: '/admin/review-queue', label: 'Review queue' },
+  { href: '/admin/contributions', label: 'Contributed' },
   { href: '/admin/users', label: 'Users' },
   { href: '/admin/charts', label: 'Chart art' },
 ];

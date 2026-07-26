@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isIngredientCategory, INGREDIENT_CATEGORY_VALUES } from '@/lib/ingredientCategories';
+import { INGREDIENT_CATEGORY_VALUES } from '@/lib/ingredientCategories';
+import {
+  ParsedIngredient,
+  parseIngredientList,
+  insertParsedIngredients,
+} from '@/lib/ingredientPayload';
 
 /**
  * Bulk ingredient import — the write path for populating `food_ingredients`.
@@ -51,92 +56,6 @@ import { isIngredientCategory, INGREDIENT_CATEGORY_VALUES } from '@/lib/ingredie
  */
 
 const MAX_ITEMS = 100;
-const MAX_INGREDIENTS_PER_FOOD = 200;
-const MAX_NAME_LENGTH = 200;
-
-interface ImportIngredient {
-  name: string;
-  category: string | null;
-  inclusion_pct: number | null;
-  note: string | null;
-  sub: ImportIngredient[];
-}
-
-/**
- * Parse one ingredient entry (string, or object possibly carrying
- * `sub_ingredients`). Returns an error message instead of throwing so the
- * caller can report per-item. `depth` guards against a pathological payload.
- */
-function parseIngredient(
-  entry: unknown,
-  depth: number,
-): { value: ImportIngredient } | { error: string } {
-  if (depth > 2) return { error: 'Sub-ingredients may not nest more than one level deep.' };
-
-  if (typeof entry === 'string') {
-    const name = entry.trim();
-    if (!name) return { error: 'Each ingredient needs a non-empty name.' };
-    if (name.length > MAX_NAME_LENGTH) {
-      return { error: `Ingredient name exceeds ${MAX_NAME_LENGTH} characters.` };
-    }
-    return { value: { name, category: null, inclusion_pct: null, note: null, sub: [] } };
-  }
-
-  if (!entry || typeof entry !== 'object') {
-    return { error: 'Each ingredient must be a string or an object.' };
-  }
-
-  const obj = entry as {
-    name?: unknown;
-    category?: unknown;
-    inclusion_pct?: unknown;
-    note?: unknown;
-    sub_ingredients?: unknown;
-  };
-
-  const name = typeof obj.name === 'string' ? obj.name.trim() : '';
-  if (!name) return { error: 'Each ingredient needs a non-empty name.' };
-  if (name.length > MAX_NAME_LENGTH) {
-    return { error: `Ingredient name exceeds ${MAX_NAME_LENGTH} characters.` };
-  }
-
-  let category: string | null = null;
-  if (obj.category != null) {
-    if (!isIngredientCategory(obj.category)) {
-      return {
-        error: `Unknown category "${String(obj.category)}". Allowed: ${INGREDIENT_CATEGORY_VALUES.join(', ')}.`,
-      };
-    }
-    category = obj.category;
-  }
-
-  let inclusionPct: number | null = null;
-  if (obj.inclusion_pct != null) {
-    const value =
-      typeof obj.inclusion_pct === 'number' ? obj.inclusion_pct : Number(obj.inclusion_pct);
-    if (!Number.isFinite(value) || value < 0 || value > 100) {
-      return { error: `inclusion_pct for "${name}" must be a number between 0 and 100.` };
-    }
-    inclusionPct = value;
-  }
-
-  const note =
-    typeof obj.note === 'string' && obj.note.trim() !== '' ? obj.note.trim() : null;
-
-  const sub: ImportIngredient[] = [];
-  if (obj.sub_ingredients != null) {
-    if (!Array.isArray(obj.sub_ingredients)) {
-      return { error: `sub_ingredients for "${name}" must be an array.` };
-    }
-    for (const child of obj.sub_ingredients) {
-      const parsed = parseIngredient(child, depth + 1);
-      if ('error' in parsed) return parsed;
-      sub.push(parsed.value);
-    }
-  }
-
-  return { value: { name, category, inclusion_pct: inclusionPct, note, sub } };
-}
 
 interface ItemResult {
   brand?: string;
@@ -234,38 +153,19 @@ export async function POST(request: NextRequest) {
     };
 
     // --- Parse + validate the ingredient list ---------------------------
-    if (!Array.isArray(item.ingredients)) {
-      result.error = '`ingredients` must be an array.';
+    // Shared parser (src/lib/ingredientPayload.ts). The contributor submission
+    // path validates the same shape with the same code, so nested
+    // sub-ingredient handling cannot diverge between the two write paths — a
+    // divergence there would drop a hidden allergen on one path only.
+    const parseResult = parseIngredientList(item.ingredients);
+    if ('error' in parseResult) {
+      // An empty list lands here too, which is the wanted behaviour: an empty
+      // payload must never be read as "clear this food's rows".
+      result.error = parseResult.error;
       results.push(result);
       continue;
     }
-    if (item.ingredients.length > MAX_INGREDIENTS_PER_FOOD) {
-      result.error = `At most ${MAX_INGREDIENTS_PER_FOOD} ingredients per food.`;
-      results.push(result);
-      continue;
-    }
-
-    const parsed: ImportIngredient[] = [];
-    let invalid: string | null = null;
-    for (const entry of item.ingredients) {
-      const result = parseIngredient(entry, 1);
-      if ('error' in result) {
-        invalid = result.error;
-        break;
-      }
-      parsed.push(result.value);
-    }
-
-    if (invalid) {
-      result.error = invalid;
-      results.push(result);
-      continue;
-    }
-    if (parsed.length === 0) {
-      result.error = 'Empty ingredient list — refusing to clear existing rows.';
-      results.push(result);
-      continue;
-    }
+    const parsed: ParsedIngredient[] = parseResult.value;
 
     // --- Resolve the food ------------------------------------------------
     let foodId: string | null = null;
@@ -316,66 +216,13 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Insert top-level ingredients first so their ids can parent the
-    // sub-ingredients of any compound entry.
-    const topRows = parsed.map((ingredient, index) => ({
-      food_id: foodId,
-      ingredient_name: ingredient.name,
-      ingredient_category: ingredient.category,
-      inclusion_pct: ingredient.inclusion_pct,
-      note: ingredient.note,
-      parent_ingredient_id: null,
-      position_in_list: index + 1,
-    }));
-
-    const { data: insertedTop, error: insertError } = await supabaseAdmin
-      .from('food_ingredients')
-      .insert(topRows)
-      .select('id, position_in_list');
-
-    if (insertError) {
-      result.error = insertError.message;
+    const { written, error: writeError } = await insertParsedIngredients(foodId, parsed);
+    if (writeError) {
+      result.error = writeError;
+      result.ingredients_written = written;
+      totalWritten += written;
       results.push(result);
       continue;
-    }
-
-    let written = insertedTop?.length ?? 0;
-
-    // Map each inserted parent back to its source entry by position, then
-    // insert that entry's sub-ingredients numbered 1..m within the parent.
-    const idByPosition = new Map<number, string>();
-    for (const row of (insertedTop ?? []) as { id: string; position_in_list: number }[]) {
-      idByPosition.set(row.position_in_list, row.id);
-    }
-
-    const subRows: Record<string, unknown>[] = [];
-    parsed.forEach((ingredient, index) => {
-      if (ingredient.sub.length === 0) return;
-      const parentId = idByPosition.get(index + 1);
-      if (!parentId) return;
-      ingredient.sub.forEach((child, childIndex) => {
-        subRows.push({
-          food_id: foodId,
-          ingredient_name: child.name,
-          ingredient_category: child.category,
-          inclusion_pct: child.inclusion_pct,
-          note: child.note,
-          parent_ingredient_id: parentId,
-          position_in_list: childIndex + 1,
-        });
-      });
-    });
-
-    if (subRows.length > 0) {
-      const { error: subError } = await supabaseAdmin.from('food_ingredients').insert(subRows);
-      if (subError) {
-        result.error = `Top-level ingredients written, but sub-ingredients failed: ${subError.message}`;
-        result.ingredients_written = written;
-        totalWritten += written;
-        results.push(result);
-        continue;
-      }
-      written += subRows.length;
     }
 
     result.ingredients_written = written;

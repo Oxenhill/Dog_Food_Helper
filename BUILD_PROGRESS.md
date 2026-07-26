@@ -1,6 +1,105 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Rebrand to Bowl (2026-07-26, latest)
+## Contributor food submissions + fuller discovery extraction (2026-07-26, latest)
+
+Owner ask: friends with their own Claude subscriptions want to help populate the food
+catalogue, without being given access to the Supabase project. **Uncommitted.** One migration
+applied live (additive). Every claim below was verified by this session against the real
+database and a running dev server.
+
+### The constraint that shaped the design
+A chat session **cannot POST**. It can read a page and print JSON; it cannot call an API. So
+for non-technical contributors a copy-paste hop is unavoidable, and the design collapses to
+one link: `/contribute?key=<token>` carries the prompt behind a Copy button *and* the paste
+box, so there is no separate document to drift out of step with the validator.
+
+Owner decisions taken this session: **one shared token** for all contributors (not per-person
+links or accounts — they are non-technical, and the token is the boundary either way), and the
+job is **new foods**, not backfilling ingredients on the 279 already held.
+
+### Contributions stage; they never write to `foods`
+`contributed_foods` (new table, RLS on, **zero policies** — the submit and review paths both
+go through the service-role client behind their own gates). Approval in `/admin/contributions`
+is the only route into the catalogue, and it sets `ingredient_source = 'contributor'` so an
+approved contribution stays distinguishable from a scrape.
+
+This is deliberately the least-trusted of the three write paths, and not because contributors
+are untrustworthy. Pet-food pages commonly render ingredients via JS, a plain fetch returns a
+shell, and an assistant asked to transcribe a list it could not load will often produce a
+plausible one from general knowledge. That failure is silent and it lands in the table the
+allergy filter reads.
+
+### The mitigation that does the real work: `source_excerpt`
+Every food must carry the ingredient text **verbatim**. The server then checks that the parsed
+ingredient names actually appear in it (≥80%, tolerating "&"/"and" and split-off percentages).
+**Proven:** a submission whose list was fabricated against a real maize/wheat excerpt was
+rejected at 0% support, naming the five ingredients that did not appear — while a correct
+submission from the same paste was accepted. Prose instructions alone could not have caught
+that. It also makes review a two-second diff: the admin screen shows the parsed list beside
+the excerpt with unsupported names in red.
+
+### Verified end to end
+| check | result |
+|---|---|
+| Messy paste (prose + fence + trailing chat) | parsed; 2 accepted, 1 rejected |
+| Fabricated ingredient list | **rejected**, 0% excerpt support |
+| Nested `Meat and Animal Derivatives (Chicken 4%)` | stored as a child row; found by an `ilike '%chicken%'` query — the hidden-allergen case works |
+| Merge SQL against the real staged payload | 1 food, 4 top-level + 1 nested ingredient, `ingredient_source='contributor'` |
+| Wrong token / no token (page and API) | 404, and the prompt does not render |
+| Duplicate resubmission | `awaiting_review`, unique partial index held |
+| Unparseable paste | plain-English error, contributor's text preserved |
+| Full UI flow in the browser | accepted/rejected receipt rendered, no console errors |
+| `tsc` · `npm run build` | clean · compiled successfully |
+| Supabase security advisors | no new finding; `contributed_foods` INFO "RLS enabled, no policy" is the intended fail-closed state, matching six existing tables |
+
+**All test data was removed** — back to 279 foods, 0 staged rows, 847 ingredient rows.
+
+### Discovery cron: it was throwing away most of the label (owner-spotted)
+`ExtractionSchema` omitted **every** nutrient column, so a scraped food could never satisfy a
+health-condition nutrient-threshold rule. Added protein/fat/fibre/moisture/ash/calcium/
+phosphorus/sodium, naming both the UK/EU "Analytical Constituents" and US "Guaranteed
+Analysis" headings, all nullable and never-guess. Two further bugs in the same insert:
+
+1. **`is_treat` was never set**, so every chew, dental stick and topper scraped off a brand
+   listing was inserted as `false` and became recommendable as a dog's whole diet. Now
+   extracted, with the "complementary" vs "complete pet food" tell in the field description.
+2. **`ingredient_source` was left at its `'unknown'` default** on the one path that is
+   definitively a manufacturer page.
+
+Related finding, **not** fixed because its cause is unknown: all 279 existing foods have
+`ingredient_source = 'unknown'`, i.e. nothing has ever written that column, so the catalogue
+currently carries no provenance at all. 272 of them do have `protein_pct`, so the nutrients
+came from somewhere other than this cron.
+
+### Shared ingredient parser
+`src/lib/ingredientPayload.ts` — extracted from the admin bulk-import route so it and the
+contributor path validate the same shape with the same code. Not mere de-duplication: both the
+allergy filter and the correlation engine match `ingredient_name` across nested rows, so a path
+that mishandled `sub_ingredients` would drop a hidden allergen on one path only. The import
+route now calls it and is unchanged in behaviour.
+
+### Owner review
+- **Set `CONTRIBUTOR_TOKEN` in Vercel, then deploy.** Unset means closed: `/contribute` and
+  the write path both 404. Nothing is live until you do this. A local test value was added to
+  the gitignored `.env`; replace it with a real one before handing links out.
+- **The link is `https://<host>/contribute?key=<token>`.** Treat it as semi-public: friends
+  will forward it and it may land in a chat transcript. Accepted, because a leaked link can
+  only queue review work — it reads no user, dog or research data and modifies nothing that
+  exists. Rotate by changing the variable; old links die immediately.
+- **The approve handler is the one path not exercised**, because it needs an admin session
+  (which needs your password). Its SQL was verified directly; exercise the handler itself by
+  clicking Approve on the first real submission.
+- **`/api/contribute/known` is intentionally unauthenticated** — it is fetched by contributors'
+  chat sessions, and putting the token in that URL would send it through a third-party fetcher
+  into transcripts. It exposes brand + product names of publicly sold dog food and nothing
+  else. Say if you would rather it were gated anyway.
+- **Batch caps are 25 foods per submission and 120 per hour** across all contributors. Raise
+  them in `src/lib/contributedFoods.ts` if review keeps up.
+- `npm run lint` has never worked in this project (no ESLint config; `next lint` drops into
+  interactive setup). There is no `test` or `format:check` script either. `tsc` + `build` are
+  the real gate.
+
+## Rebrand to Bowl (2026-07-26)
 
 Owner decision: the product is **Bowl**, tagline **"Every dog is different. Every choice
 matters."**, attributed **by Dog Smart**. Logo supplied by the owner in `Logo/`.
