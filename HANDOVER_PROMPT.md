@@ -104,39 +104,77 @@ credits *every ingredient in that food* with the logged trend, then computes
 `(better − worse) / total` per ingredient. Every ingredient in a 30-item list gets identical
 credit, so a food with a long list produces 30 equally-weighted signals that mean very little.
 
-**Why a food change is better evidence.** A switch is a natural experiment. If a dog improves
-after moving from food A to food B:
-- ingredients in **both** A and B cannot explain the change — they are controlled for;
-- ingredients **only in A** (removed) are candidates for what was causing the problem;
-- ingredients **only in B** (added) are candidates for what helped.
+**Why a food change is better evidence.** A switch is a natural experiment, and the ingredient
+sets either side of it carry different meaning depending on **whether the outcome actually
+moved**. This is the part to get right — an earlier draft of this plan said "shared ingredients
+are controlled for" as a blanket rule, and that is **wrong**. It is only true when the outcome
+changed. The owner corrected it, and the corrected model is:
 
-That set difference is a far stronger signal than presence-alone, and it is computable from
-data you will have once Priority 1 lands. It also directly answers the owner's question, which
-is diagnostic ("what in this food disagrees with my dog"), not merely associative.
+| Before switch | After switch | What the sets mean |
+|---|---|---|
+| Poor | Improved | **Removed** = suspects for the problem. **Added** = candidates for what helped. Retained set is controlled for. |
+| Good | Worsened | **Added** = suspects. **Removed** = possibly protective. Retained set is controlled for. |
+| **Poor** | **Still poor** | **The differing set is EXONERATED** — it changed and nothing happened. The **RETAINED** ingredients are the prime suspects. The next recommendation should try to break that set. |
+| Good | Still good | Weak positive evidence only: the retained set is at least tolerated. |
+
+Row 3 is the diagnostically important one and it was missing. It is also the case that matters
+most in practice — an owner switches food *because* the dog is unwell, and it doesn't work.
+
+**This compounds across failed switches, and that is the real power.** After several
+unsuccessful foods, the suspect set is:
+
+> ( intersection of ingredients across every food the dog did POORLY on )
+> minus ( any ingredient present in a food the dog did WELL on )
+
+Each additional failed switch narrows it. That is elimination-diet reasoning derived from
+logged data rather than guesswork, and it directly answers the owner's question — *what in this
+food isn't agreeing with your dog*.
+
+**Three things that must be built in, not bolted on afterwards:**
+
+1. **Early results will be useless and must say so.** Cheap foods share the same generic
+   staples ("cereals", "meat and animal derivatives", "beet pulp"), so after one failed switch
+   the intersection may still be 15+ ingredients. Report "not narrowed enough yet" with the
+   current set size rather than presenting a long list as a finding. Only surface a suspect set
+   once it is genuinely small and backed by more than one failed switch.
+2. **This must NOT become a hard filter.** Suspect ingredients belong in the **inference/scoring**
+   layer — prefer candidate foods that break the retained set — never in `hardFilter.ts`. The
+   deterministic layer is reserved for vet-gated facts (diagnosed allergies, approved
+   contraindications). A logged suspicion is a hypothesis, not a diagnosis, and blending the two
+   would breach the safety separation that CLAUDE.md treats as non-negotiable.
+3. **It edges toward diagnosing food intolerance, which is a veterinary matter.** Present these
+   as "ingredients worth discussing with your vet", never "your dog is intolerant to X". A real
+   elimination diet must be vet-supervised. Same confidence-honesty rule applied everywhere else.
 
 **Build:**
 1. Detect switch points from `dog_food_events` (a main_food event ending and another starting).
-2. For each switch, compare the outcome window **before** vs **after** (respecting
-   `metric_minimum_lag_days` per metric — digestive ~10d, energy/weight ~21d, coat/skin ~56d;
-   `src/lib/lagWindow.ts` already holds this) and skip logs inside `in_transition_until`.
-3. Compute added / removed / retained ingredient sets between the two foods, including nested
-   sub-ingredients (both `hardFilter` and the current engine already match across all rows, so
-   a compound ingredient's contents are visible).
-4. Write signals **attributed to the added or removed set**, not to every ingredient present.
-5. **Treats are a confounder.** For a dog with treat logging ON, treat ingredients given in
-   the window must be included in the candidate set — a change attributed to a food switch may
-   actually be a new treat. For a dog with logging OFF, say so in the confidence output rather
-   than silently assuming no treats were given.
+2. For each switch, classify the outcome per metric as improved / worsened / unchanged by
+   comparing the window **before** vs **after**, respecting `metric_minimum_lag_days` (digestive
+   ~10d, energy/weight ~21d, coat/skin ~56d — `src/lib/lagWindow.ts` already holds these) and
+   skipping logs inside `in_transition_until`.
+3. Compute **added / removed / retained** ingredient sets between the two foods, including
+   nested sub-ingredients (both `hardFilter` and the current engine already match across all
+   rows, so a compound ingredient's contents are visible).
+4. Attribute the signal per the table above — which set is implicated depends on the
+   before/after classification, **not** on presence alone.
+5. Maintain a per-dog rolling **suspect set** from the multi-switch intersection rule, with its
+   current size exposed so the UI can be honest about how far it has narrowed.
+6. Feed the suspect set into recommendation **scoring** (a "breaks the suspect set" preference),
+   not into exclusion.
+7. **Treats are a confounder.** With treat logging ON, treat ingredients given in the window
+   join the candidate set — an outcome attributed to a food switch may actually be a new treat.
+   With it OFF, state that in the confidence output rather than silently assuming none.
 
-**Keep the existing honesty discipline.** The current `correlation_strength` is documented as a
-directional heuristic, not a real coefficient, with sample-size confidence flags
-(`low_sample` 3–5, `preliminary` 6–15, `established` 16+) and nothing written below 3. Preserve
-that. A switch-based signal from a single switch is **one observation**, however clean — it must
-not be presented as established.
+**Keep the existing honesty discipline.** `correlation_strength` is documented as a directional
+heuristic, not a real coefficient, with sample-size confidence flags (`low_sample` 3–5,
+`preliminary` 6–15, `established` 16+) and nothing written below 3. Preserve it. A single switch
+is **one observation** however clean, and "poor → still poor" once tells you very little.
 
-**Acceptance:** a dog that switches food and improves produces signals naming the ingredients
-that actually changed, with a sample size reflecting the number of switches, and a stated
-caveat when treat logging was off.
+**Acceptance:** a dog that improves after a switch produces signals naming the ingredients that
+actually changed; a dog that stays poor across two or more switches produces a *narrowing*
+retained-ingredient suspect set with its size stated; suspect ingredients influence
+recommendation ranking but never exclude a food; and the copy points at a vet conversation
+rather than asserting an intolerance.
 
 ---
 
