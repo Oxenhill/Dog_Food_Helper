@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
 import { Dog } from '@/lib/types';
 import type { FoodFullIngredient } from '@/lib/foodFull';
+import CurrentFoodCard from '@/components/CurrentFoodCard';
+import FoodInsightsCard from '@/components/FoodInsightsCard';
 
 interface Recommendation {
   food_id: string;
@@ -219,6 +221,14 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
             <p className="muted mt-1 text-[13px]">Manage restrictions and conditions</p>
           </Link>
         </div>
+
+        {/* Food attribution — every log entry is tied to the food event open
+            on its date, so this is what makes the correlation engine possible
+            at all. Placed above recommendations because it is the input to
+            them, not a detail. */}
+        <CurrentFoodCard dogId={params.dogId} />
+
+        <FoodInsightsCard dogId={params.dogId} />
 
         <div className="card card-pad mt-6">
           <div className="flex items-center justify-between gap-3">

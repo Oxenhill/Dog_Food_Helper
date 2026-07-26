@@ -18,12 +18,20 @@ export async function getActiveFoodEvent(
   dogId: string,
   logDate: string
 ): Promise<DogFoodEvent | null> {
+  // `logDate` is a calendar date ('2026-07-26') but `started_at` is a
+  // timestamptz. Comparing them directly makes the date mean midnight, so an
+  // event started at 14:00 today would NOT be found by a log written today —
+  // i.e. setting your dog's food and then logging the same day attributed
+  // nothing. The comparison is against the END of the log date instead, so any
+  // event that had started by the close of that day counts.
+  const endOfLogDate = `${logDate}T23:59:59.999Z`;
+
   const { data, error } = await supabaseAdmin
     .from('dog_food_events')
     .select('*')
     .eq('dog_id', dogId)
     .eq('event_type', 'main_food')
-    .lte('started_at', logDate)
+    .lte('started_at', endOfLogDate)
     .or(`ended_at.is.null,ended_at.gte.${logDate}`)
     .order('started_at', { ascending: false })
     .limit(1)

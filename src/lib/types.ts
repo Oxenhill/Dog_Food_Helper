@@ -25,6 +25,11 @@ export interface Dog {
   current_food_id?: string;
   current_food_freetext?: string;
   monthly_food_budget?: number;
+  // Treat logging is opt-in per dog and defaults to false — a half-kept treat
+  // log is worse than none, because partial data still produces
+  // confident-looking correlations. See src/lib/treatLoggingPrompt.ts.
+  treat_logging_enabled?: boolean;
+  treat_logging_prompt_dismissed_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -333,6 +338,73 @@ export interface IngredientOutcomeSignal {
   // see CONFIDENCE_THRESHOLDS in src/lib/correlationEngine.ts. Rows with
   // fewer than 3 eligible logs are never written at all.
   confidence_flag?: string | null;
+  // Which kind of evidence produced this signal. 'food_switch' is attributed
+  // to the ingredient difference across a food change — a natural experiment,
+  // and the diagnostically useful kind. 'single_food_period' credits every
+  // ingredient in one food equally, which is weak by construction.
+  evidence_basis?: EvidenceBasis;
+}
+
+export type EvidenceBasis = 'food_switch' | 'single_food_period';
+
+// How an outcome metric moved across a food switch.
+export type SwitchOutcome = 'improved' | 'worsened' | 'unchanged' | 'insufficient_data';
+
+// The dog's absolute state for that metric BEFORE the switch, read from the
+// most recent baseline/recalibration reading. 'unknown' when no absolute
+// reading exists — which is a real and common case, and must not be guessed:
+// it is what distinguishes "poor -> still poor" (retained ingredients are the
+// suspects) from "good -> still good" (weak positive only).
+export type BeforeState = 'concerning' | 'acceptable' | 'unknown';
+
+export interface SwitchMetricOutcome {
+  outcome: SwitchOutcome;
+  before_state: BeforeState;
+  /** Post-switch logs that were eligible (past the lag window, past transition). */
+  sample_size: number;
+  /** (better - worse) / sample_size, in [-1, 1]. */
+  net: number;
+  lag_days: number;
+}
+
+export interface DogFoodSwitchAnalysis {
+  id: string;
+  dog_id: string;
+  from_event_id?: string | null;
+  to_event_id: string;
+  from_food_id?: string | null;
+  to_food_id?: string | null;
+  switched_at: string;
+  added_ingredients: string[];
+  removed_ingredients: string[];
+  retained_ingredients: string[];
+  // False when either side of the switch has no recorded ingredient list. Three
+  // empty arrays would otherwise be indistinguishable from "nothing changed",
+  // and an unknown food would look like one containing nothing.
+  ingredient_sets_known: boolean;
+  metric_outcomes: Record<string, SwitchMetricOutcome>;
+  treat_logging_enabled: boolean;
+  confounding_treat_ingredients: string[];
+  computed_at: string;
+}
+
+export type SuspectReason =
+  | 'retained_across_failed_switches'
+  | 'removed_on_improvement'
+  | 'added_on_worsening';
+
+/**
+ * An ingredient worth DISCUSSING WITH A VET — never a diagnosis of
+ * intolerance, and never a hard filter. See src/lib/switchAnalysis.ts.
+ */
+export interface DogIngredientSuspect {
+  id: string;
+  dog_id: string;
+  ingredient_name: string;
+  poor_food_count: number;
+  implicated_metrics: string[];
+  suspect_reason: SuspectReason;
+  computed_at: string;
 }
 
 // Matches `account_inactivity_policy` in Part A exactly.

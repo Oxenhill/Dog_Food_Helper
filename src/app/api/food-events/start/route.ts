@@ -2,25 +2,23 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { FoodEventType } from '@/lib/types';
-
-// Short digestive-settling default used for in_transition_until, matching the
-// metric_minimum_lag_days value seeded for the digestive metrics (stool_score/
-// stool_odor/gas_frequency/gas_odor = 10 days). Part B's own example text used
-// "+9 days" loosely; 10 was chosen here to stay consistent with the seeded
-// reference table rather than introduce a second, slightly different number.
-// Flagged in BUILD_PROGRESS.md as a resolved assumption, not a silent guess.
-const DEFAULT_TRANSITION_DAYS = 10;
+import { DEFAULT_TRANSITION_DAYS, logTreatEvent, startMainFoodEvent } from '@/lib/foodEvents';
 
 /**
- * startFoodEvent (Part B)
+ * POST /api/food-events/start (Part B)
  *
- * Input: dog_id, food reference (food_or_treat_id or food_or_treat_freetext),
- * event_type, started_at. Computes in_transition_until server-side — the
- * client cannot set this directly.
+ * Two distinct jobs behind one documented endpoint, keyed on event_type:
  *
- * If event_type is 'main_food', also updates the dog's current_food_id /
- * current_food_freetext, since current_food is the anchor used by baseline
- * logic and the lag-window calculation (architecture doc §4).
+ *   main_food — "what is your dog eating now?" and "I've changed foods" are
+ *     the same operation. Starting a main food CLOSES whatever was open, in
+ *     one call, so the client cannot half-complete a switch by making the two
+ *     calls separately and having the second fail.
+ *
+ *   treat — a discrete occasion on a date, not a period. No transition, no
+ *     end, and it does not change what the dog is being fed.
+ *
+ * `in_transition_until` is always computed server-side from `transition_days`;
+ * the client never sets the timestamp directly.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -37,12 +35,14 @@ export async function POST(request: NextRequest) {
       food_or_treat_freetext,
       event_type,
       started_at,
+      transition_days,
     }: {
       dog_id: string;
       food_or_treat_id?: string;
       food_or_treat_freetext?: string;
       event_type: FoodEventType;
       started_at?: string;
+      transition_days?: number;
     } = body;
 
     if (!dog_id || !event_type) {
@@ -69,48 +69,69 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Dog not found' }, { status: 404 });
     }
 
-    const startedAtDate = started_at ? new Date(started_at) : new Date();
-    const inTransitionUntil = new Date(startedAtDate);
-    inTransitionUntil.setDate(inTransitionUntil.getDate() + DEFAULT_TRANSITION_DAYS);
+    // Validate the catalogue reference before writing. The FK would catch a
+    // nonexistent id, but a 404 with a clear message beats a constraint error,
+    // and only a lookup can enforce the meal/treat separation.
+    if (food_or_treat_id) {
+      const { data: food, error: foodError } = await supabaseAdmin
+        .from('foods')
+        .select('id, brand, name, is_treat')
+        .eq('id', food_or_treat_id)
+        .maybeSingle();
 
-    const { data: event, error: eventError } = await supabaseAdmin
-      .from('dog_food_events')
-      .insert({
-        dog_id,
-        food_or_treat_id: food_or_treat_id ?? null,
-        food_or_treat_freetext: food_or_treat_freetext ?? null,
-        event_type,
-        started_at: startedAtDate.toISOString(),
-        in_transition_until: inTransitionUntil.toISOString(),
-      })
-      .select()
-      .single();
-
-    if (eventError) {
-      return NextResponse.json({ error: eventError.message }, { status: 500 });
+      if (foodError) {
+        return NextResponse.json({ error: foodError.message }, { status: 500 });
+      }
+      if (!food) {
+        return NextResponse.json({ error: 'Food not found' }, { status: 404 });
+      }
+      // A chew must never be recorded as dinner — the same separation
+      // hardFilter.ts applies when building the recommendation candidate set.
+      if (event_type === 'main_food' && food.is_treat) {
+        return NextResponse.json(
+          {
+            error: `${food.brand} ${food.name} is recorded as a treat, so it can't be set as a main food. Log it as a treat instead.`,
+          },
+          { status: 400 }
+        );
+      }
     }
 
-    if (event_type === 'main_food') {
-      await supabaseAdmin
-        .from('dogs')
-        .update({
-          current_food_id: food_or_treat_id ?? null,
-          current_food_freetext: food_or_treat_freetext ?? null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', dog_id);
+    if (event_type === 'treat') {
+      const event = await logTreatEvent({
+        dogId: dog_id,
+        foodId: food_or_treat_id ?? null,
+        freetext: food_or_treat_freetext ?? null,
+        occurredAt: started_at ?? null,
+      });
+      return NextResponse.json(
+        { message: 'Treat recorded', event_id: event.id, food_event: event },
+        { status: 201 }
+      );
     }
+
+    const { event, previousEvent } = await startMainFoodEvent({
+      dogId: dog_id,
+      foodId: food_or_treat_id ?? null,
+      freetext: food_or_treat_freetext ?? null,
+      startedAt: started_at ?? null,
+      transitionDays: transition_days ?? DEFAULT_TRANSITION_DAYS,
+    });
 
     return NextResponse.json(
       {
-        message: 'Food event started',
+        message: previousEvent ? 'Food change recorded' : 'Current food recorded',
         event_id: event.id,
         food_event: event,
+        // Non-null means this was a switch, and the analysis engine now has a
+        // switch point to work with.
+        previous_event: previousEvent,
       },
       { status: 201 }
     );
   } catch (error) {
     console.error('Start food event error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

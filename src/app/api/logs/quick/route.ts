@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     const { data: dog, error: dogError } = await supabaseAdmin
       .from('dogs')
-      .select('id, current_food_id')
+      .select('id')
       .eq('id', dog_id)
       .eq('owner_id', userId)
       .single();
@@ -78,7 +78,12 @@ export async function POST(request: NextRequest) {
           raw_value: null,
           trend: e.trend,
           within_expected_variability_window: withinExpectedVariabilityWindow,
-          food_id_active: foodIdActive ?? dog.current_food_id ?? null,
+          // Strictly the food event that was open ON THE LOG DATE — never a
+          // fallback to `dogs.current_food_id`, which describes what the dog
+          // is eating NOW. Backfilling "now" onto a past log would attribute
+          // that log's outcome to a food the dog may not have been eating,
+          // which is worse than leaving it unattributed.
+          food_id_active: foodIdActive,
           notes: e.notes ?? null,
         };
       })

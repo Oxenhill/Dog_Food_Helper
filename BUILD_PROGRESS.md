@@ -1,5 +1,115 @@
 # Dog Food Platform — Build Progress
 
+## Food attribution, treat logging, and the switch-based correlation engine (2026-07-26, latest)
+
+Priorities 1–3 of the forward build plan. **Uncommitted — awaiting owner go to deploy.**
+Two migrations were applied live (purely additive). No subagents; every claim below was
+verified by this session against the real database.
+
+### The blocker is gone: the correlation engine now produces results
+Before this session `dog_food_events` had never had a row, no dog had `current_food_id`, so
+every `dog_log_entries.food_id_active` was null and `computeCorrelationsForDog()` — which
+filters on `food_id_active is not null` — matched nothing. Built, tested, structurally inert.
+
+**Proven end-to-end on a throwaway account against the live catalogue.** Four real foods, a
+concerning baseline (Bristol Type 6), logs across four food periods:
+
+| after | switches | suspect set | narrowed? |
+|---|---|---|---|
+| 2 failed foods | 1 | **23 ingredients** | **no** — reported as "not narrowed enough yet" |
+| 3 failed foods | 2 | **2** (`rice`, `yeast`) | yes |
+| + 1 food the dog did WELL on | 3 | **1** (`yeast`) | yes — `rice` exonerated |
+
+The 23 and the 2 match an independently-computed SQL intersection of those foods' ingredient
+lists exactly. Priority 1's acceptance query returned four foods and **zero unattributed logs**.
+
+### 1. Food attribution (Priority 1)
+- **`src/lib/foodEvents.ts`** — the single write path. `startMainFoodEvent()` closes the open
+  event and opens the new one **in one call**, so a client cannot half-complete a switch; on
+  insert failure it reopens the previous event rather than stranding the dog with no food.
+  Switching to the same food is a no-op, not a spurious switch point.
+- **The database enforces the invariant**, not just the route: unique partial index
+  `dog_food_events_one_open_main_food`. Verified by a direct SQL insert — rejected.
+- **`food_or_treat_id` had no foreign key at all.** Nothing stopped an event pointing at a
+  nonexistent food, and PostgREST couldn't embed it. Added `ON DELETE SET NULL` — retiring a
+  catalogue food must never erase a dog's feeding history.
+- **Two date bugs fixed.** `getActiveFoodEvent()` compared a date string against a
+  timestamptz, so an event started at 14:00 today was invisible to a log written today —
+  setting a food and logging the same day attributed nothing. And `food_id_active` no longer
+  falls back to `dogs.current_food_id`: that describes **now**, and backfilling it onto a past
+  log attributes that log to a food the dog may not have been eating.
+- `/api/foods` (owner-facing catalogue search), `GET /api/food-events`, `FoodPicker`,
+  `CurrentFoodCard`. Dog creation opens an event immediately. **Current food is no longer
+  editable on the edit page** — changing it is a dated event, not a profile field, or the
+  pointer drifts out of step with the event history.
+
+### 2. Treat logging (Priority 2)
+Occasion-based exactly as specified: `event_type='treat'`, `started_at` is the occasion,
+`ended_at` and `in_transition_until` null. Verified live. Opt-in per dog
+(`dogs.treat_logging_enabled`, default false — a half-kept treat log is worse than none).
+The conditional nudge fired only on a genuine worsening trend, and stopped permanently once
+answered. **A chew can never be set as a main food** (verified: clear 400).
+
+### 3. The engine reworked around food *changes* (Priority 3)
+**`src/lib/switchAnalysis.ts`** implements the corrected model. The critical part —
+which set is implicated depends on whether the outcome actually **moved**:
+
+- improved → **removed** are suspects; unchanged-while-**concerning** → the differing set is
+  **exonerated** and the **retained** set are the prime suspects.
+- Distinguishing "poor → still poor" from "good → still good" needs the dog's **absolute**
+  state, which trends cannot give (they are baseline-relative). It is read from `raw_value` on
+  baseline/recalibration rows. **When no absolute reading exists the answer is `unknown` and
+  neither conclusion is drawn** — guessing there would invert the result.
+- `ingredient_sets_known` is stored explicitly: three empty arrays would otherwise be
+  indistinguishable from "nothing changed", and a food whose ingredients we don't know would
+  look like a food containing nothing.
+- Signals now carry `evidence_basis`: `food_switch` (strong) vs `single_food_period` (the old
+  weak method, kept for dogs that have never switched). The scorer **prefers switch-derived**
+  rows so 30 weak signals can't drown one good one.
+- **Suspects rank, never exclude** — verified: 3 yeast-containing foods stayed in the 272
+  candidates and none reached the top 10. Copy points at a vet throughout.
+
+### Two real bugs caught by verification, both invisible to `tsc` and `build`
+1. **A clean finding was buried by a single switch.** After the dog improved on a new food,
+   the ~25 ingredients that switch dropped were each recorded as a suspect, pushing the set
+   from 2 to 26 and losing its "narrowed" status. The "too broad to mean anything" rule now
+   gates a single switch's differing set as well as the intersection.
+2. **I was testing stale code for two rounds.** `pkill` didn't kill the old server, the new
+   one hit `EADDRINUSE`, and the "unchanged" result looked like a logic failure. Caught only
+   because the persisted rows all shared one `computed_at`. Restarted on a fresh port by PID.
+   *Check the server actually restarted before believing a null result.*
+
+### Also fixed while in the area
+**`FoodFull.ingredients` is a tree, and two call sites walked only the top level.** Added
+`flattenIngredientNames()`. This mattered twice: correlation matching would have missed a
+beef-flavoured food's nested chicken — the exact case the ingredient detail exists to catch —
+and the research cache's food fingerprint wouldn't have changed when a sub-ingredient was
+edited, leaving a silently stale score. Also removed a per-food ingredient query from
+correlation scoring (~270 round trips per request) that had never fired only because no dog
+had ever had a signal.
+
+### Verification
+`tsc` clean · `npm run build` exit 0 · `git diff --check` clean · no console errors ·
+no horizontal overflow at 375px · full flow exercised through the real UI (sign-in, picker
+search, switch, history with abutting date ranges, insights panel).
+**Database restored exactly to baseline** — auth.users 4, user_profiles 4 (1 admin), dogs 4,
+foods 272, all new tables 0, `research_*` 0. Harry's real recommendation set deliberately
+preserved; `food_ingredients` never touched.
+
+### Owner review
+- **Two migrations applied live** (`20260726140000_add_food_switch_attribution_and_treat_logging.sql`
+  plus the FK/`ingredient_sets_known` follow-ups). Purely additive: 2 tables, 4 columns, 3
+  indexes, 1 FK. No existing column altered.
+- **Thresholds are judgement calls, flagged as tunable in code, and worth your eye:** a suspect
+  set surfaces only at ≥2 failed switches and ≤8 ingredients; `decisiveNet` 0.34; stool Types
+  1 and 4–7 count as "concerning" while Type 3 does not; `questionable` on the wellness scale
+  is deliberately NOT concerning.
+- **The unchanged-outcome signal strengths (−0.5 / +0.25) are stated constants, not computed.**
+  When nothing moves there is no magnitude to derive, and computing one would be false precision.
+- Priority 4 items remain untouched.
+
+---
+
 ## Packet scanning + chart illustration fixes (2026-07-26, later)
 
 ### THE FINDING THAT SHOULD DRIVE STRATEGY — web research has hit a wall

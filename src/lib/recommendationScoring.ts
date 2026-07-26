@@ -1,9 +1,9 @@
 import { supabaseAdmin } from './supabase';
-import { Dog, Food, IngredientOutcomeSignal } from './types';
+import { Dog, Food } from './types';
 import { DerResult, NutritionalFitResult, scoreNutritionalFitForFood } from './nutritionalScoring';
 import { BudgetFitResult, scoreBudgetFit } from './budgetScoring';
 import { type ResearchRelevanceResult } from './researchScoring';
-import { scoreCorrelationSignalForFood } from './correlationScoring';
+import { type DogCorrelationContext, scoreCorrelationSignalForFood } from './correlationScoring';
 
 /**
  * Recommendation scoring (Phase 3, research_relevance wired up in Phase 4)
@@ -106,14 +106,18 @@ export async function scoreFood(
   weights: ScoringWeights,
   monthlyBudget: number | null | undefined,
   research: ResearchRelevanceResult,
-  dogCorrelationSignals: IngredientOutcomeSignal[] = []
+  correlationContext: DogCorrelationContext,
+  foodIngredientNames: string[] = []
 ): Promise<ScoredFood> {
   const nutritional_fit = scoreNutritionalFitForFood(dog, food, der);
   const budget_fit = scoreBudgetFit(food, der, monthlyBudget);
   const { score: research_relevance, summary: research_summary } = research;
-  const { score: correlation_signal, summary: correlation_summary } = await scoreCorrelationSignalForFood(
-    food,
-    dogCorrelationSignals
+  // Pure and synchronous now — the ingredient names come from the detail the
+  // route already fetched for every candidate in one query, instead of this
+  // function issuing its own lookup per food.
+  const { score: correlation_signal, summary: correlation_summary } = scoreCorrelationSignalForFood(
+    foodIngredientNames,
+    correlationContext
   );
 
   const overall_score =

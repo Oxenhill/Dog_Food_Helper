@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
 
     const { data: dog, error: dogError } = await supabaseAdmin
       .from('dogs')
-      .select('id, current_food_id')
+      .select('id')
       .eq('id', dog_id)
       .eq('owner_id', userId)
       .single();
@@ -123,7 +123,9 @@ export async function POST(request: NextRequest) {
             raw_value: e.raw_value,
             trend,
             within_expected_variability_window: withinExpectedVariabilityWindow,
-            food_id_active: foodIdActive ?? dog.current_food_id ?? null,
+            // The food event open ON THE LOG DATE only — see the same note in
+            // /api/logs/quick. `dogs.current_food_id` describes now, not then.
+            food_id_active: foodIdActive,
             notes: e.notes ?? null,
           };
         }

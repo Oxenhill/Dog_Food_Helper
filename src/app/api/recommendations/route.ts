@@ -11,10 +11,10 @@ import {
   ScoredFood,
 } from '@/lib/recommendationScoring';
 import { retrieveResearchFor } from '@/lib/ragRetrieval';
-import { fetchDogCorrelationSignals } from '@/lib/correlationScoring';
+import { fetchDogCorrelationContext } from '@/lib/correlationScoring';
 import { buildResearchScoreContext, getResearchScores } from '@/lib/researchScoreCache';
 import { NOT_YET_SCORED_RESULT } from '@/lib/researchScoring';
-import { fetchFoodFullMany } from '@/lib/foodFull';
+import { fetchFoodFullMany, flattenIngredientNames } from '@/lib/foodFull';
 
 const DISCLAIMER =
   'This is a decision-support tool, not veterinary advice. Always consult your vet before changing your dog\'s diet, especially if your dog has existing health conditions.';
@@ -168,9 +168,12 @@ export async function POST(request: NextRequest) {
     // same pattern as der/weights.
     const researchChunks = await retrieveResearchFor(dog_id, RESEARCH_TOP_K);
 
-    // Phase 6 — this dog's own ingredient_outcome_signals, fetched once and
-    // reused across every candidate food, same pattern as researchChunks.
-    const correlationSignals = await fetchDogCorrelationSignals(dog_id);
+    // Phase 6 — this dog's own correlation signals AND its rolling ingredient
+    // suspect set, fetched once and reused across every candidate food, same
+    // pattern as researchChunks. Switch-derived signals take precedence over
+    // the weak per-food-period ones; the suspect set is applied as a ranking
+    // preference only, never an exclusion.
+    const correlationContext = await fetchDogCorrelationContext(dog_id);
 
     const foodsToScore = (candidateFoods ?? []) as Food[];
 
@@ -188,7 +191,11 @@ export async function POST(request: NextRequest) {
         const full = detail.get(f.id);
         return {
           id: f.id,
-          ingredientNames: full?.ingredients.map((i) => i.name) ?? [],
+          // Flattened for the same reason as the correlation call below: the
+          // fingerprint must change when ANY ingredient changes, and a
+          // top-level-only list would leave a cached score stale after an edit
+          // to a nested sub-ingredient.
+          ingredientNames: flattenIngredientNames(full?.ingredients ?? []),
           nutrients: full
             ? (full.nutrients as unknown as Record<string, number | null>)
             : null,
@@ -214,7 +221,10 @@ export async function POST(request: NextRequest) {
             weights,
             monthlyBudget,
             researchScores.get(food.id) ?? NOT_YET_SCORED_RESULT,
-            correlationSignals
+            correlationContext,
+            // Flattened, so nested sub-ingredients are matched too — a
+            // beef-flavoured food's hidden chicken is a nested row.
+            flattenIngredientNames(detail.get(food.id)?.ingredients ?? [])
           )
         )
       );

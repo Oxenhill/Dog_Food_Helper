@@ -98,7 +98,7 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
           lifestyle_role: lifestyleRole,
           work_type: workType,
           daily_exercise_hours: dailyExerciseHours ? Number(dailyExerciseHours) : undefined,
-          current_food_freetext: currentFoodFreetext || undefined,
+          // current_food is intentionally not submitted — see the field below.
           monthly_food_budget: monthlyFoodBudget ? Number(monthlyFoodBudget) : undefined,
         }),
       });
@@ -288,18 +288,27 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
                   className="input metric"
                 />
               </div>
+              {/* Current food is deliberately NOT editable here any more.
+                  Changing it is a dated event, not a profile field: the switch
+                  has to close the previous food's period and open the new
+                  one, or `dogs.current_food_id` drifts out of step with
+                  `dog_food_events` and every log attributed from it becomes
+                  wrong. The dog's page owns that action. */}
               <div className="field">
-                <label className="label" htmlFor="currentFoodFreetext">
-                  Current food
-                </label>
-                <input
-                  id="currentFoodFreetext"
-                  type="text"
-                  placeholder="e.g. Canagan Grain-Free Chicken"
-                  value={currentFoodFreetext}
-                  onChange={(e) => setCurrentFoodFreetext(e.target.value)}
-                  className="input"
-                />
+                <span className="label">Current food</span>
+                <p className="text-[14px] text-ink">
+                  {currentFoodFreetext || 'Not recorded'}
+                </p>
+                <p className="help-text">
+                  Changed foods? Record it on your dog&apos;s page so we know when the change
+                  happened — that&apos;s what lets us compare before and after.
+                </p>
+                <Link
+                  href={`/dogs/${params.dogId}`}
+                  className="mt-1 inline-block text-[13px] font-semibold text-pine hover:underline"
+                >
+                  Go to {name || 'your dog'}&apos;s page →
+                </Link>
               </div>
               <div className="field">
                 <label className="label" htmlFor="monthlyFoodBudget">

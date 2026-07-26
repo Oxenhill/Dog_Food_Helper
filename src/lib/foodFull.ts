@@ -103,6 +103,33 @@ function mapIngredient(raw: unknown): FoodFullIngredient | null {
   };
 }
 
+/**
+ * Every ingredient name in a food, INCLUDING nested sub-ingredients, flattened
+ * to one list.
+ *
+ * `FoodFull.ingredients` is a tree: a compound ingredient carries its contents
+ * in `sub_ingredients`. Anything matching ingredient names against a food must
+ * walk the whole tree, because the nested rows are the entire point — a
+ * beef-flavoured food declaring "Meat and animal derivatives" with chicken
+ * nested inside it is exactly the case the ingredient detail exists to catch.
+ * A top-level-only `.map(i => i.name)` silently misses it.
+ *
+ * Both `hardFilter.ts` and the correlation engine query `food_ingredients`
+ * directly and so match across all rows already; this is the equivalent for
+ * code working from the assembled `FoodFull` view shape.
+ */
+export function flattenIngredientNames(ingredients: FoodFullIngredient[]): string[] {
+  const names: string[] = [];
+  const walk = (list: FoodFullIngredient[]) => {
+    for (const ingredient of list) {
+      names.push(ingredient.name);
+      if (ingredient.sub_ingredients.length > 0) walk(ingredient.sub_ingredients);
+    }
+  };
+  walk(ingredients);
+  return names;
+}
+
 /** Map one `food_full` row onto the app-facing shape. */
 export function mapFoodFullRow(row: Record<string, unknown>): FoodFull {
   const ingredients = Array.isArray(row.ingredients)

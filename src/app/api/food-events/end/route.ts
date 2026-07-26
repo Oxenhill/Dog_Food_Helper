@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
+import { endFoodEvent } from '@/lib/foodEvents';
 
 /**
  * endFoodEvent (Part B)
@@ -32,22 +33,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Dog not found' }, { status: 404 });
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('dog_food_events')
-      .update({ ended_at: ended_at ? new Date(ended_at).toISOString() : new Date().toISOString() })
-      .eq('id', event_id)
-      .eq('dog_id', dog_id)
-      .select()
-      .single();
+    const event = await endFoodEvent(dog_id, event_id, ended_at ?? null);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!event) {
+      return NextResponse.json({ error: 'Food event not found' }, { status: 404 });
+    }
+
+    // Ending the open main food means the dog is no longer on a recorded food.
+    // The pointer must follow, or `dogs.current_food_id` keeps naming a food
+    // the owner has explicitly stopped.
+    if (event.event_type === 'main_food') {
+      const { error: pointerError } = await supabaseAdmin
+        .from('dogs')
+        .update({
+          current_food_id: null,
+          current_food_freetext: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', dog_id);
+      if (pointerError) {
+        console.error(`endFoodEvent: dog ${dog_id} pointer clear failed`, pointerError);
+      }
     }
 
     return NextResponse.json(
       {
         message: 'Food event ended',
-        food_event: data,
+        food_event: event,
       },
       { status: 200 }
     );
