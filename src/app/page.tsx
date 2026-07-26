@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export default function Home() {
   return (
@@ -7,7 +8,7 @@ export default function Home() {
         <div className="app-header-inner">
           <span className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </span>
           <Link href="/signin" className="btn-ghost btn-sm">
             Sign in
@@ -16,16 +17,34 @@ export default function Home() {
       </header>
 
       <main className="container-page">
-        {/* Hero — the thesis: one dog's measured response over time */}
+        {/* Hero — the thesis: one dog's measured response over time.
+            The full lockup belongs here rather than in the header: it carries
+            the tagline and the Dog Smart endorsement, which need room to be
+            read. The header keeps a compact text wordmark. */}
         <section className="pt-6 sm:pt-10">
+          {/* width/height are the DISPLAY size, not the asset's intrinsic
+              1254px: passing the intrinsic size made Next generate a srcset
+              for a 1254px slot and serve a 1920px-wide render (1.18 MB) for a
+              196px image. Sized correctly it serves ~111 KB. `sizes` matches
+              the responsive widths in className so the right candidate is
+              picked at each breakpoint. */}
+          <Image
+            src="/bowl-logo.png"
+            alt="Bowl — Every dog is different. Every choice matters. By Dog Smart."
+            width={196}
+            height={196}
+            sizes="(min-width: 640px) 196px, 168px"
+            priority
+            className="mb-2 h-auto w-[168px] sm:w-[196px]"
+          />
           <p className="eyebrow">Decision support · one dog at a time</p>
           <h1 className="page-title mt-3 text-[32px] leading-[1.05] sm:text-[44px]">
-            Track what actually
+            Every dog is different.
             <br />
-            works for your dog.
+            Every choice matters.
           </h1>
           <p className="lead mt-5 max-w-prose">
-            Every dog responds to food differently. Dog Food Helper records your
+            Every dog responds to food differently. Bowl records your
             dog&apos;s baseline, watches how digestion, energy, and coat shift
             when their food changes, and turns that into calm, evidence-honest
             recommendations — never a guess dressed up as certainty.
@@ -133,7 +152,7 @@ export default function Home() {
         <section className="mt-12">
           <div className="callout-disclaimer">
             <p className="eyebrow mb-1.5 text-pine">Important</p>
-            Dog Food Helper is a decision-support tool, not a diagnostic or
+            Bowl is a decision-support tool, not a diagnostic or
             veterinary service. Always consult your veterinarian before making
             significant changes to your dog&apos;s diet, especially if your dog
             has existing health conditions.
@@ -141,9 +160,7 @@ export default function Home() {
         </section>
 
         <footer className="mt-14 border-t border-line pt-6">
-          <p className="metric text-[12px] text-ink-soft">
-            Dog Food Helper · a Dog Smart tool
-          </p>
+          <p className="metric text-[12px] text-ink-soft">Bowl · by Dog Smart</p>
         </footer>
       </main>
     </div>

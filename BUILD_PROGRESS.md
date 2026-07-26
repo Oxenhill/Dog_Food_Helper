@@ -1,4 +1,63 @@
-# Dog Food Platform — Build Progress
+# Bowl (by Dog Smart) — Build Progress
+
+## Rebrand to Bowl (2026-07-26, latest)
+
+Owner decision: the product is **Bowl**, tagline **"Every dog is different. Every choice
+matters."**, attributed **by Dog Smart**. Logo supplied by the owner in `Logo/`.
+
+### Naming
+Every user-facing occurrence of "Dog Food Helper" is gone (`grep` over `src/` returns
+nothing). 16 page headers, the document title, the landing hero/disclaimer/footer, the admin
+shell, the red-flag disclaimer, the admin sign-in copy, and the **inactivity-deletion email
+subject** — that last one matters because it is the one piece of naming that reaches a user
+outside the app. Also `package.json`/`package-lock.json` name → `bowl`, the dev launch config,
+and the `CLAUDE.md` / `BUILD_PROGRESS.md` headings. The brand facts are now recorded in
+`CLAUDE.md` so a later session cannot quietly reword the tagline.
+
+### Logo placement
+The supplied asset is a square lockup (mark + wordmark + tagline + attribution), so it is used
+**where there is room to read it** — landing hero, sign-in, sign-up. Headers keep a compact
+text wordmark: the lockup is illegible at 15px, and shrinking it would throw away the tagline
+it exists to carry. Assets copied to `public/bowl-logo.{png,svg}`; OG/Twitter metadata now
+points at the PNG with an absolute URL (link previews require one).
+
+### Three things worth knowing about the assets
+1. **The SVG is a raster trace, not a true vector logo** — 987 paths, hundreds of
+   photo-derived fills, 615 KB, and **no `viewBox`** (so it could not scale responsively).
+   A `viewBox` was added to the served copy. It is no better than the PNG for display; the
+   PNG is what the app actually uses.
+2. **The favicon had to be generated.** Next does not resize file-convention icons, so
+   `app/icon.png` would have shipped a 1.35 MB 1254px image on every page load — and at 32px
+   the lockup is a smudge, since most of the square is wordmark and whitespace. So the
+   circular mark is cropped out and downsampled to a 64×64, 8 KB PNG by
+   `scripts/make-icon.mjs`. The crop box was **measured** off the asset (scanning for the
+   ring's green: x 379–869, y 162–667, centred on 624,415) rather than eyeballed, and the
+   output was verified pixel-wise — ring present at both edges of the centre row, background
+   matching the artwork.
+   *`next/og` would have been idiomatic but throws `TypeError: Invalid URL` from
+   `fileURLToPath` on Windows in Next 14.2 and breaks the build. The script uses Node
+   built-ins only — no new dependency.*
+3. **A 10× image-payload bug, caught by measuring.** Passing the asset's intrinsic 1254px as
+   `width`/`height` made Next generate a srcset for a 1254px slot and serve a **1920px-wide,
+   1.18 MB** render into a 196px box. Sized to the display width with a matching `sizes`, it
+   serves **51 KB**. Verified in the browser: `w=256` requested at both breakpoints.
+
+### Verification
+`tsc` clean · `npm run build` exit 0 · favicon linked as `sizes="64x64"` · title, `og:title`,
+`og:site_name` and absolute `og:image` all correct in the served HTML · logo loads on landing
+and both auth pages · no console errors · no horizontal overflow at 375px.
+
+### Owner review
+- **A square, mark-only export would be better than a cropped one.** The generated favicon is
+  a crop of the lockup and is good, but an asset designed at icon size would be sharper. Drop
+  one in and re-point `scripts/make-icon.mjs`.
+- **No `apple-icon`** (iOS home-screen icon) — it wants 180px and would be visibly soft from
+  this source. Worth adding alongside a proper mark export.
+- **The deployment is still `dog-food-helper.vercel.app`.** Renaming the Vercel project and
+  any custom domain is a hosting/DNS decision for you; nothing in the code depends on the
+  host name, and `metadataBase` prefers `NEXT_PUBLIC_SITE_URL` if you set one.
+- `HANDOVER_PROMPT.md` is left as the point-in-time artefact it is, so it still says the old
+  name.
 
 ## Food attribution, treat logging, and the switch-based correlation engine (2026-07-26, latest)
 

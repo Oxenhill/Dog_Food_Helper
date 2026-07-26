@@ -1,7 +1,16 @@
-# Claude Code Conventions for Dog Food Platform
+# Claude Code Conventions for Bowl (by Dog Smart)
 
 ## Project Context
-**Product:** Dog Food Recommendation Platform — a decision-support tool for dog owners to get personalized food recommendations based on their dog's health, restrictions, and individual response patterns.
+**Product:** **Bowl** — a decision-support tool for dog owners to get personalized food recommendations based on their dog's health, restrictions, and individual response patterns.
+
+**Brand (owner-set, 2026-07-26 — do not paraphrase or reword these):**
+- Name: **Bowl**
+- Tagline: **Every dog is different. Every choice matters.**
+- Attribution: **by Dog Smart**
+- Logo assets: `Logo/` (source, as supplied) and `public/bowl-logo.{png,svg}` (served).
+  The full square lockup carries the tagline and attribution, so it is used where
+  there is room to read it — landing hero, sign-in, sign-up. Headers use a compact
+  text wordmark ("Bowl") because the lockup is illegible at 15px.
 
 **Tech Stack:**
 - Frontend: Next.js (App Router) on Vercel

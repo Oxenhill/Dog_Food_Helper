@@ -76,7 +76,7 @@ async function sendInactivityWarning(userId: string, daysUntilDeletion: number):
     return false;
   }
 
-  const subject = 'Your Dog Food Helper account will be deleted soon due to inactivity';
+  const subject = 'Your Bowl account will be deleted soon due to inactivity';
   const text =
     `We haven't seen you log in for a while. Your account and personal data will be permanently ` +
     `deleted in ${daysUntilDeletion} day(s) unless you log in before then. Your dogs' health and ` +

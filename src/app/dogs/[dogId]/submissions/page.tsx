@@ -10,7 +10,7 @@ export default function SubmissionsPage({ params }: { params: { dogId: string } 
         <div className="app-header-inner">
           <Link href={`/dogs/${params.dogId}`} className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
         </div>
       </header>

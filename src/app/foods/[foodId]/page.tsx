@@ -79,7 +79,7 @@ function FoodDetail({ foodId }: { foodId: string }) {
         <div className="app-header-inner">
           <Link href="/dogs" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
         </div>
       </header>

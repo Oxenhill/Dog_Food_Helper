@@ -154,7 +154,7 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
           <div className="app-header-inner">
             <Link href="/dogs" className="wordmark">
               <span className="wordmark-dot" />
-              Dog Food Helper
+              Bowl
             </Link>
           </div>
         </header>
@@ -176,7 +176,7 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
         <div className="app-header-inner">
           <Link href="/dogs" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
         </div>
       </header>

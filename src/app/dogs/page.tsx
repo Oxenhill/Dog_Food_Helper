@@ -43,7 +43,7 @@ export default function DogsPage() {
         <div className="app-header-inner">
           <Link href="/dogs" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
           <div className="flex items-center gap-1">
             <AdminLink />

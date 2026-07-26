@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { saveSession } from '@/lib/session';
 
 // Unified sign-in for owners AND admins. Posts to POST /api/auth/signin, then
@@ -70,12 +71,21 @@ export default function SignInPage() {
         <div className="app-header-inner">
           <Link href="/" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
         </div>
       </header>
 
       <main className="container-narrow">
+        <Image
+          src="/bowl-logo.png"
+          alt="Bowl — Every dog is different. Every choice matters. By Dog Smart."
+          width={140}
+          height={140}
+          sizes="140px"
+          priority
+          className="mb-4 h-auto w-[140px]"
+        />
         <p className="eyebrow">Welcome back</p>
         <h1 className="page-title mt-2">Sign in</h1>
         <p className="lead mt-2">Pick up where you left off with your dogs.</p>

@@ -1,4 +1,4 @@
-// Type definitions for Dog Food Helper
+// Type definitions for Bowl (by Dog Smart)
 
 export type SizeCategory = 'toy' | 'small' | 'medium' | 'large' | 'giant';
 export type LifestyleRole = 'pet' | 'working' | 'sporting' | 'breeding';

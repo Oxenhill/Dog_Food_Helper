@@ -234,7 +234,7 @@ export default function IngredientReviewQueueAdmin() {
         <p className="eyebrow">Admin sign in</p>
         <h1 className="page-title mt-2">Ingredient review queue</h1>
         <p className="lead mt-2">
-          Sign in with your Dog Food Helper account. Access is only granted if your account has
+          Sign in with your Bowl account. Access is only granted if your account has
           admin status (user_profiles.is_admin) — see BUILD_PROGRESS.md for how to become the
           first admin.
         </p>

@@ -93,7 +93,7 @@ export default function AdminShell({
         <div className="app-header-inner">
           <Link href="/admin" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper <span className="muted font-sans font-normal">· admin</span>
+            Bowl <span className="muted font-sans font-normal">· admin</span>
           </Link>
           <button type="button" onClick={handleSignOut} className="btn-ghost btn-sm">
             Sign out

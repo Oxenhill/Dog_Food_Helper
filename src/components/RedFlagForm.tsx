@@ -67,7 +67,7 @@ export default function RedFlagForm({ dogId }: { dogId: string }) {
           rather than waiting to see if it settles.
         </p>
         <p className="text-[13px] text-ink-soft">
-          Dog Food Helper is a decision-support tool, not a diagnostic or veterinary service — this
+          Bowl is a decision-support tool, not a diagnostic or veterinary service — this
           symptom is outside what it can assess. Your vet is the right next step.
         </p>
 

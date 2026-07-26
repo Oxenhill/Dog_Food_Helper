@@ -34,7 +34,7 @@ export default function AccountPage() {
         <div className="app-header-inner">
           <Link href="/dogs" className="wordmark">
             <span className="wordmark-dot" />
-            Dog Food Helper
+            Bowl
           </Link>
           <Link href="/dogs" className="btn-ghost btn-sm">
             Your dogs
