@@ -1,19 +1,36 @@
 import { supabaseAdmin } from './supabase';
 
 /**
- * Supabase Storage for Bristol/BCS chart illustrations (hardening item 6:
- * "nice to have" per the task brief, not a launch blocker). Public bucket —
+ * Supabase Storage for Bristol/BCS chart illustrations. Public bucket —
  * unlike ingredient photos, these are original, non-sensitive reference
  * illustrations meant to be shown to any signed-in owner, same trust level
- * as `foods` reference data (see the RLS migration's public-read reference
- * tables).
+ * as `foods` reference data.
  *
- * No new DB table: paths are deterministic (`${chartType}/${value}${ext}`)
- * and a single `manifest.json` object in the same bucket maps
- * "bristol"/"bcs" + value -> public URL, read by the public
- * GET /api/charts/illustrations endpoint. This keeps the "don't add tables
- * outside Part A without flagging it" convention this codebase has followed
- * since Phase 2 intact for a feature this small.
+ * ---------------------------------------------------------------------------
+ * THE BUCKET IS THE INDEX. There is deliberately no manifest.
+ *
+ * This module used to keep a `manifest.json` object mapping chart value ->
+ * public URL, updated on every upload with a read-modify-write:
+ *
+ *     await upload(path, buffer)          // file written
+ *     const manifest = await readManifest()   // READ
+ *     manifest[chartType][value] = publicUrl  // MODIFY
+ *     await writeManifest(manifest)           // WRITE the whole blob
+ *
+ * That is a last-write-wins race. Uploading several illustrations at once (or
+ * in quick succession) meant two handlers read the same manifest version, each
+ * added their own key, and the second write silently dropped the first's
+ * entry. Observed in production 2026-07-26: `bristol/4.png` was present in
+ * Storage (HTTP 200, 235,544 bytes) but absent from the manifest, so Bristol
+ * Type 4 did not render while 1,2,3,5,6,7 did. The owner had also seen an
+ * earlier round where none of them appeared.
+ *
+ * Paths are already deterministic (`${chartType}/${value}${ext}`), so the
+ * manifest was a second source of truth that could only ever drift from the
+ * first. It is gone: the listing is derived from the bucket on read. There is
+ * no shared mutable object, so concurrent uploads cannot lose each other, and
+ * any file that uploaded successfully is visible by definition.
+ * ---------------------------------------------------------------------------
  *
  * IMPORTANT (see src/lib/chartReference.ts's header comment and
  * BUILD_PROGRESS.md): only ORIGINAL illustrations may be uploaded here.
@@ -23,10 +40,11 @@ import { supabaseAdmin } from './supabase';
  * automatically. The admin uploading is responsible for that.
  */
 const BUCKET = 'chart-illustrations';
-const MANIFEST_PATH = 'manifest.json';
 let bucketEnsured = false;
 
 export type ChartType = 'bristol' | 'bcs';
+
+const CHART_TYPES: ChartType[] = ['bristol', 'bcs'];
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/svg+xml': '.svg',
@@ -34,6 +52,8 @@ const EXT_BY_MIME: Record<string, string> = {
 };
 
 export const ALLOWED_CHART_IMAGE_MIME_TYPES = Object.keys(EXT_BY_MIME);
+
+const ALLOWED_EXTENSIONS = new Set(Object.values(EXT_BY_MIME));
 
 async function ensureBucket(): Promise<void> {
   if (bucketEnsured) return;
@@ -49,39 +69,62 @@ async function ensureBucket(): Promise<void> {
 
 export type ChartManifest = Record<ChartType, Record<string, string>>;
 
-async function readManifest(): Promise<ChartManifest> {
-  await ensureBucket();
-  const { data, error } = await supabaseAdmin.storage.from(BUCKET).download(MANIFEST_PATH);
-  if (error || !data) return { bristol: {}, bcs: {} };
-  try {
-    const text = await data.text();
-    const parsed = JSON.parse(text);
-    return { bristol: parsed.bristol ?? {}, bcs: parsed.bcs ?? {} };
-  } catch {
-    return { bristol: {}, bcs: {} };
+/**
+ * List one chart type's illustrations straight from the bucket.
+ *
+ * A filename is only accepted when it is `<integer><allowed extension>` — the
+ * exact shape uploadChartIllustration writes. Anything else in the folder is
+ * ignored rather than guessed at, so a stray file can never masquerade as a
+ * chart level.
+ */
+async function listChartType(chartType: ChartType): Promise<Record<string, string>> {
+  const { data, error } = await supabaseAdmin.storage.from(BUCKET).list(chartType, {
+    limit: 1000,
+  });
+
+  if (error) {
+    console.error(`[chartIllustrationStorage] list failed for "${chartType}"`, error);
+    return {};
   }
-}
 
-async function writeManifest(manifest: ChartManifest): Promise<void> {
-  await ensureBucket();
-  const { error } = await supabaseAdmin.storage
-    .from(BUCKET)
-    .upload(MANIFEST_PATH, JSON.stringify(manifest), {
-      contentType: 'application/json',
-      upsert: true,
-    });
-  if (error) throw error;
-}
+  const out: Record<string, string> = {};
+  for (const entry of data ?? []) {
+    const name = entry.name;
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0) continue;
 
-export async function getChartManifest(): Promise<ChartManifest> {
-  return readManifest();
+    const stem = name.slice(0, dot);
+    const ext = name.slice(dot).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(ext)) continue;
+    if (!/^\d+$/.test(stem)) continue;
+
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from(BUCKET)
+      .getPublicUrl(`${chartType}/${name}`);
+    out[stem] = publicUrlData.publicUrl;
+  }
+  return out;
 }
 
 /**
- * Uploads (or replaces) the illustration for one chart value, then updates
- * the manifest. Only PNG and SVG are accepted (ALLOWED_CHART_IMAGE_MIME_TYPES)
- * — matches Phase 5's OCR upload validation pattern of checking an explicit
- * MIME allowlist server-side, not just trusting the client.
+ * The full listing, derived from the bucket. Both chart types are always
+ * present as keys (possibly empty) so callers never have to null-check.
+ */
+export async function getChartManifest(): Promise<ChartManifest> {
+  await ensureBucket();
+
+  const [bristol, bcs] = await Promise.all(CHART_TYPES.map((t) => listChartType(t)));
+
+  return { bristol, bcs };
+}
+
+/**
+ * Uploads (or replaces) the illustration for one chart value. Only PNG and SVG
+ * are accepted (ALLOWED_CHART_IMAGE_MIME_TYPES) — an explicit server-side MIME
+ * allowlist, not trusting the client.
+ *
+ * Writing the file is the ONLY step. There is no index to update, so this is
+ * safe to run concurrently for different values.
  */
 export async function uploadChartIllustration(
   chartType: ChartType,
@@ -95,6 +138,11 @@ export async function uploadChartIllustration(
   }
 
   await ensureBucket();
+
+  // Replacing a value with a different format would otherwise leave the old
+  // file behind and make two entries compete for one level on read.
+  await removeOtherFormats(chartType, value, ext);
+
   const path = `${chartType}/${value}${ext}`;
   const { error: uploadError } = await supabaseAdmin.storage.from(BUCKET).upload(path, buffer, {
     contentType: mimeType,
@@ -103,11 +151,27 @@ export async function uploadChartIllustration(
   if (uploadError) throw uploadError;
 
   const { data: publicUrlData } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(path);
-  const publicUrl = publicUrlData.publicUrl;
-
-  const manifest = await readManifest();
-  manifest[chartType][String(value)] = publicUrl;
-  await writeManifest(manifest);
-
-  return publicUrl;
+  return publicUrlData.publicUrl;
 }
+
+/** Remove the same value stored under a different allowed extension. */
+async function removeOtherFormats(
+  chartType: ChartType,
+  value: number,
+  keepExt: string
+): Promise<void> {
+  const stale = Array.from(ALLOWED_EXTENSIONS)
+    .filter((ext) => ext !== keepExt)
+    .map((ext) => `${chartType}/${value}${ext}`);
+
+  if (stale.length === 0) return;
+  const { error } = await supabaseAdmin.storage.from(BUCKET).remove(stale);
+  // Removing a file that isn't there is expected and not an error worth raising.
+  if (error) {
+    console.warn('[chartIllustrationStorage] could not clear stale format(s)', error);
+  }
+}
+
+// The obsolete manifest.json was deleted from the bucket on 2026-07-26. Even
+// if one reappeared it would be ignored: listChartType() only reads inside the
+// `bristol/` and `bcs/` prefixes, and only accepts `<integer><ext>` filenames.
