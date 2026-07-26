@@ -31,13 +31,22 @@ export const metadata: Metadata = {
     "A decision-support tool that tracks your dog's response to food over time and turns it into calm, evidence-honest recommendations. By Dog Smart.",
   applicationName: "Bowl",
   // metadataBase resolves the relative OG/Twitter image paths below to absolute
-  // URLs, which link previews require. Falls back to the production host when
-  // VERCEL_URL isn't set (local builds).
+  // URLs, which link previews require.
+  //
+  // Order matters. VERCEL_URL is the *per-deployment* host
+  // (dog-food-helper-7ig9vcmk5-….vercel.app) — it is ephemeral and, on a
+  // protected deployment, not publicly fetchable, so an og:image pointing at it
+  // silently fails to render in link previews. Observed live before this was
+  // fixed. VERCEL_PROJECT_PRODUCTION_URL is the stable production domain and is
+  // what a shared link should reference; VERCEL_URL is kept only as a last
+  // resort for preview deployments.
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ??
-      (process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : "https://dog-food-helper.vercel.app")
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : "https://dog-food-helper.vercel.app")
   ),
   openGraph: {
     title: "Bowl — Every dog is different. Every choice matters.",
