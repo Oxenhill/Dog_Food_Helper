@@ -2,14 +2,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 import { findDuplicateFood } from '@/lib/foodDuplicates';
-import { insertParsedIngredients } from '@/lib/ingredientPayload';
+import { insertParsedIngredients, type ParsedIngredient } from '@/lib/ingredientPayload';
 import { ValidatedContribution } from '@/lib/contributedFoods';
+import { parseComposition, type ParsedCompositionIngredient } from '@/lib/compositionParser';
+import { FoodType } from '@/lib/types';
 
 /**
- * Admin review of third-party food contributions.
+ * Admin review of third-party food contributions — the ONE approval path
+ * shared by two different origins that land in this same table:
+ *
+ * 1. Friend/contributor submissions (contributor_label = null or a person's
+ *    name) — payload.ingredients arrives already parsed, from the pasted
+ *    label text at submission time.
+ * 2. Crawler harvests (contributor_label = 'shopify-adapter' /
+ *    'tier2-adapter') — payload has no pre-parsed ingredients, only a
+ *    verbatim `composition_raw` excerpt. parse_composition() runs HERE, at
+ *    review time, so the reviewer sees the parsed list next to the exact
+ *    text it came from, and a parser fix applies to every row still
+ *    pending without re-crawling anything.
  *
  * GET  ?status=pending — the queue, oldest first.
- * POST { id, action: 'approve' | 'reject', note? }
+ * POST { id, action: 'approve' | 'reject', note?, brand?, name?, food_type?, is_treat? }
+ *   brand/name/food_type/is_treat are overrides for crawler rows, which
+ *   often don't know food_type at all (no schema.org field for it) and
+ *   sometimes have no real product name (falls back to the source URL when
+ *   the page had no JSON-LD).
  *
  * Approval is the only path from `contributed_foods` into `foods`. It re-runs
  * the duplicate check at approval time rather than trusting the one done at
@@ -24,6 +41,7 @@ import { ValidatedContribution } from '@/lib/contributedFoods';
  */
 
 const VALID_STATUSES = ['pending', 'approved', 'rejected'] as const;
+const VALID_FOOD_TYPES: FoodType[] = ['raw', 'kibble', 'cold_pressed', 'cooked', 'wet', 'other'];
 
 interface ContributionRow {
   id: string;
@@ -31,12 +49,31 @@ interface ContributionRow {
   name: string;
   source_url: string;
   payload: ValidatedContribution;
+  composition_raw: string | null;
   contributor_label: string | null;
   status: string;
   review_note: string | null;
   reviewed_at: string | null;
   resulting_food_id: string | null;
   created_at: string;
+}
+
+const CRAWLER_LABELS = new Set(['shopify-adapter', 'tier2-adapter']);
+
+function isCrawlerRow(row: ContributionRow): boolean {
+  return (row.contributor_label != null && CRAWLER_LABELS.has(row.contributor_label)) ||
+    !Array.isArray(row.payload?.ingredients);
+}
+
+/** parse_composition()'s legal_category has no equivalent in the food_ingredients nutritional vocabulary (protein_animal, carbohydrate, etc) — mapping it would be a guess, so it's dropped to null rather than invented. additive maps directly; it's the one category both vocabularies share. */
+function toParsedIngredient(node: ParsedCompositionIngredient): ParsedIngredient {
+  return {
+    name: node.name,
+    category: node.category === 'additive' ? 'additive' : null,
+    inclusion_pct: node.inclusion_pct,
+    note: node.note,
+    sub: node.sub.map(toParsedIngredient),
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -65,11 +102,31 @@ export async function GET(request: NextRequest) {
   // sees it before clicking rather than after.
   const items = await Promise.all(
     rows.map(async (row) => {
-      if (status !== 'pending') return { ...row, possible_duplicate: null };
-      const duplicate = await findDuplicateFood(row.brand, row.name);
+      const duplicate = status === 'pending' ? await findDuplicateFood(row.brand, row.name) : null;
+
+      if (!isCrawlerRow(row)) {
+        return {
+          ...row,
+          possible_duplicate: duplicate ? { id: duplicate.id, brand: duplicate.brand, name: duplicate.name } : null,
+        };
+      }
+
+      // Crawler row: parse composition_raw HERE, live, rather than trusting
+      // whatever was parsed at harvest time (there wasn't any — the crawler
+      // only ever stores the verbatim excerpt). This is also why a parser
+      // fix helps every row still sitting in this queue without a re-crawl.
+      const excerpt = row.composition_raw ?? row.payload?.source_excerpt ?? '';
+      const parsed = parseComposition(excerpt);
       return {
         ...row,
         possible_duplicate: duplicate ? { id: duplicate.id, brand: duplicate.brand, name: duplicate.name } : null,
+        is_crawler_row: true,
+        parsed_composition: {
+          ingredients: parsed.ingredients,
+          needs_review: parsed.needsReview,
+          review_reasons: parsed.reviewReasons,
+          excerpt,
+        },
       };
     })
   );
@@ -81,7 +138,15 @@ export async function POST(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (!admin) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { id?: unknown; action?: unknown; note?: unknown };
+  let body: {
+    id?: unknown;
+    action?: unknown;
+    note?: unknown;
+    brand?: unknown;
+    name?: unknown;
+    food_type?: unknown;
+    is_treat?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -91,6 +156,13 @@ export async function POST(request: NextRequest) {
   const id = typeof body.id === 'string' ? body.id : '';
   const action = body.action === 'approve' || body.action === 'reject' ? body.action : null;
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+  // Overrides — only meaningful for crawler rows, which don't know
+  // food_type at all and sometimes have no real product name (falls back
+  // to the source URL when the page had no JSON-LD).
+  const brandOverride = typeof body.brand === 'string' && body.brand.trim() ? body.brand.trim() : null;
+  const nameOverride = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
+  const foodTypeOverride = typeof body.food_type === 'string' ? body.food_type.trim() : null;
+  const isTreatOverride = typeof body.is_treat === 'boolean' ? body.is_treat : null;
 
   if (!id || !action) {
     return NextResponse.json(
@@ -133,20 +205,108 @@ export async function POST(request: NextRequest) {
   }
 
   // --- Approve -------------------------------------------------------------
+  const crawlerRow = isCrawlerRow(row);
   const payload = row.payload;
-  if (!payload || !Array.isArray(payload.ingredients) || payload.ingredients.length === 0) {
-    return NextResponse.json(
-      { error: 'This submission has no usable ingredient list and cannot be approved.' },
-      { status: 400 }
-    );
+
+  let ingredientsToWrite: ParsedIngredient[];
+  let foodInsert: {
+    brand: string;
+    name: string;
+    food_type: string;
+    is_treat: boolean;
+    suitable_age_min_months: number | null;
+    suitable_age_max_months: number | null;
+    suitable_size_min: string | null;
+    suitable_size_max: string | null;
+    price_per_kg: number | null;
+    calories_per_kg: number | null;
+    protein_pct: number | null;
+    fat_pct: number | null;
+    fibre_pct: number | null;
+    moisture_pct: number | null;
+    ash_pct: number | null;
+    calcium_pct: number | null;
+    phosphorus_pct: number | null;
+    sodium_pct: number | null;
+    composition_raw: string | null;
+  };
+
+  if (crawlerRow) {
+    const excerpt = row.composition_raw ?? payload?.source_excerpt ?? '';
+    const parsed = parseComposition(excerpt);
+    if (parsed.ingredients.length === 0) {
+      return NextResponse.json(
+        { error: 'No ingredients could be parsed from the composition text — cannot be approved.' },
+        { status: 400 }
+      );
+    }
+    if (!foodTypeOverride || !VALID_FOOD_TYPES.includes(foodTypeOverride as FoodType)) {
+      return NextResponse.json(
+        {
+          error: `A crawler-sourced row needs food_type set to one of: ${VALID_FOOD_TYPES.join(', ')} — the source page has no field for it.`,
+        },
+        { status: 400 }
+      );
+    }
+    ingredientsToWrite = parsed.ingredients.map(toParsedIngredient);
+    foodInsert = {
+      brand: brandOverride ?? row.brand,
+      name: nameOverride ?? row.name,
+      food_type: foodTypeOverride,
+      is_treat: isTreatOverride === true,
+      suitable_age_min_months: null,
+      suitable_age_max_months: null,
+      suitable_size_min: null,
+      suitable_size_max: null,
+      price_per_kg: null,
+      calories_per_kg: null,
+      protein_pct: null,
+      fat_pct: null,
+      fibre_pct: null,
+      moisture_pct: null,
+      ash_pct: null,
+      calcium_pct: null,
+      phosphorus_pct: null,
+      sodium_pct: null,
+      composition_raw: excerpt || null,
+    };
+  } else {
+    if (!payload || !Array.isArray(payload.ingredients) || payload.ingredients.length === 0) {
+      return NextResponse.json(
+        { error: 'This submission has no usable ingredient list and cannot be approved.' },
+        { status: 400 }
+      );
+    }
+    ingredientsToWrite = payload.ingredients as ParsedIngredient[];
+    foodInsert = {
+      brand: brandOverride ?? payload.brand,
+      name: nameOverride ?? payload.name,
+      food_type: foodTypeOverride ?? payload.food_type,
+      is_treat: isTreatOverride ?? payload.is_treat === true,
+      suitable_age_min_months: payload.suitable_age_min_months,
+      suitable_age_max_months: payload.suitable_age_max_months,
+      suitable_size_min: payload.suitable_size_min,
+      suitable_size_max: payload.suitable_size_max,
+      price_per_kg: payload.price_per_kg,
+      calories_per_kg: payload.calories_per_kg,
+      protein_pct: payload.nutrients?.protein_pct ?? null,
+      fat_pct: payload.nutrients?.fat_pct ?? null,
+      fibre_pct: payload.nutrients?.fibre_pct ?? null,
+      moisture_pct: payload.nutrients?.moisture_pct ?? null,
+      ash_pct: payload.nutrients?.ash_pct ?? null,
+      calcium_pct: payload.nutrients?.calcium_pct ?? null,
+      phosphorus_pct: payload.nutrients?.phosphorus_pct ?? null,
+      sodium_pct: payload.nutrients?.sodium_pct ?? null,
+      composition_raw: row.composition_raw ?? null,
+    };
   }
 
   // Re-check now, not just at submission time.
-  const duplicate = await findDuplicateFood(row.brand, row.name);
+  const duplicate = await findDuplicateFood(foodInsert.brand, foodInsert.name);
   if (duplicate) {
     return NextResponse.json(
       {
-        error: `"${row.brand} — ${row.name}" is already in the catalogue. Reject this submission instead of approving it.`,
+        error: `"${foodInsert.brand} — ${foodInsert.name}" is already in the catalogue. Reject this submission instead of approving it.`,
         duplicate_food_id: duplicate.id,
       },
       { status: 409 }
@@ -163,27 +323,20 @@ export async function POST(request: NextRequest) {
   const { data: newFood, error: foodError } = await supabaseAdmin
     .from('foods')
     .insert({
-      brand: payload.brand,
-      name: payload.name,
-      food_type: payload.food_type,
-      is_treat: payload.is_treat === true,
-      suitable_age_min_months: payload.suitable_age_min_months,
-      suitable_age_max_months: payload.suitable_age_max_months,
-      suitable_size_min: payload.suitable_size_min,
-      suitable_size_max: payload.suitable_size_max,
-      price_per_kg: payload.price_per_kg,
-      calories_per_kg: payload.calories_per_kg,
-      protein_pct: payload.nutrients?.protein_pct ?? null,
-      fat_pct: payload.nutrients?.fat_pct ?? null,
-      fibre_pct: payload.nutrients?.fibre_pct ?? null,
-      moisture_pct: payload.nutrients?.moisture_pct ?? null,
-      ash_pct: payload.nutrients?.ash_pct ?? null,
-      calcium_pct: payload.nutrients?.calcium_pct ?? null,
-      phosphorus_pct: payload.nutrients?.phosphorus_pct ?? null,
-      sodium_pct: payload.nutrients?.sodium_pct ?? null,
+      ...foodInsert,
       ingredient_source: 'contributor',
-      source_url: payload.source_url,
+      source_url: row.source_url,
       source_domain: sourceDomain,
+      // The reviewer has just checked the parsed list against the excerpt —
+      // that IS the ingredient-completeness verification this status
+      // records, the same way a label-photo confirmation does.
+      ingredient_data_status: 'complete',
+      ingredient_status_reason: crawlerRow
+        ? 'Approved by admin review from a crawled composition excerpt, checked against the verbatim source text.'
+        : 'Approved by admin review from a contributor submission, checked against the verbatim source excerpt.',
+      ingredient_status_checked_at: new Date().toISOString(),
+      recipe_version_status: 'current',
+      product_availability_status: 'available',
       // The reviewer has just checked the parsed list against the excerpt, so
       // this is a genuine verification timestamp rather than an import artefact.
       last_verified_at: new Date().toISOString(),
@@ -201,7 +354,7 @@ export async function POST(request: NextRequest) {
   const foodId = (newFood as { id: string }).id;
   const { written, error: ingredientError } = await insertParsedIngredients(
     foodId,
-    payload.ingredients
+    ingredientsToWrite
   );
 
   if (ingredientError) {
