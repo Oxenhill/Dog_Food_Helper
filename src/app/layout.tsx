@@ -72,6 +72,36 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * Which build a browser is actually talking to — Vercel sets these at build
+ * time (undefined under `next dev`). Added 2026-07-27 after two rounds of
+ * mis-diagnosing a bug against the wrong environment (localhost vs. the
+ * deployed URL): rendered server-side so it's free, and visible so nobody has
+ * to guess again.
+ */
+function BuildMarker() {
+  const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+  const label = sha ? `${process.env.VERCEL_ENV ?? "vercel"} · ${sha}` : "local dev";
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 4,
+        right: 6,
+        fontSize: 10,
+        lineHeight: 1,
+        opacity: 0.35,
+        pointerEvents: "none",
+        zIndex: 9999,
+        fontFamily: "monospace",
+        color: "#000",
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -82,7 +112,10 @@ export default function RootLayout({
       lang="en"
       className={`${display.variable} ${sans.variable} ${mono.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        {children}
+        <BuildMarker />
+      </body>
     </html>
   );
 }

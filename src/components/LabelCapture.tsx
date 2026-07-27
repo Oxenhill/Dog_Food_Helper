@@ -89,36 +89,79 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
     }
     setError('');
     setBusy(true);
+
+    // What the phone actually handed us, before anything touches it. iOS in
+    // particular can hand back HEIC, a blank `type`, or a huge byte count
+    // depending on camera settings — logged unconditionally so a report from
+    // a real device tells us which of those we're dealing with.
+    console.log('[LabelCapture] selected photos', {
+      front: front && { name: front.name, type: front.type, size: front.size },
+      back: back && { name: back.name, type: back.type, size: back.size },
+    });
+
+    // Three distinct failure points that a single catch used to collapse into
+    // one indistinguishable "something went wrong": client-side image
+    // processing, the network request, and parsing the response. Each now has
+    // its own message and its own console.error with the real error object.
+    let resizedFront: File;
+    let resizedBack: File | null;
     try {
-      const [resizedFront, resizedBack] = await Promise.all([
+      [resizedFront, resizedBack] = await Promise.all([
         resizeImageForUpload(front),
         back ? resizeImageForUpload(back) : Promise.resolve(null),
       ]);
+      console.log('[LabelCapture] resized photos', {
+        front: { name: resizedFront.name, type: resizedFront.type, size: resizedFront.size },
+        back: resizedBack
+          ? { name: resizedBack.name, type: resizedBack.type, size: resizedBack.size }
+          : null,
+      });
+    } catch (err) {
+      console.error('[LabelCapture] client-side image processing failed', err);
+      setError('Could not process that photo on this device. Try a different photo, or retake it.');
+      setBusy(false);
+      return;
+    }
 
+    let res: Response;
+    try {
       const fd = new FormData();
       fd.append('front', resizedFront);
       if (resizedBack) fd.append('back', resizedBack);
 
-      const res = await fetch('/api/ingredients/extract', {
+      res = await fetch('/api/ingredients/extract', {
         method: 'POST',
         headers: authHeaders(),
         body: fd,
       });
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.error ?? `Could not read the photos (${res.status})`);
-        return;
-      }
-      const ex = json.extracted as Extraction;
-      setDraft(ex);
-      setExisting(json.existing_food ?? null);
-      setIngredientText(ex.ingredients.join('\n'));
-      setStep('review');
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally {
+    } catch (err) {
+      console.error('[LabelCapture] network request failed', err);
+      setError('Could not reach the server. Check your connection and try again.');
       setBusy(false);
+      return;
     }
+
+    let json: { extracted?: Extraction; existing_food?: ExistingFood | null; error?: string };
+    try {
+      json = await res.json();
+    } catch (err) {
+      console.error('[LabelCapture] response was not valid JSON', { status: res.status }, err);
+      setError(`Unexpected response from the server (status ${res.status}). Please try again.`);
+      setBusy(false);
+      return;
+    }
+
+    if (!res.ok) {
+      setError(json.error ?? `Could not read the photos (${res.status})`);
+      setBusy(false);
+      return;
+    }
+    const ex = json.extracted as Extraction;
+    setDraft(ex);
+    setExisting(json.existing_food ?? null);
+    setIngredientText(ex.ingredients.join('\n'));
+    setStep('review');
+    setBusy(false);
   }
 
   async function handleConfirm(e: React.FormEvent) {
