@@ -1,6 +1,156 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Contributor food submissions + fuller discovery extraction (2026-07-26, latest)
+## Phase 1 identity layer (GTIN) + hard-filter safety gate + licence decision (2026-07-27, latest)
+
+**Owner ask:** fix the ingredient-identity mess (83% of `foods` unusable, mostly
+`identity_ambiguous`/`ambiguous_formula`) starting with a GTIN anchor, not more scraping.
+Along the way, a real safety-layer gap was found and fixed before touching the catalogue further.
+
+**1. Hard-filter safety fix (own commit, separate from the migration below).** Read-path audit
+found `ingredient_data_status` was written in exactly one place (`ingredients/confirm/route.ts`)
+and read as a filter *nowhere* — `hardFilter.ts`'s candidate query, `api/recommendations`, and
+`api/foods` all served every non-treat food regardless of ingredient completeness. A food with
+no transcribed ingredients has nothing for an allergen `ilike` match to hit, so it could never be
+excluded — a missing ingredient list was indistinguishable from "verified safe" for a dog with a
+restriction. Fixed with a **dog-scoped** gate (`dogNeedsIngredientGate`/`filterCandidateFoods` in
+`src/lib/hardFilter.ts`): only dogs with an actual ingredient-based exclusion criterion (a
+restriction, or an approved `condition_contraindications` row with a non-null
+`contraindicated_ingredient`) require `ingredient_data_status = 'complete'` **and** a real
+`food_ingredients` row (belt and braces — some `complete` rows have zero). Unrestricted dogs keep
+today's full candidate pool. `product_availability_status in ('unavailable','discontinued')` is
+now excluded unconditionally for everyone (trust issue, not safety — 43/292 foods were
+unbuyable and still recommendable). Added `npm test` (new script; `node:test` via the existing
+`tsx` dependency, no new package) with a regression suite covering the exact scenario. `tsc`
+and `build` both clean.
+
+**2. Migration `phase1_gtin_identity_and_integrity_guard`.** `foods.gtin` (raw) +
+`foods.gtin_norm` (generated, zero-padded to GTIN-14 so UPC-A/EAN-13/EAN-8 collide correctly) +
+unique index (multiple NULLs allowed). `public.is_valid_gtin14()` — mod-10 checksum, verified
+against 5 real vectors (2 UK EAN-13, 1 UPC-A, 1 EAN-8, 1 corrupted-check-digit reject) before and
+after applying. `crawl_targets` table added for Phase 2's retailer harvest (identity fields only —
+brand/name/pack_size/gtin/source — RLS enabled, no policies, matching `source_domain_allowlist`'s
+service-role-only pattern; never a path into `foods`). A synchronous trigger enforcing
+"`complete` implies has-ingredients" was considered and rejected: `ingredients/confirm/route.ts`
+inserts the `foods` row with `ingredient_data_status = 'complete'` in one call, then
+`food_ingredients` rows in a separate later call — a same-transaction trigger would break that
+flow. Used a scheduled `pg_cron` assertion (`assert_complete_foods_have_ingredients()`, daily
+06:00) instead. Supabase's security advisor flagged mutable `search_path` on both new functions
+immediately after the first migration; fixed in a same-session follow-up migration
+(`lock_search_path_on_gtin_and_assertion_functions`).
+
+**3. AADF quarantine.** 2 Canidae rows (`Grain-Free Pure Elements`, `Grain-Free Puppy`) were
+sourced from `allaboutdogfood.co.uk`, whose ratings/editorial are copyright and whose compilation
+is UK-database-right protected — scraping it is now explicitly forbidden. Both were marked
+`complete` with 11 and 10 `food_ingredients` rows respectively despite an 21.9-row average for
+genuinely complete foods (abbreviated summaries, not full transcriptions) and both were already
+`product_availability_status = 'discontinued'`. Snapshotted to `contributed_foods`
+(`status = 'rejected'`, full ingredient/nutrient payload preserved for audit) before deleting the
+21 live `food_ingredients` rows and flipping `foods.ingredient_data_status` to `'pending'` with a
+reason. `allaboutdogfood.co.uk` added to `source_domain_allowlist` with `approved = false` and a
+note, so no future crawl can touch it by accident.
+
+**4. James Wellbeloved orphan fixed.** The scheduled assertion above immediately caught a third,
+pre-existing zero-ingredient `complete` row unrelated to AADF — `James Wellbeloved Adult Lamb &
+Rice` (`source_url: wellbeloved.com`), 0 `food_ingredients` rows. Given the same treatment as the
+AADF pair (status → `pending`, reason recorded) so the assertion is green from day one — a check
+that fails on its first real morning gets ignored, not trusted.
+
+**5. Licence position — read this before publishing anything.** The catalogue tables (`foods`,
+`food_ingredients`, and reference tables like `condition_contraindications`,
+`metric_minimum_lag_days`) are now intended for publication as **open data under ODbL** (Open
+Database License). The correlation/monitoring tables — `dogs`, `dog_log_entries`,
+`dog_food_switch_analyses`, `dog_ingredient_suspects`, `ingredient_outcome_signals`, and anything
+else keyed to `auth.users` or an individual dog — **stay closed and must never be published.**
+This removes the ODbL-compatibility objection to using Open Pet Food Facts data in production
+(OPFF is itself ODbL-licensed, so no incompatible-licence conflict once our own catalogue is
+ODbL too) — **but does not change sequencing.** OPFF barcodes still cannot be joined to `foods`
+without a name-matching step, and that step was explicitly held this session (see below). This is
+a durable decision, not yet reflected in `docs/legal-compliance-review.md` (which does not exist
+in this checkout — see the Phase 6 "Needs owner input" list below) or in any RLS/publication
+tooling; nothing has actually been published yet, this only records the decision and the boundary.
+
+**6. OPFF barcode/fixture seed committed.** `fixtures/opff_barcode_seed.json` — 1,392 unique
+products (469 UK-flagged matching the calibrated figure exactly; 954 in the global dog-food
+category, also exact) fetched via the OPFF `/api/v2/search` API (not the 0.9GB bulk CSV — 5 UK
+pages + 10 dog-food-category pages, `page_size=100`, polite 1s spacing, `DogSmartDB/1.0` UA).
+27.9% have non-empty `ingredients_text`, consistent with the 5/20 UK-sample estimate. Attribution
+header embedded in the file itself (source, ODbL licence, retrieval date/method, explicit note
+that this is a barcode-seed/parser-fixture corpus, not a primary ingredient source) plus a new
+top-level `SOURCES.md`.
+
+**7. Fuzzy brand/name matching against OPFF explicitly held, not done.** OPFF's UK brand strings
+include real-world typos (`pedogree`, `pedigred`, `harringrons`, `royal canın`) — fuzzy-matching
+`foods` against a corpus that is itself misspelled would attach wrong GTINs, and a wrong identity
+is worse than an absent one (same principle as the original identity-ambiguous problem this phase
+exists to fix). Only 17 of 57 brands in `foods` appear in OPFF's UK set at all, and OPFF averages
+3.6 products per brand against some UK brands' hundreds of SKUs — too thin to be worth the
+false-positive risk. Re-resolving the 204 `identity_ambiguous`/`ambiguous_formula` rows waits for
+exact retailer GTINs in Phase 2, not name-matching against OPFF.
+
+**Explicitly not started:** Phase 2 (retailer crawling, extraction pipeline). A schema separation
+task is happening in a separate session before Phase 2 begins — the catalogue tables are moving
+behind a restricted access boundary — so no ingest pipeline should be written against current
+table locations until that lands.
+
+## Supabase free-plan keepalive (2026-07-26, latest)
+
+Owner ask: the free-tier Supabase project must not be auto-suspended for inactivity.
+**Uncommitted.** No schema change, no migration, nothing deployed yet.
+
+### The rule being defended against
+Supabase pauses a Free plan project after ~7 days of low **database** activity; their guidance
+is "a few user requests to the database each day over the previous week"
+(https://supabase.com/docs/guides/platform/free-project-pausing). Vercel builds, deploys and
+Supabase dashboard visits do not count — the query has to reach Postgres. A paused project is
+restorable for 90 days, but it is a cold, manual restore.
+
+### Why not just rely on the existing daily crons
+`correlation-engine` and `inactivity-check` already run daily and do touch the database, so in
+principle the project was already being kept warm. That is a side effect, not a guarantee:
+either job can throw, short-circuit on an empty working set, or be edited later, and the
+project then drifts toward a pause with no signal other than Supabase's warning email. The
+keepalive is deliberately a separate, trivial endpoint that can only fail for one reason.
+
+### What was added
+- `src/app/api/cron/keepalive/route.ts` — GET|POST, gated by the existing `isCronAuthorized`
+  (so: `Authorization: Bearer $CRON_SECRET`, or an admin session token). Does one read:
+  `select outcome_metric from metric_minimum_lag_days limit 1`. Chosen because it is a small
+  static reference table that is never empty and never written by user traffic. Read via the
+  **service-role** client so a future RLS change on that table cannot silently turn the
+  keepalive into a no-op. Returns 500 on a database error rather than a cheerful 200 — a
+  keepalive that lies about reaching Postgres is worse than none.
+- `.github/workflows/supabase-keepalive.yml` — the real schedule: 01:10, 07:10, 13:10, 19:10
+  UTC, plus a manual `workflow_dispatch` button. Retries 3× with a 20 s gap so a Vercel cold
+  start is not misread as a dead database.
+- `vercel.json` — a fourth cron entry, `/api/cron/keepalive` at 13:00 UTC, as a backstop.
+
+### Why the schedule lives in GitHub Actions rather than Vercel
+Vercel **Hobby-plan cron jobs may only run once per day**; a more frequent expression fails the
+deployment (per-project cron *count* limits were lifted to 100 on all plans in Jan 2026, but
+the frequency limit stands). One ping a day is a thin margin against "a few requests each day",
+so GitHub Actions carries the 6-hourly schedule and Vercel keeps a single daily ping.
+
+### Verified this session (against the live DB via a running dev server)
+- authorised GET → `200 {"ok":true,"rows":1}`; POST → 200.
+- no header → 401; wrong secret → 401.
+- The workflow's shell script was extracted and run as-is: success path exits 0; 401 path
+  retries 3× then exits 1 with a `::error::`; missing-secrets guard exits 1 immediately.
+- `npx tsc --noEmit` clean.
+- First draft selected a column `metric` that does not exist; the fail-loud 500 caught it
+  immediately. Real column is `outcome_metric`.
+
+### Needs owner action before this works in production
+1. Add two **GitHub Actions repository secrets** (Settings → Secrets and variables → Actions):
+   `APP_BASE_URL` = `https://dog-food-helper.vercel.app` (no trailing slash), and `CRON_SECRET`
+   = the same value already in the Vercel project env. Without both, the workflow fails loudly
+   rather than pinging nothing.
+2. Deploy to production — Vercel cron entries only activate on production deployments.
+3. Note: **GitHub disables scheduled workflows after 60 days with no commits to the repo.**
+   GitHub emails admins first; re-enable from the Actions tab.
+4. Separate risk, not covered here: the `Dog-smart-learning-centre` Supabase project
+   (`spsdfdlufqcduekqxxjk`) is in the same free org and has the same pause exposure.
+
+## Contributor food submissions + fuller discovery extraction (2026-07-26)
 
 Owner ask: friends with their own Claude subscriptions want to help populate the food
 catalogue, without being given access to the Supabase project. **Uncommitted.** One migration
