@@ -135,6 +135,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Dog not found' }, { status: 404 });
     }
 
+    // Restriction substances, for the opacity caution below (composition
+    // opacity never gates — see hardFilter.ts — but a dog with a recorded
+    // sensitivity still deserves to know a food's label can't rule it out).
+    const { data: restrictionRows } = await supabaseAdmin
+      .from('dog_restrictions')
+      .select('substance')
+      .eq('dog_id', dog_id);
+    const restrictionSubstances = (restrictionRows ?? []).map((r) => r.substance);
+
     // 1. Hard filter — deterministic SQL, never LLM (architecture doc §2)
     const hardFilterResult = await applyHardFilter(dog_id);
 
@@ -241,11 +250,21 @@ export async function POST(request: NextRequest) {
     // fetched above in one query via the food_full view.
     const recommendations = top.map((s) => {
       const full = detail.get(s.food.id);
+      // Warn, never rank down or remove (owner decision, 2026-07-28): a
+      // recorded sensitivity plus an opaque legal-category ingredient means
+      // the label itself can't confirm the food is free of it — that's
+      // different from the food actually containing it, which the
+      // named-ingredient hard filter above already excludes on.
+      const opacityCaution =
+        restrictionSubstances.length > 0 && s.food.composition_is_opaque
+          ? `Composition lists ${(s.food.composition_opaque_terms ?? []).join(', ')} without naming the source, so this food cannot be confirmed free of ${restrictionSubstances.join(', ')}. Check the pack or ask your vet.`
+          : null;
       return {
         food_id: s.food.id,
         brand: s.food.brand,
         name: s.food.name,
         food_type: s.food.food_type,
+        opacity_caution: opacityCaution,
         score: Math.round(s.overall_score * 1000) / 1000,
         confidence: s.confidence,
         reason: s.reason,

@@ -82,6 +82,16 @@ export interface Food {
   last_verified_at?: string;
   created_at: string;
   updated_at: string;
+  // Opacity WARNS, never gates (owner decision, 2026-07-28 — see
+  // hardFilter.ts and the recommendation card): true when a top-level
+  // ingredient is a legal category that can conceal a specific
+  // protein/animal-derived source (compositionParser.concealsAnimalSource).
+  // A boolean alone can't tell "one opaque term covering ~96% of the food"
+  // from "one opaque term on the fat line only, both proteins named" —
+  // composition_opaque_terms carries the actual matched terms so the UI
+  // can say what's unnamed rather than the app deciding it's disqualifying.
+  composition_is_opaque?: boolean;
+  composition_opaque_terms?: string[];
 }
 
 export interface FoodIngredient {

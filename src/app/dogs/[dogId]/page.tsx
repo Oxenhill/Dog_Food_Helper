@@ -17,6 +17,11 @@ interface Recommendation {
   score: number;
   confidence: number;
   reason: string;
+  // Warns only, never a reason this food was excluded or ranked down — see
+  // src/app/api/recommendations/route.ts. Null unless the dog has a recorded
+  // restriction AND this food's composition includes an unnamed legal
+  // category (e.g. "Meat and animal derivatives") that could conceal it.
+  opacity_caution: string | null;
   estimated_monthly_cost: number | null;
   // WS4 #3 — clients need to see what's actually in a recommended food.
   // Empty means no ingredient list has been recorded yet, never "no ingredients".
@@ -286,6 +291,9 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
                       <p className="metric help-text mt-1">
                         Est. £{r.estimated_monthly_cost.toFixed(2)}/month
                       </p>
+                    )}
+                    {r.opacity_caution && (
+                      <div className="callout-disclaimer mt-2 text-[13px]">{r.opacity_caution}</div>
                     )}
 
                     {/* What's actually in it — the owner's request. Never

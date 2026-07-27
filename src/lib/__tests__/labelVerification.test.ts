@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { numberAppearsInText, verifyNumericFields } from '../labelVerification';
-import { isLegalCategory } from '../compositionParser';
+import { isLegalCategory, concealsAnimalSource } from '../compositionParser';
 
 /**
  * Fixture modelled on the labelling pattern that dropped it: Royal Canin and
@@ -62,4 +62,17 @@ test('isLegalCategory flags "animal fats" and "minerals" as generic legal catego
   assert.equal(isLegalCategory('minerals'), true);
   assert.equal(isLegalCategory('rice flour'), false);
   assert.equal(isLegalCategory('hydrolysed poultry liver'), false);
+});
+
+test('concealsAnimalSource: "minerals" is a legal category but never a stand-in for a hidden protein source', () => {
+  assert.equal(concealsAnimalSource('minerals'), false);
+  assert.equal(concealsAnimalSource('oils and fats'), false);
+  assert.equal(concealsAnimalSource('ec permitted additives'), false);
+  assert.equal(concealsAnimalSource('yeast products'), false);
+});
+
+test('concealsAnimalSource: "meat and animal derivatives" and "cereals" can hide a specific allergen source', () => {
+  assert.equal(concealsAnimalSource('meat and animal derivatives'), true);
+  assert.equal(concealsAnimalSource('cereals'), true);
+  assert.equal(concealsAnimalSource('animal fats'), true);
 });
