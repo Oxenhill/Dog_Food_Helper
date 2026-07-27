@@ -230,6 +230,13 @@ test('a genuine European decimal comma is still parsed correctly alongside thous
   assert.equal(ingredients[1].inclusion_pct, 0.15);
 });
 
+test('real bug (3 Bakers foods): footnote asterisks on a bare legal-category token must not defeat matching', () => {
+  const { ingredients } = parseComposition('Cereals, Meat and Animal Derivatives, Vegetables* **, Minerals');
+  const veg = ingredients.find((i) => i.name.toLowerCase().includes('vegetable'));
+  assert.ok(veg, `expected a vegetables entry, got: ${JSON.stringify(ingredients)}`);
+  assert.equal(veg!.category, 'legal_category');
+});
+
 test('every hand-authored fixture parses without throwing and yields at least one ingredient', () => {
   for (const { description, raw } of HAND_AUTHORED) {
     assert.doesNotThrow(() => parseComposition(raw), description);
