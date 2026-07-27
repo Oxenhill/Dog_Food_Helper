@@ -1,0 +1,77 @@
+name: Supabase keepalive
+
+# Stops the free-plan Supabase project being auto-paused for inactivity.
+#
+# Supabase pauses a Free plan project after ~7 days of low *database* activity.
+# Their guidance is "a few user requests to the database each day over the
+# previous week" — see
+# https://supabase.com/docs/guides/platform/free-project-pausing
+#
+# Vercel Cron is the obvious home for this, but Hobby-plan cron jobs may only
+# run once per day, so vercel.json carries a single daily backstop ping and
+# this workflow carries the real schedule (every 6 hours). Both hit the same
+# endpoint: /api/cron/keepalive, which does one small read against Postgres.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   APP_BASE_URL  e.g. https://dog-food-helper.vercel.app  (no trailing slash)
+#   CRON_SECRET   the same value set in the Vercel project's env vars
+#
+# NOTE: GitHub disables scheduled workflows in a repository after 60 days with
+# no commits. If this repo goes quiet for two months, re-enable the workflow
+# from the Actions tab (GitHub emails the repo admins first).
+
+on:
+  schedule:
+    # 01:10, 07:10, 13:10, 19:10 UTC. Offset off the hour because scheduled
+    # workflows are queued on a best-effort basis and on-the-hour slots are
+    # the most contended.
+    - cron: '10 1,7,13,19 * * *'
+  workflow_dispatch: # manual "Run workflow" button, for testing
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping keepalive endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_BASE_URL}" ] || [ -z "${CRON_SECRET}" ]; then
+            echo "::error::APP_BASE_URL and CRON_SECRET repository secrets must both be set."
+            exit 1
+          fi
+
+          # Retry a few times: a transient Vercel cold start or 5xx must not be
+          # read as "the database is unreachable".
+          for attempt in 1 2 3; do
+            http_status=$(curl --silent --show-error --location \
+              --max-time 30 \
+              --output response.json \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${CRON_SECRET}" \
+              "${APP_BASE_URL}/api/cron/keepalive") || http_status="000"
+
+            echo "Attempt ${attempt}: HTTP ${http_status}"
+            cat response.json || true
+            echo
+
+            if [ "${http_status}" = "200" ]; then
+              echo "Supabase keepalive ping succeeded."
+              exit 0
+            fi
+
+            if [ "${attempt}" -lt 3 ]; then
+              sleep 20
+            fi
+          done
+
+          echo "::error::Keepalive ping failed after 3 attempts (last status ${http_status}). The Supabase project may drift toward an inactivity pause."
+          exit 1

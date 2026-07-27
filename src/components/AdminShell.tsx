@@ -1,9 +1,90 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { getAccessToken, sessionAuthHeaders, clearSession } from '@/lib/session';
+
+interface SystemAlert {
+  id: string;
+  check_name: string;
+  message: string;
+  detected_at: string;
+}
+
+/**
+ * Unresolved system_alerts, shown on every admin page (not a dedicated
+ * screen) so a failing daily assertion is seen on the next ordinary visit
+ * to /admin, not only if someone remembers to go looking for it. Fetched
+ * once AdminShell confirms is_admin; each row resolves independently.
+ */
+function SystemAlertsBanner() {
+  const [alerts, setAlerts] = useState<SystemAlert[]>([]);
+  const [resolving, setResolving] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/alerts', { headers: sessionAuthHeaders() });
+      if (!res.ok) return;
+      const body = await res.json();
+      setAlerts(Array.isArray(body?.alerts) ? body.alerts : []);
+    } catch {
+      // Silent: a failed alert fetch shouldn't itself alarm the page. The
+      // underlying assertions still re-alert on their next scheduled run.
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function resolve(id: string) {
+    setResolving(id);
+    try {
+      const res = await fetch(`/api/admin/alerts/${id}`, {
+        method: 'PATCH',
+        headers: { ...sessionAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved: true }),
+      });
+      if (res.ok) {
+        setAlerts((prev) => prev.filter((a) => a.id !== id));
+      }
+    } finally {
+      setResolving(null);
+    }
+  }
+
+  if (alerts.length === 0) return null;
+
+  return (
+    <div className="mb-6 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900">
+      <p className="font-medium">
+        {alerts.length} unresolved system alert{alerts.length === 1 ? '' : 's'}
+      </p>
+      <ul className="mt-2 space-y-2">
+        {alerts.map((alert) => (
+          <li key={alert.id} className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-xs">{alert.check_name}</p>
+              <p>{alert.message}</p>
+              <p className="text-xs text-red-700">
+                Detected {new Date(alert.detected_at).toLocaleString()}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => resolve(alert.id)}
+              disabled={resolving === alert.id}
+              className="btn-ghost btn-sm whitespace-nowrap"
+            >
+              {resolving === alert.id ? 'Resolving…' : 'Resolve'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * Shared chrome + access guard for every /admin page. Fail-closed:
@@ -121,6 +202,7 @@ export default function AdminShell({
       </header>
 
       <main className="container-page">
+        <SystemAlertsBanner />
         {(eyebrow || title) && (
           <div className="mb-6">
             {eyebrow && <p className="eyebrow">{eyebrow}</p>}
