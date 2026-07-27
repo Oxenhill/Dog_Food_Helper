@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { authHeaders } from '@/lib/clientAuth';
 import { resizeImageForUpload } from '@/lib/clientImageResize';
+import { reportClientError } from '@/lib/clientErrorLog';
 
 /**
  * Owner-facing packet capture: photograph the front and back, check what we
@@ -118,17 +119,39 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
       });
     } catch (err) {
       console.error('[LabelCapture] client-side image processing failed', err);
+      reportClientError('extract_resize_failed', {
+        message: err instanceof Error ? err.message : String(err),
+        context: {
+          front_type: front.type,
+          front_size: front.size,
+          back_type: back?.type ?? null,
+          back_size: back?.size ?? null,
+        },
+      });
       setError('Could not process that photo on this device. Try a different photo, or retake it.');
       setBusy(false);
       return;
     }
 
+    const fd = new FormData();
+    fd.append('front', resizedFront);
+    if (resizedBack) fd.append('back', resizedBack);
+
+    // The exact byte size of the multipart body about to go over the wire —
+    // logged unconditionally, before the fetch, so a rejection at the
+    // platform edge (which never reaches our route handler, and so leaves no
+    // server-side request log of its own) still gets a number attached to it.
+    let payloadBytes = resizedFront.size + (resizedBack?.size ?? 0);
+    try {
+      payloadBytes = (await new Response(fd).blob()).size;
+    } catch {
+      // Fall back to the sum above — rare, some platform can't re-encode a
+      // FormData into a Response body.
+    }
+    reportClientError('extract_payload_size', { bytes: payloadBytes });
+
     let res: Response;
     try {
-      const fd = new FormData();
-      fd.append('front', resizedFront);
-      if (resizedBack) fd.append('back', resizedBack);
-
       res = await fetch('/api/ingredients/extract', {
         method: 'POST',
         headers: authHeaders(),
@@ -136,16 +159,29 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
       });
     } catch (err) {
       console.error('[LabelCapture] network request failed', err);
+      reportClientError('extract_fetch_failed', {
+        bytes: payloadBytes,
+        message: err instanceof Error ? err.message : String(err),
+      });
       setError('Could not reach the server. Check your connection and try again.');
       setBusy(false);
       return;
     }
 
+    reportClientError('extract_response', { status: res.status, bytes: payloadBytes });
+
     let json: { extracted?: Extraction; existing_food?: ExistingFood | null; error?: string };
     try {
-      json = await res.json();
+      json = await res.clone().json();
     } catch (err) {
-      console.error('[LabelCapture] response was not valid JSON', { status: res.status }, err);
+      const bodyText = await res.text().catch(() => '');
+      console.error('[LabelCapture] response was not valid JSON', { status: res.status }, err, bodyText);
+      reportClientError('extract_parse_failed', {
+        status: res.status,
+        bytes: payloadBytes,
+        message: err instanceof Error ? err.message : String(err),
+        context: { body_snippet: bodyText.slice(0, 500) },
+      });
       setError(`Unexpected response from the server (status ${res.status}). Please try again.`);
       setBusy(false);
       return;
