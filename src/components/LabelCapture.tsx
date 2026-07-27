@@ -33,9 +33,13 @@ interface Extraction {
   phosphorus_pct: number | null;
   sodium_pct: number | null;
   calcium_pct: number | null;
+  linoleic_acid_pct: number | null;
+  epa_dha_pct: number | null;
+  omega3_pct: number | null;
   calories_per_kg: number | null;
   life_stage_text: string | null;
   pack_size_text: string | null;
+  composition_panel_text: string | null;
   notes: string | null;
   unreadable: boolean;
 }
@@ -64,6 +68,9 @@ const NUTRIENT_FIELDS: { key: keyof Extraction; label: string }[] = [
   { key: 'phosphorus_pct', label: 'Phosphorus' },
   { key: 'sodium_pct', label: 'Sodium' },
   { key: 'calcium_pct', label: 'Calcium' },
+  { key: 'linoleic_acid_pct', label: 'Linoleic acid' },
+  { key: 'epa_dha_pct', label: 'EPA+DHA' },
+  { key: 'omega3_pct', label: 'Omega-3' },
 ];
 
 type Step = 'capture' | 'review' | 'done';
@@ -229,6 +236,10 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
           phosphorus_pct: draft.phosphorus_pct,
           sodium_pct: draft.sodium_pct,
           calcium_pct: draft.calcium_pct,
+          linoleic_acid_pct: draft.linoleic_acid_pct,
+          epa_dha_pct: draft.epa_dha_pct,
+          omega3_pct: draft.omega3_pct,
+          composition_panel_text: draft.composition_panel_text,
         }),
       });
       const json = await res.json();

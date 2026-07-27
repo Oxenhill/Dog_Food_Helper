@@ -5,6 +5,8 @@ import { findDuplicateFood } from '@/lib/foodDuplicates';
 import { FoodType } from '@/lib/types';
 import { validateScrapedGtin } from '@/lib/gtin';
 import { enqueueGtinVerification } from '@/lib/gs1Verify';
+import { verifyNumericFields } from '@/lib/labelVerification';
+import { isLegalCategory } from '@/lib/compositionParser';
 
 export const runtime = 'nodejs';
 
@@ -19,6 +21,9 @@ const NUTRIENT_COLUMNS = [
   'phosphorus_pct',
   'sodium_pct',
   'calcium_pct',
+  'linoleic_acid_pct',
+  'epa_dha_pct',
+  'omega3_pct',
 ] as const;
 
 interface ConfirmBody {
@@ -36,6 +41,11 @@ interface ConfirmBody {
   phosphorus_pct?: number | null;
   sodium_pct?: number | null;
   calcium_pct?: number | null;
+  linoleic_acid_pct?: number | null;
+  epa_dha_pct?: number | null;
+  omega3_pct?: number | null;
+  /** Verbatim OCR of the composition/analytical-constituents panel — every numeric field above is verified against this before being written. See labelVerification.ts. */
+  composition_panel_text?: string | null;
   gtin?: string | null;
 }
 
@@ -119,16 +129,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const nutrients: Record<string, number | null> = {};
+    const rawNutrients: Record<string, number | null> = {};
     for (const column of NUTRIENT_COLUMNS) {
-      nutrients[column] = cleanPct(body[column]);
+      rawNutrients[column] = cleanPct(body[column]);
     }
 
     const caloriesRaw = body.calories_per_kg;
-    const calories =
+    const rawCalories =
       caloriesRaw === null || caloriesRaw === undefined || !Number.isFinite(Number(caloriesRaw))
         ? null
         : Math.max(0, Math.round(Number(caloriesRaw)));
+
+    // Every numeric field is checked against the verbatim OCR panel text
+    // before being written — a value the model (or the owner, copying from
+    // the model's draft) could not actually point to on the label is
+    // discarded rather than trusted. See labelVerification.ts; this is the
+    // same defence the crawler path already applies to ingredient NAMES
+    // (checkExcerptSupport in contributedFoods.ts), extended to numbers.
+    const panelText = typeof body.composition_panel_text === 'string' ? body.composition_panel_text : null;
+    const { verified: nutrients, rejected: rejectedNutrientFields } = verifyNumericFields(
+      rawNutrients,
+      panelText
+    );
+    const {
+      verified: { calories_per_kg: calories },
+      rejected: rejectedCaloriesField,
+    } = verifyNumericFields({ calories_per_kg: rawCalories }, panelText);
+    const rejectedFields = [...rejectedNutrientFields, ...rejectedCaloriesField];
+
+    // Ingredients declared only as a legal category ("Animal fats", "Minerals")
+    // rather than a named source — the actual protein/fat source is
+    // genuinely unidentified. Flagged so the allergy hard filter never reads
+    // this as "no match" for a species-specific restriction.
+    const hasGenericCategoryIngredient = ingredients.some((name) => isLegalCategory(name));
 
     const isTreat = body.is_treat === true;
 
@@ -184,6 +217,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // `complete` only holds when nothing about this submission needs a human
+    // to look again: every numeric field the owner confirmed actually
+    // verified against the panel text, and no ingredient hides its real
+    // identity behind a generic legal category. Either condition instead
+    // gets `needs_verification` — filterCandidateFoods() (hardFilter.ts)
+    // already excludes any non-'complete' food from the ingredient-gated
+    // candidate pool, so this alone keeps an unverified row out of an
+    // allergy match without any filter-logic change.
+    const statusIssues: string[] = [];
+    if (rejectedFields.length > 0) {
+      statusIssues.push(
+        `could not verify against the label text: ${rejectedFields.join(', ')} (written as null)`
+      );
+    }
+    if (hasGenericCategoryIngredient) {
+      statusIssues.push('at least one ingredient is a generic legal category with an unidentified source');
+    }
+    const ingredientDataStatus = statusIssues.length > 0 ? 'needs_verification' : 'complete';
+    const statusReason =
+      statusIssues.length > 0
+        ? `Transcribed from packet photos and confirmed by the submitting owner, but ${statusIssues.join('; ')}.`
+        : 'Transcribed from packet photos and confirmed by the submitting owner.';
+
     // Genuinely new product — create it.
     const { data: newFood, error: foodError } = await supabaseAdmin
       .from('foods')
@@ -195,14 +251,15 @@ export async function POST(request: NextRequest) {
         calories_per_kg: calories,
         gtin: validatedGtin,
         ...nutrients,
+        composition_raw: panelText,
         ingredient_source: 'label_photo',
         submitted_by: user.id,
         // The packet in the owner's hand IS the current recipe, and they have
         // just read it — which is exactly what these audit columns record.
-        ingredient_data_status: 'complete',
+        ingredient_data_status: ingredientDataStatus,
         recipe_version_status: 'current',
         product_availability_status: 'available',
-        ingredient_status_reason: 'Transcribed from packet photos and confirmed by the submitting owner.',
+        ingredient_status_reason: statusReason,
         ingredient_status_checked_at: new Date().toISOString(),
         last_verified_at: new Date().toISOString(),
       })
@@ -217,7 +274,7 @@ export async function POST(request: NextRequest) {
     const rows = ingredients.map((ingredient_name, index) => ({
       food_id: newFood.id,
       ingredient_name,
-      ingredient_category: null,
+      ingredient_category: isLegalCategory(ingredient_name) ? 'legal_category' : null,
       position_in_list: index + 1,
     }));
 

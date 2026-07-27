@@ -66,6 +66,12 @@ export const INGREDIENT_CATEGORIES = [
     label: 'Additive',
     hint: 'Preservatives, antioxidants, colourings, palatants.',
   },
+  {
+    value: 'legal_category',
+    label: 'Generic legal category (source unspecified)',
+    hint:
+      'A legally-permitted category declaration ("Animal fats", "Minerals", "Cereals" — see compositionParser.LEGAL_CATEGORY_TERMS) rather than a named ingredient. The actual source is not identified by the label — never treat this as ruling out a specific allergen.',
+  },
   { value: 'other', label: 'Other / unclear', hint: 'Use when the page is genuinely ambiguous.' },
 ] as const;
 
