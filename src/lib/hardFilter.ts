@@ -45,6 +45,61 @@ interface Contraindication {
   threshold: number | null;
 }
 
+/** Foods that can never be bought are excluded regardless of ingredient data. */
+const UNAVAILABLE_STATUSES = new Set(['unavailable', 'discontinued']);
+
+export interface CandidateFoodRow {
+  id: string;
+  ingredient_data_status: string;
+  product_availability_status: string;
+}
+
+/**
+ * True when a dog has at least one criterion that would exclude a food based
+ * on its ingredients: an explicit restriction, or a health condition matching
+ * an approved ingredient-based contraindication.
+ *
+ * This decides whether the ingredient-completeness gate below applies at all.
+ * A dog with no ingredient-based exclusion criterion gets today's behaviour
+ * (no gate, full candidate pool) — the gate exists to stop a missing
+ * ingredient list from reading as "no allergen match found" for a dog who
+ * actually needs that match to be checked, not to thin every dog's results.
+ */
+export function dogNeedsIngredientGate(
+  hasIngredientRestrictions: boolean,
+  hasApprovedIngredientContraindications: boolean
+): boolean {
+  return hasIngredientRestrictions || hasApprovedIngredientContraindications;
+}
+
+/**
+ * Filters the raw `foods` candidate pool before ingredient/nutrient exclusion
+ * runs.
+ *
+ * - Unavailable/discontinued foods are always dropped — a trust problem
+ *   (43/292 foods today), not a safety one, but cheap to fix in the same
+ *   pass and easy to revert as its own line if it thins results too far.
+ * - When `needsIngredientGate` is true, a food must have
+ *   `ingredient_data_status = 'complete'` AND at least one `food_ingredients`
+ *   row. Both checks matter independently: some `complete` rows have zero
+ *   ingredient rows, so status alone is not sufficient for the allergy path.
+ *   Silence (no ingredients to match against) must never be indistinguishable
+ *   from "checked and safe".
+ */
+export function filterCandidateFoods(
+  foods: CandidateFoodRow[],
+  opts: { needsIngredientGate: boolean; foodIdsWithIngredients: ReadonlySet<string> }
+): CandidateFoodRow[] {
+  return foods.filter((food) => {
+    if (UNAVAILABLE_STATUSES.has(food.product_availability_status)) return false;
+    if (opts.needsIngredientGate) {
+      if (food.ingredient_data_status !== 'complete') return false;
+      if (!opts.foodIdsWithIngredients.has(food.id)) return false;
+    }
+    return true;
+  });
+}
+
 export async function applyHardFilter(dogId: string): Promise<HardFilterResult> {
   const excluded_foods = new Set<string>();
   const excluded_reasons: { food_id: string; reason: string }[] = [];
@@ -67,6 +122,36 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     if (restrictionError) throw restrictionError;
     if (conditionError) throw conditionError;
 
+    // Pull only approved contraindication rules; match to this dog's
+    // conditions in memory (case-insensitive). Approved-only is enforced here
+    // so a draft mapping can never affect a real recommendation. Fetched
+    // ahead of the candidate query below because whether this dog has any
+    // *ingredient*-based contraindication decides whether the ingredient
+    // gate applies.
+    const dogConditions = new Set(
+      (conditions ?? []).map((c) => c.condition.toLowerCase().trim()).filter(Boolean)
+    );
+
+    const { data: contraRows, error: contraError } = await supabaseAdmin
+      .from('condition_contraindications')
+      .select('condition, contraindicated_ingredient, nutrient, comparator, threshold')
+      .eq('approved', true);
+
+    if (contraError) throw contraError;
+
+    const applicable = ((contraRows ?? []) as Contraindication[]).filter((row) =>
+      dogConditions.has(row.condition.toLowerCase().trim())
+    );
+
+    const hasIngredientRestrictions = !!restrictions && restrictions.length > 0;
+    const hasApprovedIngredientContraindications = applicable.some(
+      (rule) => !!rule.contraindicated_ingredient
+    );
+    const needsIngredientGate = dogNeedsIngredientGate(
+      hasIngredientRestrictions,
+      hasApprovedIngredientContraindications
+    );
+
     // Get the candidate universe.
     //
     // Treats are excluded here rather than filtered out later: this is a MEAL
@@ -76,11 +161,29 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     // candidates for "what should I feed my dog".
     const { data: foods, error: foodError } = await supabaseAdmin
       .from('foods')
-      .select('id, brand, name')
+      .select('id, brand, name, ingredient_data_status, product_availability_status')
       .eq('is_treat', false);
 
     if (foodError) throw foodError;
     if (!foods) return { excluded_foods: [], excluded_reasons: [], suitable_food_ids: [] };
+
+    // Only fetched when actually needed — a dog with no ingredient-based
+    // exclusion criterion never pays this extra query.
+    let foodIdsWithIngredients: ReadonlySet<string> = new Set();
+    if (needsIngredientGate) {
+      const { data: ingredientFoodIds, error: ingredientFoodIdsError } = await supabaseAdmin
+        .from('food_ingredients')
+        .select('food_id');
+
+      if (ingredientFoodIdsError) throw ingredientFoodIdsError;
+      foodIdsWithIngredients = new Set((ingredientFoodIds ?? []).map((row) => row.food_id));
+    }
+
+    const candidateFoods = filterCandidateFoods(
+      foods as unknown as CandidateFoodRow[],
+      { needsIngredientGate, foodIdsWithIngredients }
+    );
+    const candidateFoodIds = new Set(candidateFoods.map((f) => f.id));
 
     // --- 1) Ingredient restrictions (allergy / intolerance / preference) ----
     if (restrictions && restrictions.length > 0) {
@@ -99,26 +202,9 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     }
 
     // --- 2) Health-condition contraindications (vet-approved only) ----------
-    if (conditions && conditions.length > 0) {
-      // Case-insensitive set of the dog's condition names.
-      const dogConditions = new Set(
-        conditions.map((c) => c.condition.toLowerCase().trim()).filter(Boolean)
-      );
-
-      // Pull only approved rules; match to this dog's conditions in memory
-      // (case-insensitive). Approved-only is enforced here so a draft mapping
-      // can never affect a real recommendation.
-      const { data: contraRows, error: contraError } = await supabaseAdmin
-        .from('condition_contraindications')
-        .select('condition, contraindicated_ingredient, nutrient, comparator, threshold')
-        .eq('approved', true);
-
-      if (contraError) throw contraError;
-
-      const applicable = ((contraRows ?? []) as Contraindication[]).filter((row) =>
-        dogConditions.has(row.condition.toLowerCase().trim())
-      );
-
+    // `applicable` was already resolved above (needed to decide the ingredient
+    // gate before the candidate query ran) — reused here rather than re-fetched.
+    {
       for (const rule of applicable) {
         if (rule.contraindicated_ingredient) {
           // Ingredient-based contraindication: exclude foods containing it.
@@ -197,9 +283,9 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
       }
     }
 
-    // Suitable food IDs = all foods − excluded foods.
+    // Suitable food IDs = the gated candidate pool − excluded foods.
     const suitable_food_ids = foods
-      .filter((f) => !excluded_foods.has(f.id))
+      .filter((f) => candidateFoodIds.has(f.id) && !excluded_foods.has(f.id))
       .map((f) => f.id);
 
     return {
