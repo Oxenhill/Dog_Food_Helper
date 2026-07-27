@@ -97,6 +97,18 @@ export const LabelExtractionSchema = z.object({
     .string()
     .nullable()
     .describe('Pack size as printed (e.g. "12kg", "400g"), or null.'),
+  // The human-readable digit string printed beneath the barcode — not the
+  // bars themselves, which a vision-language model does not reliably
+  // decode. Validated against the GTIN mod-10 checksum server-side before
+  // it is ever written to foods.gtin (see src/lib/gtin.ts); a misread
+  // digit here is caught there, not trusted just because the model read
+  // something that looked like a barcode.
+  gtin_raw: z
+    .string()
+    .nullable()
+    .describe(
+      'The digit string printed beneath the barcode on the packet (typically 8, 12, 13 or 14 digits), copied exactly. Null if no barcode is visible or the digits are not legible.'
+    ),
   notes: z
     .string()
     .nullable()
@@ -123,8 +135,8 @@ export interface LabelImage {
 
 const FACE_LABEL: Record<LabelImage['face'], string> = {
   front: 'FRONT of packet (expect brand, product name, life stage, pack size)',
-  back: 'BACK of packet (expect composition/ingredients and analytical constituents)',
-  extra: 'ADDITIONAL photo (may show the feeding guide or energy content)',
+  back: 'BACK of packet (expect composition/ingredients, analytical constituents, and usually the barcode)',
+  extra: 'ADDITIONAL photo (may show the feeding guide, energy content, or the barcode)',
 };
 
 /**

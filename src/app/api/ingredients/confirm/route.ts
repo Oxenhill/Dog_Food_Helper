@@ -3,6 +3,8 @@ import { requireUser } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 import { findDuplicateFood } from '@/lib/foodDuplicates';
 import { FoodType } from '@/lib/types';
+import { validateScrapedGtin } from '@/lib/gtin';
+import { enqueueGtinVerification } from '@/lib/gs1Verify';
 
 export const runtime = 'nodejs';
 
@@ -34,6 +36,7 @@ interface ConfirmBody {
   phosphorus_pct?: number | null;
   sodium_pct?: number | null;
   calcium_pct?: number | null;
+  gtin?: string | null;
 }
 
 function cleanPct(value: unknown): number | null {
@@ -129,6 +132,14 @@ export async function POST(request: NextRequest) {
 
     const isTreat = body.is_treat === true;
 
+    // Checksum first — cheap, immediate, local. A digit an owner or the OCR
+    // model misread fails here and is simply never written, rather than
+    // becoming a wrong identity anchor. GS1 registry verification (does
+    // this number belong to a real licensed product) happens separately
+    // and asynchronously after the food is created — see gs1Verify.ts for
+    // why that can't be synchronous on a 30-lookups/day free tier.
+    const validatedGtin = validateScrapedGtin(body.gtin ?? null);
+
     // Already hold this product? Record the observation, change nothing.
     const duplicate = await findDuplicateFood(brand, name);
     if (duplicate) {
@@ -182,6 +193,7 @@ export async function POST(request: NextRequest) {
         food_type: foodType,
         is_treat: isTreat,
         calories_per_kg: calories,
+        gtin: validatedGtin,
         ...nutrients,
         ingredient_source: 'label_photo',
         submitted_by: user.id,
@@ -216,6 +228,16 @@ export async function POST(request: NextRequest) {
       console.error('ingredients/confirm: ingredient insert failed, rolling back food', ingredientsError);
       await supabaseAdmin.from('foods').delete().eq('id', newFood.id);
       return NextResponse.json({ error: 'Could not save the ingredient list.' }, { status: 500 });
+    }
+
+    if (validatedGtin) {
+      try {
+        await enqueueGtinVerification(validatedGtin, { foodId: newFood.id, submittedBy: user.id });
+      } catch (err) {
+        // Never fail the submission over the verification queue — the food
+        // and its ingredients are already safely saved at this point.
+        console.error('ingredients/confirm: failed to enqueue GTIN verification', err);
+      }
     }
 
     return NextResponse.json(
