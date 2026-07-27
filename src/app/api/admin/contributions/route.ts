@@ -146,6 +146,7 @@ export async function POST(request: NextRequest) {
     name?: unknown;
     food_type?: unknown;
     is_treat?: unknown;
+    dry_run?: unknown;
   };
   try {
     body = await request.json();
@@ -156,6 +157,10 @@ export async function POST(request: NextRequest) {
   const id = typeof body.id === 'string' ? body.id : '';
   const action = body.action === 'approve' || body.action === 'reject' ? body.action : null;
   const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+  // Two-run discipline on approve (owner decision, 2026-07-28): the first
+  // call previews the exact foods row that would be written and commits
+  // nothing; a second call with dry_run absent/false actually writes it.
+  const dryRun = body.dry_run === true;
   // Overrides — only meaningful for crawler rows, which don't know
   // food_type at all and sometimes have no real product name (falls back
   // to the source URL when the page had no JSON-LD).
@@ -167,6 +172,12 @@ export async function POST(request: NextRequest) {
   if (!id || !action) {
     return NextResponse.json(
       { error: 'Provide `id` and `action` ("approve" or "reject").' },
+      { status: 400 }
+    );
+  }
+  if (action === 'reject' && !note) {
+    return NextResponse.json(
+      { error: 'A review note is required to reject a submission.' },
       { status: 400 }
     );
   }
@@ -313,25 +324,52 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Preserve the actual origin rather than hardcoding one (owner decision,
+  // 2026-07-28): a standalone admin packet capture (/admin/foods) is a real
+  // label read, same as the dog-owner flow, and must be distinguishable from
+  // a third-party contributor's submission or a crawl.
+  const isAdminCapture = row.contributor_label === 'admin-photo-capture';
+  const ingredientSource = isAdminCapture ? 'label_photo' : 'contributor';
+
   let sourceDomain: string | null = null;
-  try {
-    sourceDomain = new URL(row.source_url).hostname.replace(/^www\./, '');
-  } catch {
-    sourceDomain = null;
+  if (!isAdminCapture) {
+    try {
+      sourceDomain = new URL(row.source_url).hostname.replace(/^www\./, '');
+    } catch {
+      sourceDomain = null;
+    }
+  }
+
+  if (dryRun) {
+    return NextResponse.json(
+      {
+        dry_run: true,
+        proposed_food: {
+          ...foodInsert,
+          ingredient_source: ingredientSource,
+          source_url: isAdminCapture ? null : row.source_url,
+          source_domain: sourceDomain,
+        },
+        ingredients_preview: ingredientsToWrite,
+      },
+      { status: 200 }
+    );
   }
 
   const { data: newFood, error: foodError } = await supabaseAdmin
     .from('foods')
     .insert({
       ...foodInsert,
-      ingredient_source: 'contributor',
-      source_url: row.source_url,
+      ingredient_source: ingredientSource,
+      source_url: isAdminCapture ? null : row.source_url,
       source_domain: sourceDomain,
       // The reviewer has just checked the parsed list against the excerpt —
       // that IS the ingredient-completeness verification this status
       // records, the same way a label-photo confirmation does.
       ingredient_data_status: 'complete',
-      ingredient_status_reason: crawlerRow
+      ingredient_status_reason: isAdminCapture
+        ? 'Approved by admin review from a standalone packet-photo capture, verified against the panel text at capture time.'
+        : crawlerRow
         ? 'Approved by admin review from a crawled composition excerpt, checked against the verbatim source text.'
         : 'Approved by admin review from a contributor submission, checked against the verbatim source excerpt.',
       ingredient_status_checked_at: new Date().toISOString(),

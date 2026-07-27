@@ -91,6 +91,11 @@ export default function ContributedFoodsAdmin() {
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
   const [brandOverrides, setBrandOverrides] = useState<Record<string, string>>({});
   const [treatOverrides, setTreatOverrides] = useState<Record<string, boolean>>({});
+  // Two-run discipline on approve: the first click previews the exact foods
+  // row that would be written (writes nothing); a second, explicit click
+  // commits it. Keyed by contribution id; clearing an id's preview (e.g. on
+  // load()) forces a fresh preview before the next commit.
+  const [previews, setPreviews] = useState<Record<string, { proposed_food: Record<string, unknown>; ingredients_preview: unknown[] } | null>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,7 +121,11 @@ export default function ContributedFoodsAdmin() {
     void load();
   }, [load]);
 
-  async function act(id: string, action: 'approve' | 'reject', item?: Contribution) {
+  async function act(id: string, action: 'approve' | 'reject', item?: Contribution, dryRun = false) {
+    if (action === 'reject' && !notes[id]?.trim()) {
+      setError('A review note is required to reject a submission.');
+      return;
+    }
     if (action === 'approve' && item?.is_crawler_row) {
       if (!foodTypeOverrides[id]) {
         setError('Pick a food type before approving — the source page has no field for it.');
@@ -139,6 +148,7 @@ export default function ContributedFoodsAdmin() {
           id,
           action,
           note: notes[id] ?? undefined,
+          ...(action === 'approve' ? { dry_run: dryRun } : {}),
           ...(item?.is_crawler_row && action === 'approve'
             ? {
                 food_type: foodTypeOverrides[id],
@@ -154,6 +164,14 @@ export default function ContributedFoodsAdmin() {
         setError(json.error ?? `That didn't work (${res.status}).`);
         return;
       }
+      if (action === 'approve' && dryRun) {
+        setPreviews((p) => ({
+          ...p,
+          [id]: { proposed_food: json.proposed_food, ingredients_preview: json.ingredients_preview },
+        }));
+        return;
+      }
+      setPreviews((p) => ({ ...p, [id]: null }));
       setFlash(
         action === 'approve'
           ? `Added to the catalogue with ${json.ingredients_written} ingredients.${json.warning ? ` ${json.warning}` : ''}`
@@ -401,6 +419,21 @@ export default function ContributedFoodsAdmin() {
               </section>
             )}
 
+            {item.status === 'pending' && previews[item.id] && (
+              <div className="callout-info flex flex-col gap-2">
+                <p className="font-semibold text-ink">
+                  Preview — nothing written yet. Check this against the packet/page before committing.
+                </p>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-line bg-paper p-2 font-mono text-[11.5px] text-ink-soft">
+                  {JSON.stringify(previews[item.id]?.proposed_food, null, 2)}
+                </pre>
+                <p className="label">Ingredients ({previews[item.id]?.ingredients_preview.length ?? 0})</p>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-line bg-paper p-2 font-mono text-[11.5px] text-ink-soft">
+                  {JSON.stringify(previews[item.id]?.ingredients_preview, null, 2)}
+                </pre>
+              </div>
+            )}
+
             {item.status === 'pending' ? (
               <div className="flex flex-col gap-2">
                 <input
@@ -408,17 +441,38 @@ export default function ContributedFoodsAdmin() {
                   value={notes[item.id] ?? ''}
                   onChange={(e) => setNotes((n) => ({ ...n, [item.id]: e.target.value }))}
                   className="input"
-                  placeholder="Note (optional) — why rejected, or what you corrected"
+                  placeholder="Note — required to reject; optional for approve"
                 />
                 <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={busyId === item.id}
-                    onClick={() => act(item.id, 'approve', item)}
-                    className="btn-primary btn-sm"
-                  >
-                    {busyId === item.id ? 'Working…' : 'Approve & add'}
-                  </button>
+                  {!previews[item.id] ? (
+                    <button
+                      type="button"
+                      disabled={busyId === item.id}
+                      onClick={() => act(item.id, 'approve', item, true)}
+                      className="btn-primary btn-sm"
+                    >
+                      {busyId === item.id ? 'Working…' : 'Preview approve'}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busyId === item.id}
+                        onClick={() => act(item.id, 'approve', item, false)}
+                        className="btn-primary btn-sm"
+                      >
+                        {busyId === item.id ? 'Working…' : 'Confirm & commit'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === item.id}
+                        onClick={() => setPreviews((p) => ({ ...p, [item.id]: null }))}
+                        className="btn-ghost btn-sm"
+                      >
+                        Cancel preview
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     disabled={busyId === item.id}

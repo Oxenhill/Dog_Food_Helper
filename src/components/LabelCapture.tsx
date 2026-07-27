@@ -75,7 +75,20 @@ const NUTRIENT_FIELDS: { key: keyof Extraction; label: string }[] = [
 
 type Step = 'capture' | 'review' | 'done';
 
-export default function LabelCapture({ dogId }: { dogId?: string }) {
+interface LabelCaptureProps {
+  dogId?: string;
+  /**
+   * 'confirm' (default): the owner-facing flow, unchanged — writes straight
+   * to `foods` via /api/ingredients/confirm.
+   * 'contribute': the admin standalone capture (/admin/foods) — writes to
+   * `contributed_foods` (status='pending') via /api/admin/foods/capture,
+   * never straight to foods. Only the submit target and the done-screen
+   * copy differ; capture, resize, extract and review are identical.
+   */
+  mode?: 'confirm' | 'contribute';
+}
+
+export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCaptureProps) {
   const [step, setStep] = useState<Step>('capture');
   const [front, setFront] = useState<File | null>(null);
   const [back, setBack] = useState<File | null>(null);
@@ -85,9 +98,12 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
   const [draft, setDraft] = useState<Extraction | null>(null);
   const [existing, setExisting] = useState<ExistingFood | null>(null);
   const [ingredientText, setIngredientText] = useState('');
-  const [result, setResult] = useState<{ outcome: string; message?: string; food_id: string } | null>(
-    null
-  );
+  const [result, setResult] = useState<{
+    outcome: string;
+    message?: string;
+    food_id?: string;
+    submission_id?: string;
+  } | null>(null);
 
   async function handleRead(e: React.FormEvent) {
     e.preventDefault();
@@ -218,7 +234,8 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
         .map((l) => l.trim())
         .filter(Boolean);
 
-      const res = await fetch('/api/ingredients/confirm', {
+      const endpoint = mode === 'contribute' ? '/api/admin/foods/capture' : '/api/ingredients/confirm';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
@@ -271,16 +288,24 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
     return (
       <div className="card card-pad">
         <h2 className="section-title">
-          {result.outcome === 'created' ? 'Saved — thank you' : 'Already on our list'}
+          {mode === 'contribute'
+            ? 'Submitted for review'
+            : result.outcome === 'created'
+              ? 'Saved — thank you'
+              : 'Already on our list'}
         </h2>
         <p className="lead mt-2">
           {result.message ??
-            'This food is now recorded, with the ingredients exactly as you confirmed them.'}
+            (mode === 'contribute'
+              ? 'Queued in contributed_foods — nothing is added to the catalogue until an admin approves it.'
+              : 'This food is now recorded, with the ingredients exactly as you confirmed them.')}
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
-          <Link href={`/foods/${result.food_id}${dogId ? `?dog=${dogId}` : ''}`} className="btn-primary">
-            See the food
-          </Link>
+          {mode !== 'contribute' && result.food_id && (
+            <Link href={`/foods/${result.food_id}${dogId ? `?dog=${dogId}` : ''}`} className="btn-primary">
+              See the food
+            </Link>
+          )}
           <button
             type="button"
             className="btn-secondary"
