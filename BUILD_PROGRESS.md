@@ -1,5 +1,591 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Pets at Home ruled out, Tier 2 live against two manufacturers, UK Pet Food directory, GS1 scaffold (2026-07-27, latest)
+
+**Pets at Home ruled out — the clearest prohibition found all session.** Its
+single `terms-and-conditions` page (no separate imprint/copyright page
+exists; footer only links T&C/Privacy/Cookies) states directly: *"You shall
+not conduct, facilitate, authorise or permit any text or data mining or web
+scraping... Any 'robot', 'bot', 'spider', 'scraper'... to access, obtain,
+copy, monitor or republish any portion of the Website."* Not approved, and
+unlike the manufacturer cases, not even a permission-email candidate — this
+reads as a considered legal position (likely GDPR/DSM-Directive TDM
+opt-out), not an oversight worth asking around.
+
+**Tier 2 (sitemap + JSON-LD) built and run live against both approved
+manufacturers, two-run discipline throughout.** New modules:
+`src/lib/crawler/sitemapAdapter.ts` (sitemap/index walker with max-URL and
+max-file bounds), `src/lib/crawler/jsonLd.ts` (schema.org Product
+extraction — name/brand/sku/mpn/gtin/price only, deliberately never
+description or image), `src/lib/crawler/tier2Harvest.ts` (orchestration,
+same crawl_targets/contributed_foods write boundary as Tier 1).
+`src/lib/crawler/compositionFinder.ts` extracted from the Shopify adapter
+so both tiers share one composition-excerpt finder rather than two
+copies.
+
+**Real parser bugs found by real crawled strings — exactly what "run 1
+writes nothing" was for.** Fixed before any write landed:
+- A UK-label thousands-separator comma ("Vitamin A 22,500 IU") was being
+  read as a list separator, splitting one additive into two garbage
+  entries. Fixed with a protect/restore pass in `compositionParser.ts`,
+  distinguished from a genuine European decimal comma by digit-group
+  length (thousands = exactly 3 digits, decimals in this domain = 1-2).
+- `ADDITIVES (per kg)` with no trailing colon (real emea.acana.com copy)
+  wasn't recognised as a section heading at all, leaking into the last
+  headline ingredient. Fixed the heading regex to accept `(per kg)` as
+  colon-optional, while confirming inline "EC permitted additives" (a
+  legal-category term, no "per kg") still doesn't false-positive.
+- The raw excerpt shown to a reviewer ran on past the real label content
+  into page furniture (a feeding calculator's weight-picker dropdown, "How
+  to Feed" widgets) — fixed with an end-of-label marker list in
+  `compositionFinder.ts`, while deliberately keeping Analytical
+  Constituents in the excerpt (real, useful context for a reviewer, just
+  not parsed as an ingredient).
+All fixes have regression tests naming the real string that broke, not
+just the abstract pattern.
+
+**fish4dogs.com (Tier 2, live):** no JSON-LD Product schema at all (0/0
+GTIN — a different failure mode than Shopify's "field present but empty").
+Composition genuinely present in `body_html`-equivalent page text: 20/20
+pages yielded a composition excerpt, all written to `contributed_foods`
+with `composition_raw` populated and verified by reading rows back from
+the database. Headline ingredients (chicken, salmon, potato etc.) parse
+cleanly with correct percentages; the additives block still has known,
+flagged limitations (mid-string parens, embedded marketing prose) —
+correctly `needsReview: true`, never silently wrong on anything
+safety-relevant.
+
+**emea.acana.com (Tier 2, live):** DOES publish JSON-LD, but still 0/13
+GTIN — the `gtin` field is simply absent from every node. **A live,
+serious data-quality finding, confirmed by reading rows back from the
+database:** the JSON-LD `brand` field is wrong on every single product —
+`"Droogvoer voor honden"` (Dutch for "dry dog food"), `"Dry Dog Food"`
+(English category label) — never `"ACANA"`. This is the source site's own
+structured-data bug, not a parsing error on our end. **Do not trust
+`crawl_targets.brand` from this domain without a human check.** Also hit
+and fixed a real Git-Bash gotcha: a CLI arg starting with `/` (`/en/`, to
+restrict a multi-locale sitemap walk to one language) got silently mangled
+by MSYS path conversion into a Windows path, corrupting all args after it
+— `pagesFetched: 0` with no error. Fixed by changing the script's CLI
+convention to a bare locale code (`en`), never a leading-slash argument.
+13 English-only identity rows landed in `crawl_targets` (locale mirrors
+correctly excluded — would have been 8x duplicates otherwise), 4
+composition excerpts in `contributed_foods`, verified against the DB.
+
+**Shopify-tier GTIN yield across all three sources now known, not
+assumed: 0/13 (acana) + 0/0 (fish4dogs, no schema at all) + the
+Forthglade/Lily's Kitchen 0/566 from the prior session = manufacturer
+sites are a composition source, not a GTIN source, full stop for now.**
+The 204 Phase-1 identity-ambiguous rows still have no real GTIN path
+except Zooplus/Viovet permission (pending) or the GS1-verified label-photo
+route below.
+
+**UK Pet Food (formerly PFMA) member directory harvested — 108 companies,
+covering ~90% of the UK market.** robots.txt has no rules at all (only an
+unpopulated Content-Signal preamble); no privacy/terms/cookie/legal page
+exists anywhere on the site. New table `manufacturer_targets` (separate
+from `crawl_targets` on purpose — company-shaped, not product-shaped),
+every row `status = 'unapproached'` — a target list to work through, not
+an approval of anything. 64 of 108 are tagged `Manufacturer`; the rest are
+ingredient suppliers, associate members, sellers. Loaded via browser
+automation (the directory's "Load More" is a client-rendered listing, not
+a crawlable URL sequence) rather than the fetch layer — verified 108/108
+against the database, not the load script's own count.
+
+**GS1 barcode verification: built the scaffold, did not fabricate an
+endpoint.** Checked GS1 UK's own documentation before writing anything:
+"Verified by GS1" is a **human-facing web search tool** capped at 30
+searches/day — not a documented self-serve API. The actual programmatic
+option, the "GTIN Check API", is partner-gated (`gtincheck@gs1uk.org` for
+a key); GS1 does not publish its endpoint, auth header, or response shape
+anywhere public. Rather than guess and pretend it works, `gs1Verify.ts` is
+deliberately inert without real credentials — every queued GTIN resolves
+to `skipped_no_api_key`, proven live (inserted a real test row, ran the
+processor, read the row back: `status = skipped_no_api_key`, then deleted
+the test row).
+- `src/lib/labelExtraction.ts`: added `gtin_raw` to the photo-extraction
+  schema — the digit string printed under the barcode, not the bars
+  (a vision model doesn't reliably decode those).
+- `src/app/api/ingredients/confirm/route.ts`: the OCR'd GTIN is checksum-
+  validated (`validateScrapedGtin`, same mod-10 function the crawler uses)
+  before it's ever written to `foods.gtin` — a failed checksum means it's
+  simply never written, never guessed. A checksum-valid GTIN is queued
+  (new table `gtin_verifications`) for GS1 registry confirmation
+  afterward, asynchronously — the label-photo flow's whole design point is
+  a same-visit confirmation with no bottleneck, which a 30/day rate limit
+  cannot gate synchronously.
+- `src/app/api/cron/gs1-verification/route.ts` + `vercel.json` (daily,
+  05:00 UTC): rate-limited processor. Overflow past the daily budget stays
+  `pending` for tomorrow — queued, never dropped, per instruction.
+- **Design tradeoff, flagged for owner awareness rather than decided
+  silently:** a checksum-valid GTIN becomes an identity anchor
+  immediately, with GS1 confirmation catching problems afterward (via a
+  `mismatch`/`not_found` status, not yet wired to an alert) rather than
+  gating creation on it. True "block until GS1 confirms" would conflict
+  with both the synchronous-confirmation design and the 30/day cap. Worth
+  revisiting once real GS1 credentials exist and the actual latency is
+  known.
+
+**Verification:** `npm test` — 147/147 pass (10 new: 2 real-crawled-bug
+regressions in compositionParser, 1 compositionFinder excerpt-truncation
+suite, 3 GS1-config tests). `npx tsc --noEmit` clean. `npm run build`
+clean, including both new API routes. Security advisors: two new
+`rls_enabled_no_policy` INFO findings (`gtin_verifications`,
+`manufacturer_targets`) — the intended fail-closed state, same pattern as
+every other service-role-only table in this project; nothing new at ERROR
+or WARN.
+
+**Owner review**
+- `crawl_targets.brand` is confirmed wrong for every emea.acana.com row —
+  don't build anything downstream that trusts it without a human check.
+- GS1 credentials: need a real conversation with GS1 UK
+  (`gtincheck@gs1uk.org`) about their GTIN Check API before
+  `GS1_API_BASE_URL`/`GS1_API_KEY` can be set to anything real. Until then
+  the whole barcode-verification path is inert by design, not broken.
+- `manufacturer_targets` (108 rows) is a starting point for outreach, not
+  a decision — nothing has been approached yet.
+
+## No-affiliate policy, per-URL robots.txt evaluation, Zooplus/Viovet ToS both restrictive (2026-07-27, latest)
+
+**No affiliate, written down as a principle, not just a decision in a
+chat.** `docs/NO_AFFILIATE_POLICY.md` — Bowl takes no commission on food
+recommendations, no affiliate links in recommendation output, ever, without
+a deliberate reversal recorded as a new decision. Alongside
+`docs/DATA_BOUNDARY.md` as the second short, blunt principles doc.
+
+**Per-URL robots.txt evaluation, built before touching Zooplus, as
+required.** `src/lib/crawler/robotsTxt.ts` (parser + precedence-based
+path matcher — longest match wins, tie favours Allow, matches the de facto
+Google robots.txt spec) and `src/lib/crawler/robotsGate.ts` (fetches,
+parses, caches per domain per day, outside the allowlist gate since reading
+robots.txt is due diligence, not the crawl itself). Wired into
+`policyFetcher.ts` as an opt-in check evaluated on every URL when supplied
+— `shopifyHarvest.ts`'s `buildDefaultFetcher` now wires a real `RobotsGate`
+in by default, so this is live for all future runs, not just Zooplus.
+Parser tested against the *real*, freshly-refetched robots.txt text for
+both zooplus.co.uk and viovet.co.uk (not paraphrased summaries) — e.g.
+confirmed zooplus's `/detailedQuestion.htm$` rule is a root-anchored prefix
+with no leading wildcard, so it does NOT block a nested path like
+`/product/12345/detailedQuestion.htm` — a real trap a naive "contains"
+match would have gotten wrong.
+
+**Zooplus and Viovet ToS: both read in full via a real browser (both are
+JS-rendered — a plain fetch returns nothing usable), both came back
+restrictive. Neither approved.**
+
+- **zooplus.co.uk** — not in the "General Terms and Conditions of
+  Business" itself (16 sections read in full, purely a sales contract, no
+  IP/reuse clause anywhere) but in the separate `/info/legal/imprint` page,
+  under "Copyright": *"Copying and distribution require the written
+  consent of zooplus SE. All content is for personal information purposes
+  only... storage on databases... transfer to third parties... is
+  prohibited... The use of automatic mechanisms (such as search engines,
+  robots and crawlers) in product services or price search engines is also
+  subject to licensing."* Names robots/crawlers and database storage
+  explicitly — the most direct hit of any domain reviewed this project.
+- **viovet.co.uk** — `/terms-and-conditions`, "Legal matters": *"You are
+  not permitted to copy, broadcast, download, store (in any medium),
+  transmit, show or play in public, adapt or change in any way the content
+  of these web pages for any other purpose whatsoever without the prior
+  written permission of VioVet Ltd."* No named "robots/crawlers" mention,
+  but the blanket copy/store prohibition already covers it, and it carries
+  no personal-use carve-out at all — stricter in that specific respect than
+  Burns/Wellbeloved's wording.
+
+Both were genuinely read start to finish, not keyword-searched — the
+Zooplus finding specifically would have been missed by a keyword search of
+the page the owner pointed at (`/info/legal/terms`), because it's on a
+different page (`/info/legal/imprint`) that a search for "terms and
+conditions" doesn't surface.
+
+**Two more permission-request emails drafted**, same template and
+principle as the three manufacturer emails (lead with the open database,
+name exactly what's wanted — GTIN/brand/name/pack-size/price/composition
+text only, explicitly not descriptions/editorial/images — and offer a feed
+as the easier alternative), explicitly **not** the affiliate route:
+- `docs/draft-email-zooplus-permission-request.md`
+- `docs/draft-email-viovet-permission-request.md`
+
+None of the five permission emails have been sent yet.
+
+**Verification:** `npm test` — 113/113 pass (17 new: robots.txt parser,
+per-path precedence, PolicyFetcher robots-gate integration). `npx tsc
+--noEmit` clean.
+
+**Owner review**
+- Five permission emails now drafted and waiting: canagan, burnspet,
+  wellbeloved, zooplus, viovet. None sent.
+- Zooplus/Viovet adapters are on hold pending a reply to either email —
+  the "facts only" scope restriction (GTIN, brand, name, pack size, price,
+  composition text — never descriptions/editorial/images) was already
+  built into both draft emails as the stated ask, so it doesn't need
+  deciding again ad hoc if/when either says yes.
+- The three approved Shopify/manufacturer-adjacent domains
+  (`fish4dogs.com`, `forthglade.com`, `emea.acana.com`) are unaffected by
+  this — none of their reviewed ToS pages carried this kind of restriction.
+
+## Phase 2 Shopify tier, run against forthglade.com: catalogue growth, not identity resolution (2026-07-27, latest)
+
+**Read this before planning more work around the Shopify tier.** Two stores
+tested now — forthglade.com (this session, 300 variants) and an independent
+owner check of lilyskitchen.co.uk (266 variants) — and **both returned 0%
+GTIN yield**. Every variant on both stores had a SKU; none had a barcode.
+This is not a Forthglade quirk or a parsing bug — checked the raw cached
+JSON directly, the `barcode` field is genuinely empty on every variant. The
+Phase 2 spec's assumption that "Shopify... returns the whole catalogue with
+SKUs, variants and barcodes" holds for SKUs, not for barcodes, at least for
+these two UK pet food brands. **Do not plan Phase 1's 204 ambiguous-row
+GTIN re-resolution around the Shopify tier.** It's a real, useful source of
+brand/product-name/pack-size/SKU identity — worth having — but not the
+barcode source the ambiguous-row resolution needs. Zooplus and Viovet
+(retailer, not manufacturer, pages) remain the actual GTIN candidates,
+per the original Phase 2 plan, once their ToS is reviewed.
+
+**Two-run structure, per owner instruction, because the fixture-based tests
+had never met a real response:** Run 1 fetched page 1 only and parsed it
+without writing anything, specifically to catch a wrong assumption before
+it became 300 rows of it. It found one: `extractPackSize` was reading a
+multipack variant like "6 x 180g" and returning `180g` — not missing data,
+*wrong* data, stating 180g for what is actually a 1,080g pack. Fixed before
+Run 2: a dedicated multipack pattern is checked first and kept whole
+(`6x180g`), and — same rule as `inclusion_pct` — when a multiplier is
+present but the exact "N x SIZE" shape doesn't confidently match (e.g.
+"Pack of 6, 180g each"), the result is `null`, not a guessed per-unit
+figure. Also fixed: `product_name` no longer repeats a pack size that's
+already in the base product title ("2kg Lightly Baked Lamb..." + variant
+"2kg" now reads as the title alone, not "...— 2kg").
+
+**Schema change:** `crawl_targets.sku` added (migration
+`20260727180000_add_crawl_targets_sku.sql`) as the secondary identity
+anchor where GTIN is absent — which the yield numbers above show is the
+common case, not the exception. Weaker than a GTIN (doesn't cross sources
+cleanly), but real, stable, and worth having for eventual MPN
+cross-referencing.
+
+**Run 2 result (forthglade.com, full pagination):** 159 products / 300
+variants, stopped after page 1 (`short_page` — Forthglade's whole catalogue
+fits under the 250-item page limit, so the repeat-guard's loop scenario
+never came up here; the guard is still in place for stores where it will).
+**300 rows inserted into `crawl_targets`** (0 skipped as pre-existing — this
+domain had never been harvested before), 0 into `contributed_foods`
+(confirms Run 1's finding: `body_html` carries no composition text on this
+store either — Tier 1 gave identity here, not ingredients, exactly as the
+spec warned it might). Verified directly against the database, not just the
+script's own report: `count(gtin)=0`, `count(sku)=300`, and 49 of the 116
+`pack_size` values contain an `x` (multipack), spot-checked — e.g.
+`"Bone Broth Topper Variety Pack — 6 x 180g"` now correctly carries
+`pack_size = '6x180g'`, distinct from the `1x180g` single-topper variant of
+the same product, which would have been indistinguishable before the fix.
+
+**Verification:** `npm test` — 95/95 pass (9 new: multipack extraction,
+redundant-suffix stripping, SKU passthrough). `npx tsc --noEmit` clean.
+
+**Owner review**
+- `crawl_targets` rows are private and reviewable, not yet matched to any
+  `foods` row — the 204 identity-ambiguous rows from Phase 1 still await
+  Zooplus/Viovet GTINs specifically, not this data.
+- Next candidate for the same two-run treatment: a sitemap+JSON-LD adapter
+  (Tier 2), needed for non-Shopify domains (`emea.acana.com`,
+  `fish4dogs.com`) and eventually Zooplus/Viovet once approved — and for
+  Zooplus specifically, **per-path robots.txt evaluation must be built
+  first** (flagged this session: `policyFetcher` currently only checks
+  domain-level allowlist approval, not path-level Disallow rules — fine for
+  Forthglade's single known-safe endpoint, not fine for walking a sitemap
+  across many paths on a domain with real path restrictions).
+
+## Phase 2 identity layer: allowlist gate, ToS review, discovery-cron conflict (2026-07-27, latest)
+
+**Owner ask:** begin Phase 2 (retailer crawling). Session covered: closing the
+`source_domain_allowlist` gate for real (it had been bypassed — see the
+"Alarm visibility" entry below for context on how that was found), reviewing
+robots.txt for 8 candidate domains, reviewing ToS for 5 of them, and building
+the fetch layer (allowlist check, rate limiter, raw-response cache,
+retry/hard-stop) as the single choke point every future adapter must go
+through. No live product-page fetch has happened yet — that's step 4, gated
+on an explicit owner confirmation before the first real network call.
+
+**Domain-identity corrections (third and fourth of this kind in the
+project — same failure mode as the `jameswellbeloved.com` → `wellbeloved.com`
+fix from Phase 1):** the `foods` rows attributed to `acana.com` were actually
+sourced from `emea.acana.com`, a different subdomain with its own
+robots.txt/ToS. Corrected in the allowlist the same way.
+
+**Approved (robots.txt + ToS both reviewed):** `fish4dogs.com`,
+`forthglade.com`. `emea.acana.com` is also approved, but on robots.txt
+alone — no Terms of Use page could be found anywhere on the site (only a
+Privacy Policy, no IP clause, no Terms link in the footer). Recorded in the
+domain's own notes with **a re-check due date of 2027-01-27**: absence of
+terms is not permission and the site could add one without notice.
+
+**Not approved, permission requested instead:** `burnspet.co.uk` and
+`wellbeloved.com` both carry explicit ToS language reserving content for
+personal, non-commercial use, with a licence required for commercial reuse —
+the same shape as the `allaboutdogfood.co.uk` situation from Phase 1.
+Given the catalogue is going public under ODbL, the owner chose to ask
+rather than route around it, same standard as `canagan.com` (which blocks
+~20 named crawlers, including ours, under its own robots.txt). Three
+permission-request emails drafted, all leading with "we're building a free
+open database" rather than "may we scrape you" — a brand that says yes
+often just sends a spreadsheet with GTINs in it, which is better data than
+scraping would produce anyway:
+- `docs/draft-email-canagan-permission-request.md`
+- `docs/draft-email-burnspet-permission-request.md`
+- `docs/draft-email-wellbeloved-permission-request.md`
+
+None sent yet — owner to find the right contact, edit, and send.
+
+**Zooplus/Viovet: affiliate route researched, not pursued.** Both run Awin
+affiliate programmes with product feeds (zooplus UK merchant profile
+`ui.awin.com/merchant-profile/2940`, reported at **~9,840 products / 100+
+brands** in the feed — exactly the GTIN/price/pack-size data the identity
+layer needs, licensed as part of the programme, no scraping/ToS question at
+all; viovet `ui.awin.com/merchant-profile/6960`, Awin MasterTag-integrated,
+specific feed fields not confirmed). **Held, not pursued** — joining Awin as
+a publisher normally requires an approvable live site/property, and Bowl
+doesn't run affiliate links or a monetised storefront today. That's a
+business-model decision (revenue, disclosure, whether Bowl carries affiliate
+links at all), not a technical one, so it's parked here rather than acted
+on. Worth revisiting if the affiliate-link question ever comes up for other
+reasons.
+
+**Critical finding: the existing weekly `food-discovery` cron directly
+contradicted the Phase 2 design** — writes straight to `foods`/
+`food_ingredients` with no review queue, uses an LLM as the page extractor
+on every candidate (Haiku `generateObject` per page — the exact pattern
+Phase 2 exists to avoid), has no rate limiting or raw-HTML cache, and
+checked only `approved = true` on `source_domain_allowlist`, not the two
+review-date columns. It shared the same `approved` flag Phase 2 now uses,
+so approving any domain for the new pipeline would also have re-armed this
+old one on its next Sunday 02:00 UTC run. **Fixed: removed the cron entry
+from `vercel.json`.** `src/lib/foodDiscovery.ts` and
+`src/app/api/cron/food-discovery/route.ts` are kept in the tree, docblock
+updated to say plainly that they're disabled and why, until a Phase 2
+adapter proves out end-to-end — then delete both rather than re-enable.
+`batch_submissions` was empty (0 rows) when checked, so this job had never
+actually completed a run; the risk was to the *next* Sunday after any
+approval, not a retroactive one.
+
+**Fetch layer built (`src/lib/crawler/`), no live network contact:**
+- `allowlist.ts` — the three-condition gate (approved AND robots reviewed
+  AND ToS reviewed), with a regression test for the exact bug this session
+  found and fixed upstream (`approved=true` with both dates null).
+- `rateLimiter.ts` — per-domain minimum spacing, default 2s, zooplus
+  override at 5s (its robots.txt only requires that of named bots; applied
+  to ourselves regardless, per project instructions).
+- `rawCache.ts` — disk cache keyed by URL + fetch date, separate from
+  parsed output, so a parser fix never requires re-fetching.
+- `policyFetcher.ts` — the single choke point: allowlist check → cache
+  read-through → rate-limit wait → fetch with the `DogSmartDB/1.0`
+  user-agent → exponential backoff on 429/5xx → hard stop after 3
+  consecutive failures per domain → cache write.
+
+**`parse_composition()` built and tested** (`src/lib/compositionParser.ts`,
+earlier in this same session) — deterministic parser turning a verbatim
+composition string into structured ingredients, no network/DB/LLM involved.
+Fixture corpus in `src/lib/__tests__/fixtures/compositionCorpus.ts`:
+hand-authored cases for every pattern named in the Phase 2 spec (EC legal
+categories, nested "of which" percentages, additive blocks,
+Analytical-Constituents stripping, European decimal commas) plus curated
+real OPFF strings, kept separate from a small "known-hard" bucket of
+genuinely OCR-broken real captures that's a robustness check, not a
+coverage claim. **Coverage: 37/38 (97.4%) of the representative corpus
+clears unaided**, well past the spec's 80% target; the one flag is a
+legitimate "review needed" case (a parenthetical sub-list before a trailing
+bare percentage), not a bug.
+
+**Also this session:** `foods.composition_raw` (text, verbatim, unparsed)
+added — the DB-side analogue of the raw-HTML cache, and itself the most
+independently-checkable fact in an eventual ODbL export. Two Phase 1 GTIN
+migrations were found applied on the remote project but missing as local
+files entirely (real repo/remote drift, not caused by this session);
+recovered the exact SQL from `supabase_migrations.schema_migrations` and
+restored them locally.
+
+**Verification:** `npm test` — 59/59 pass (25 new crawler tests plus the
+compositionParser and hardFilter suites, all offline via injected fake
+clock/sleep/fetch/cache, no real network or timers used in any test).
+`npx tsc --noEmit` clean.
+
+**Owner review**
+- Send (or edit further) the three permission-request emails when ready.
+- `emea.acana.com`'s 2027-01-27 re-check is not on any calendar system —
+  it's recorded in the allowlist row's own notes and here. Whoever picks up
+  Phase 2 work around that date should re-search for a Terms of Use page
+  before continuing to rely on the approval.
+- **Explicitly not started:** step 4 (first live fetch, Shopify adapter
+  against `forthglade.com`) — stopping here for confirmation before the
+  first real network call, per standing instruction.
+
+## Alarm visibility for the two daily assertions (2026-07-27, latest)
+
+**Owner ask, correcting my proposed next task.** I proposed building the export pipeline next; the
+owner overrode it — the catalogue is 292 foods, 51 complete (83% unusable, including the quarantined
+AADF pair and the James Wellbeloved fix from earlier this session), and publishing that as "the open
+UK dog food database" on first contact would actively damage the thing it's trying to become. Nothing
+consumes the export today, so there's no cost to waiting, and Phase 2 (which writes only to
+`contributed_foods`/`crawl_targets`, both private) can't disturb the boundary this session built —
+the rework risk I was avoiding doesn't exist. **Correct next task is Phase 2, not export.** Before
+that: fix the thing the previous session's own findings flagged as broken — two daily `pg_cron`
+assertions existed and nothing read `cron.job_run_details`. An alarm nobody looks at isn't an alarm.
+
+**What shipped, one migration:**
+`supabase/migrations/20260727130000_add_system_alerts_and_assertion_wrapper.sql` — a
+`system_alerts` table (`check_name`, `message`, `detected_at`, `resolved_at`, `resolved_by`), RLS
+enabled with zero policies (same pattern as `contributed_foods`/`ingredient_review_queue`: written
+only by the cron wrapper as table owner, read/resolved only through the admin API's service-role
+client). `public.run_scheduled_assertions()` calls both existing assertions
+(`assert_complete_foods_have_ingredients`, `assert_catalogue_export_boundary`) inside independent
+`begin...exception...end` blocks, so one failing doesn't stop the other running, and inserts a row
+on failure — but only if that check doesn't already have an unresolved row, so a check that stays
+broken for a week doesn't produce seven near-identical alerts. Two daily cron jobs replaced with one
+(`run-scheduled-assertions`, same `0 6 * * *` slot).
+
+**Application side:** `GET /api/admin/alerts` (unresolved rows) and `PATCH
+/api/admin/alerts/[id]` (`{ resolved: true }`, sets `resolved_at`/`resolved_by` from the verified
+admin session) — same `requireAdmin` + `supabaseAdmin` pattern as every other admin route. A banner
+(`SystemAlertsBanner` inside `AdminShell.tsx`) renders on **every** `/admin` page, not a dedicated
+alerts screen — deliberately, per the owner's framing: "you'll see failures because you're already
+in that screen." No email/SMTP: explicitly out of scope as more moving parts than this deserved.
+
+**Proven end-to-end, not just deployed.** Forced a real boundary violation (`grant select on
+public.source_domain_allowlist to catalogue_export`), ran the wrapper inside a rolled-back
+transaction first (confirmed catch-and-record without persisting), then for real (committed, then
+immediately revoked the grant itself so the boundary stayed clean) — one row landed in
+`system_alerts`. Ran the wrapper again while still broken — **zero** new rows (dedupe held). Signed
+up a throwaway account through the real UI, promoted it to `is_admin` via direct SQL (this
+codebase's established pattern for admin-flow testing — see the contributions-admin note earlier in
+this file), loaded `/admin`, and the banner rendered the real alert with its message and detected-at
+timestamp. Clicked **Resolve** in the browser; the banner cleared, and a direct query confirmed
+`resolved_at`/`resolved_by` persisted against the real admin account, not just optimistic client
+state. Both the test alert row and the throwaway account were then deleted — self-induced test data,
+not a real incident, so left out of the audit trail on purpose.
+
+**Verification:** `tsc --noEmit` clean · `npm run build` exit 0 · `hardFilter.test.ts` still 7/7 ·
+security advisors rerun — one new INFO (`system_alerts` RLS-enabled-no-policy), which is the
+intended fail-closed state, not a gap · database left exactly as found afterward (0 rows in
+`system_alerts`, boundary confirmed clean via `assert_catalogue_export_boundary()`, cron shows one
+job — `run-scheduled-assertions` — not two).
+
+**Owner review**
+- **Next task is Phase 2** (retailer crawling / extraction pipeline), writing against `catalogue.*`
+  read boundaries already in place but touching only `contributed_foods`/`crawl_targets` for writes.
+  Export/publication pipeline stays deferred until the catalogue has something worth publishing.
+- Resolving an alert doesn't stop it recurring — if the underlying problem isn't actually fixed, the
+  next day's cron run re-raises and re-alerts (dedupe only suppresses while unresolved). That's
+  intentional, not a bug to fix.
+- `dog_recommendation_sets` RLS-no-policy flag from the previous session remains unaddressed.
+
+## Catalogue/private schema boundary, ahead of Phase 2 (2026-07-27, latest)
+
+**Owner ask:** before Phase 2 (retailer crawling) writes a single query, put a real access
+boundary between the six ODbL-publishable catalogue tables and the 24 private
+correlation/monitoring/account tables — all 30 currently sit undifferentiated in `public`, and
+`dogs.owner_id → auth.users` makes a careless join a real UK GDPR exposure, not just a licensing
+annoyance. Boundary only this session — no export pipeline, no publishing, no Phase 2.
+
+**What shipped (3 migrations, all applied live).** A `catalogue` schema of six read-only views —
+`foods` (all columns except `submitted_by`, an `auth.users` id), `food_ingredients`, and the four
+reference tables (`breed_life_stage_thresholds`, `metric_minimum_lag_days`,
+`wellness_indicator_reference`, `condition_contraindications`) — every column enumerated by hand,
+no `select *`. A `NOLOGIN` role `catalogue_export` holding `SELECT` on those six views and nothing
+else; `dogs`, `contributed_foods`, `user_profiles`, `ingredient_review_queue` and everything else
+are structurally unreachable from it. `docs/DATA_BOUNDARY.md` records which six tables are
+publishable, why the rest never can be, and the down path (deliberately kept out of
+`supabase/migrations/` — a `.down.sql` file in that directory could get picked up and applied by
+name-walking tooling, which would be exactly backwards).
+
+**A real design bug, caught by actually running the proof rather than trusting the DDL.** The
+first version used `security_invoker = true` on the views, because CLAUDE.md's Supabase rules say
+prefer invoker security and justify definer semantics if used. Proving it live —
+`set role catalogue_export; select * from catalogue.foods` — failed with `permission denied for
+table foods`, not a row. Invoker-security views run with the *querying* role's privileges on the
+underlying table, so `catalogue_export` would have needed direct `SELECT` on `public.foods` to use
+its own view at all — exactly the grant the boundary exists to prevent. Switched all six views to
+definer semantics (the Postgres default). This is not the same risk as a `SECURITY DEFINER`
+function needing `search_path` locked down: a view's query is bound to fixed table OIDs at
+`CREATE VIEW` time (visible in `pg_rewrite`/`pg_depend`), not re-resolved against the caller's
+search_path at query time, so there's no equivalent mutable-search-path injection surface to close.
+
+**A second real bug, same lesson.** `public.assert_catalogue_export_boundary()` — a `pg_cron`
+daily assertion (06:00, alongside `assert_complete_foods_have_ingredients`) checking (1) no
+`CREATE` privilege on any data schema outside `catalogue`, (2) no privilege on any relation in a
+data schema outside `catalogue` (via `has_table_privilege`, not `aclexplode` — the latter only
+sees grants recorded directly against the named role and misses anything acquired via `PUBLIC` or
+role membership), (3) no `catalogue` view depends on a table outside the six publishable ones (via
+`pg_rewrite`→`pg_depend`→`pg_class`, not `information_schema.view_table_usage`, which is filtered
+by the calling role's own privileges and can silently return nothing). Run cold against its own
+clean baseline, it **raised immediately** — 194 false-positive relations, all `pg_catalog`/
+`information_schema` system views plus `pg_stat_statements`/`cron.job*`, which ship
+`SELECT`-to-`PUBLIC` by design in every Postgres database and have nothing to do with this
+boundary. Rescoped the relation and schema checks from "every schema except catalogue" to an
+explicit allowlist (`public`, `auth`, `storage`, `realtime`) — the same enumerate-don't-exclude
+principle already used for the view column lists. Also deliberately checks schema `CREATE`, not
+`USAGE`: Postgres grants `USAGE` on `public` to `PUBLIC` by default (verified live —
+`has_schema_privilege('anon','public','usage') = true`), so every role including
+`catalogue_export` has it regardless of any `REVOKE` run against the role by name; treating that
+as a signal would make the check permanently red for a reason that isn't actually a violation.
+
+**All three assertion branches proven to actually fail, each in its own rolled-back transaction:**
+
+| negative test | result |
+|---|---|
+| `grant create on schema public to catalogue_export` | `catalogue_export boundary: role holds CREATE on 1 schema(s) outside the catalogue schema` |
+| `grant select on public.source_domain_allowlist to catalogue_export` | `catalogue_export boundary: role holds a privilege on 1 relation(s) outside the catalogue schema` |
+| `create view catalogue.tmp_probe as select id from public.dogs` | `catalogue_export boundary: 1 view dependency edge(s) in the catalogue schema point at a table outside the six publishable tables` |
+
+Each rolled back and independently confirmed clean afterward (no leaked grant, no leaked view).
+Also proved with real `select`s, not just privilege checks: as `catalogue_export`,
+`select * from catalogue.foods` → 292 rows; `select * from public.dogs/contributed_foods/foods
+limit 1` → all three `ERROR 42501: permission denied for table <name>`.
+
+**One artefact worth naming so it isn't mistaken for a leak later.** `postgres` shows up as a
+member of `catalogue_export` (`pg_has_role('postgres','catalogue_export','member') = true`) and
+this could **not** be revoked as `postgres` — the grantor is `supabase_admin`, and a plain `REVOKE
+... FROM` only removes grants made by the current role, so it silently no-ops rather than erroring.
+This is standard Postgres 16+/Supabase behaviour: the role executing `CREATE ROLE` is
+auto-membered into what it creates. It grants zero practical capability — `set_option` and
+`inherit_option` are both `false` on that row, so `postgres` can neither `SET ROLE` into
+`catalogue_export` nor inherit its (already more restrictive) privileges via it, and `postgres`
+already has full access to everything regardless. Separately, a `postgres`-granted membership used
+mid-session for the `SET ROLE` proofs (`grant catalogue_export to postgres`, wrapped in
+`begin;…rollback;`) did **not** roll back as expected — the multi-statement SQL sent through this
+session's tool doesn't reliably preserve one Postgres session/transaction across the whole string,
+so `begin`/`rollback` didn't bracket it the way they would in a normal client connection. Cleaned
+up with an explicit `revoke catalogue_export from postgres` afterward. Noting this because the next
+person proving something similar this way should not assume `begin;...;rollback;` sent as one blob
+through this tool is transactionally safe — verify the rollback took, the way this session did.
+
+**Cron failure visibility, checked and proven separately from the boundary itself** (a broken
+boundary was deliberately never left committed to prove this — see reasoning above). `cron.log_run`
+is `on`. A one-off probe job (`do $$ begin raise exception 'cron visibility probe'; end $$;`,
+scheduled for a specific one-off minute, not the recurring daily slot) fired and its failure landed
+in `cron.job_run_details.return_message` with the exact exception text, confirming a `pg_cron`
+job's failure is queryable after the fact. **This is not the same as being notified** — nothing
+currently polls `cron.job_run_details` or alerts on a `failed` row; the daily
+`assert-catalogue-export-boundary` and `assert-complete-foods-have-ingredients` jobs are both only
+as good as someone querying that table. Worth real alerting before either assertion is load-bearing
+for something the owner isn't manually checking.
+
+**Verification:** `hardFilter.test.ts` — still 7/7, unaffected (nothing in this session touched
+`public.foods`/`public.food_ingredients` grants or RLS). Security and performance advisors rerun
+after every migration in this session — zero new findings; everything listed predates this session
+(`dog_recommendation_sets` RLS-no-policy among them, see below) and the six new `catalogue` views
+did not trigger `security_definer_view` despite using definer semantics, because that linter scopes
+to API-exposed schemas and `catalogue` isn't one — confirming it's correctly unreachable via
+PostgREST, not just via SQL grants.
+
+**Owner review**
+- **Flagged in passing, not investigated this session:** `dog_recommendation_sets` has RLS enabled
+  and zero policies (fail-closed, not a vulnerability) — but if `authenticated` reads it expecting
+  the persisted recommendation cache, it is silently getting nothing back and re-scoring on every
+  request instead. Worth checking before this cache is relied on for cost/latency.
+- No `pg` dependency, no new connection-string secret was added — the boundary assertions live
+  entirely in Postgres via `pg_cron`, matching the existing `assert_complete_foods_have_ingredients`
+  pattern, per an explicit owner decision this session to avoid introducing direct-Postgres
+  credentials before an export pipeline actually needs one.
+- **Explicitly not started:** the export/publication pipeline itself, and Phase 2. Both should now
+  be written against `catalogue.*`, never `public.*` directly.
+
 ## Phase 1 identity layer (GTIN) + hard-filter safety gate + licence decision (2026-07-27, latest)
 
 **Owner ask:** fix the ingredient-identity mess (83% of `foods` unusable, mostly

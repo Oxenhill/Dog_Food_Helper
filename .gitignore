@@ -25,3 +25,4 @@ npm-debug.log*
 
 # Isolated preview dev-server build output (see next.config.mjs NEXT_PREVIEW_DISTDIR)
 .next-preview/
+.crawler-cache/

@@ -1,16 +1,20 @@
 {
   "crons": [
     {
-      "path": "/api/cron/food-discovery",
-      "schedule": "0 2 * * 0"
-    },
-    {
       "path": "/api/cron/correlation-engine",
       "schedule": "0 3 * * *"
     },
     {
       "path": "/api/cron/inactivity-check",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/keepalive",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/gs1-verification",
+      "schedule": "0 5 * * *"
     }
   ]
 }
