@@ -11,6 +11,9 @@ import { findDuplicateFood } from '@/lib/foodDuplicates';
 
 // Node runtime — needs Buffer and calls out to the Gateway.
 export const runtime = 'nodejs';
+// A two-image vision extraction can run past the platform default (10s) —
+// give it real headroom rather than racing a cold Gateway call.
+export const maxDuration = 60;
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // 8MB per image
 const MAX_IMAGES = 3;

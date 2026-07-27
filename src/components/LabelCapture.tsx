@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { authHeaders } from '@/lib/clientAuth';
+import { resizeImageForUpload } from '@/lib/clientImageResize';
 
 /**
  * Owner-facing packet capture: photograph the front and back, check what we
@@ -89,9 +90,14 @@ export default function LabelCapture({ dogId }: { dogId?: string }) {
     setError('');
     setBusy(true);
     try {
+      const [resizedFront, resizedBack] = await Promise.all([
+        resizeImageForUpload(front),
+        back ? resizeImageForUpload(back) : Promise.resolve(null),
+      ]);
+
       const fd = new FormData();
-      fd.append('front', front);
-      if (back) fd.append('back', back);
+      fd.append('front', resizedFront);
+      if (resizedBack) fd.append('back', resizedBack);
 
       const res = await fetch('/api/ingredients/extract', {
         method: 'POST',
