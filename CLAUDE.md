@@ -62,3 +62,15 @@ Follow the sequence in the architecture doc §8 and technical build spec Part E.
 5. **Data deletion semantics** (§10 of architecture doc): hard-delete owner personal data (account, email, identifying info). Anonymise (nullable `owner_id`) dog records so they keep contributing to research/pooled signals.
 
 6. **Confidence honesty** (§9 of architecture doc): don't inflate confidence ratings to make the product feel authoritative. If a correlation is based on 3-5 logs, label it `low_sample` and surface the sample size. Overstating confidence is a liability risk.
+
+---
+
+## Data conventions
+
+`food_ingredients.position_in_list` is PARENT-SCOPED, not global rank. Children restart at 1 under each `parent_ingredient_id`. Top-level rows have `parent_ingredient_id IS NULL` and are the only rows whose position means prevalence order. Any query or report touching `position_in_list` MUST project `parent_ingredient_id` alongside it. Grouping by `(food_id, position_in_list)` alone produces phantom duplicates and phantom rank inversions. This has caused three wrong diagnoses.
+
+---
+
+## Reply style
+
+Reply in caveman style: fragments, no articles, no preamble, no restating instructions. Findings and numbers only.
