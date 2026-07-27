@@ -23,16 +23,30 @@ const INITIAL_QUALITY = 0.82;
 const MIN_QUALITY = 0.5;
 const TARGET_BYTES = 1.5 * 1024 * 1024;
 
+/**
+ * Thrown when this file could not be shrunk. The old behaviour here was to
+ * silently `return file` — the original, un-resized photo — on any of three
+ * failure points below. That meant a failed resize looked identical to a
+ * successful one until the *server* rejected the oversized upload (or, worse,
+ * a request-size limit rejected it before the server ever saw it), with
+ * nothing anywhere pointing back at "the resize didn't actually happen."
+ * Every failure point here now throws instead, so the caller gets a real
+ * error to report and act on rather than a silently-oversized file.
+ */
+export class ImageResizeError extends Error {}
+
 export async function resizeImageForUpload(file: File): Promise<File> {
   if (typeof window === 'undefined' || typeof document === 'undefined') return file;
 
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
-  } catch {
-    // Format the browser can't decode into a bitmap (rare) — send as-is and
-    // let the server-side size/type checks handle it.
-    return file;
+  } catch (err) {
+    throw new ImageResizeError(
+      `Could not decode "${file.name}" (${file.type || 'unknown type'}, ${file.size} bytes) for resizing: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
 
   const scale = Math.min(1, MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
@@ -45,7 +59,7 @@ export async function resizeImageForUpload(file: File): Promise<File> {
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     bitmap.close();
-    return file;
+    throw new ImageResizeError('Canvas 2D context unavailable on this device — cannot resize the photo.');
   }
   ctx.drawImage(bitmap, 0, 0, width, height);
   bitmap.close();
@@ -57,7 +71,9 @@ export async function resizeImageForUpload(file: File): Promise<File> {
     blob = await canvasToBlob(canvas, quality);
   }
 
-  if (!blob) return file;
+  if (!blob) {
+    throw new ImageResizeError(`Could not encode "${file.name}" as JPEG after resizing.`);
+  }
 
   const name = file.name.replace(/\.\w+$/, '') + '.jpg';
   return new File([blob], name, { type: 'image/jpeg' });
