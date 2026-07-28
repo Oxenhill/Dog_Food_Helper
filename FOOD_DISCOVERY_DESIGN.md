@@ -199,7 +199,90 @@ checkable, it fails loudly, and it does not involve a model.
 
 ---
 
-## 5. Discovery pipeline
+## 5. Terms classification — policy, not adjudication
+
+### 5.1 The problem this replaces
+
+The first two recon batches were adjudicated domain by domain, in conversation. That
+does not scale to 68 companies, it leaves the reasoning outside the repo, and
+consistency depends on someone remembering what was decided about an earlier domain.
+
+It also breaks the project's own rule: *the model writes extractors, it never acts as
+one*. Classifying terms per domain in chat is the model acting as the extractor,
+one level up.
+
+**The owner should make policy decisions about clause shapes, not verdicts about
+domains.** Five decisions instead of sixty-eight.
+
+### 5.2 The shapes
+
+Stable across the first ~15 domains reviewed. Each maps to a default decision.
+
+| shape | signature | examples | default |
+|---|---|---|---|
+| `explicit_tdm_prohibition` | names scraping, crawling, robots, spiders, or text and data mining | petsathome.com, bellaandduke.com | refuse — considered position, weak email candidate |
+| `personal_use_only` | permits personal reference, bars commercial use | wellbeloved.com, burnspet.co.uk, assisipetcare.com, benyfitnatural.co.uk | refuse, queue permission email |
+| `reproduction_boilerplate` | "reproduction prohibited other than in accordance with the copyright notice" — circular template wording | alphafeeds.com, vitalinpetfood.co.uk, foldhill.co.uk, akela domains | refuse, queue permission email |
+| `copyright_asserted_no_prohibition` | states rights exist, prohibits nothing | durhamanimalfeeds.co.uk | approval candidate |
+| `no_content_clause` | terms are a sales contract only, or no terms page exists | fish4dogs.com, copdockmill.co.uk, cotswoldraw.com | approval candidate |
+
+`reproduction_boilerplate` and `personal_use_only` are refusals of a different
+character from `explicit_tdm_prohibition`: the first two are common template drafting
+rather than a considered position on automated collection, which is why they queue a
+permission request rather than closing the door.
+
+### 5.3 `terms_clause_patterns`
+
+| field | purpose |
+|---|---|
+| `id` | |
+| `pattern` | regex matched against `terms_excerpt` |
+| `shape` | one of the five above |
+| `default_decision` | `refuse`, `refuse_pending_email`, `approval_candidate` |
+| `rationale` | why this shape gets this decision — the policy, in the owner's words |
+| `added_by`, `added_at`, `version` | audit |
+| `active` | patterns are retired, never deleted |
+
+`manufacturer_target_domains` gains `matched_pattern_id`, `classified_shape`,
+`classification_confidence`.
+
+### 5.4 The asymmetry rule
+
+**Refusals auto-apply. Approvals queue.**
+
+A wrongly-automated refusal costs a domain that could have been used, and is
+reversible by editing one pattern. A wrongly-automated approval points a crawler at
+someone's server on a machine's reading of their legal terms, and is not.
+
+So:
+
+- `refuse` and `refuse_pending_email` are applied automatically, with the matched
+  pattern recorded.
+- `approval_candidate` never writes to `source_domain_allowlist`. It queues for
+  explicit human approval, presented with its terms finding and its robots.txt
+  directives together.
+- No pattern match, or low confidence, queues for review. A novel clause means the
+  taxonomy is incomplete — adding a pattern is a deliberate act by the owner, never
+  inferred from a single domain.
+
+### 5.5 Consequences worth having
+
+**Reclassification.** Change a shape's `default_decision` and every domain carrying
+it reclassifies, with the reason and pattern version recorded. Today those decisions
+live in prose notes and would have to be re-read one by one.
+
+**Entity linkage becomes structural.** Assisi Pet Care owns Burns; Cranswick owns
+Alpha and Vitalin; Akela owns four brand domains. As a foreign key rather than a
+note, one permission decision propagates to every domain that company owns, and one
+email is sent instead of four.
+
+**Auditability.** Every domain's status points at the pattern that produced it and
+the version of the policy in force at the time. "Why is this domain refused" has an
+answer that is not a memory.
+
+---
+
+## 6. Discovery pipeline
 
 Model-free throughout. Cannot fabricate because it never writes a value.
 
@@ -222,7 +305,7 @@ accordingly: recon first, discovery second.
 
 ---
 
-## 6. What this does not cover
+## 7. What this does not cover
 
 **The research layer.** Separate concern, separate document. It is not client-facing
 and not a ranking feature — it is the system's own knowledge base: current research
@@ -241,7 +324,7 @@ yet; when built it is keyed to `auth.users` and therefore permanently private.
 
 ---
 
-## 7. Open questions for the owner
+## 8. Open questions for the owner
 
 1. **OPFF** — was the production-write exclusion about data quality, or something
    else? Quality is handled by review. If it was quality alone, this is the largest
@@ -259,11 +342,12 @@ yet; when built it is keyed to `auth.users` and therefore permanently private.
 
 ---
 
-## 8. Sequence
+## 9. Sequence
 
 1. Resolve the open `assert_catalogue_export_boundary` alert
 2. Reconnaissance pass over `manufacturer_targets` — unblocks everything downstream
-3. Owner clears the recon queue, approving domains
+3. `terms_clause_patterns` (§5). Owner sets five policy decisions; recon classifies
+   and auto-applies refusals. Only approval candidates and novel clauses queue.
 4. Discovery cron against the widened approved set
 5. Tier 3 auto-promotion with assertions, once a second domain has a proven selector
 6. OPFF import at Tier 2, subject to Q1
