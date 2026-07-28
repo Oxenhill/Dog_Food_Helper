@@ -1,5 +1,9 @@
 import { supabaseAdmin } from './supabase';
-import { isIngredientCategory, INGREDIENT_CATEGORY_VALUES } from './ingredientCategories';
+import {
+  isAdditiveCategory,
+  isIngredientCategory,
+  INGREDIENT_CATEGORY_VALUES,
+} from './ingredientCategories';
 
 /**
  * Shared parser for a submitted ingredient list.
@@ -27,6 +31,7 @@ export interface ParsedIngredient {
   category: string | null;
   inclusion_pct: number | null;
   note: string | null;
+  additive_category_printed: string | null;
   sub: ParsedIngredient[];
 }
 
@@ -46,7 +51,16 @@ export function parseIngredientEntry(entry: unknown, depth = 1): ParseResult<Par
     if (name.length > MAX_INGREDIENT_NAME_LENGTH) {
       return { error: `Ingredient name exceeds ${MAX_INGREDIENT_NAME_LENGTH} characters.` };
     }
-    return { value: { name, category: null, inclusion_pct: null, note: null, sub: [] } };
+    return {
+      value: {
+        name,
+        category: null,
+        inclusion_pct: null,
+        note: null,
+        additive_category_printed: null,
+        sub: [],
+      },
+    };
   }
 
   if (!entry || typeof entry !== 'object') {
@@ -58,6 +72,7 @@ export function parseIngredientEntry(entry: unknown, depth = 1): ParseResult<Par
     category?: unknown;
     inclusion_pct?: unknown;
     note?: unknown;
+    additive_category_printed?: unknown;
     sub_ingredients?: unknown;
   };
 
@@ -89,6 +104,17 @@ export function parseIngredientEntry(entry: unknown, depth = 1): ParseResult<Par
   }
 
   const note = typeof obj.note === 'string' && obj.note.trim() !== '' ? obj.note.trim() : null;
+  const additiveCategoryPrinted =
+    typeof obj.additive_category_printed === 'string' &&
+    obj.additive_category_printed.trim() !== ''
+      ? obj.additive_category_printed.trim()
+      : null;
+  if (additiveCategoryPrinted && !isAdditiveCategory(category)) {
+    return { error: `additive_category_printed is only valid on additive rows ("${name}").` };
+  }
+  if (category !== 'additive' && isAdditiveCategory(category) && !additiveCategoryPrinted) {
+    return { error: `additive_category_printed is required for additive "${name}".` };
+  }
 
   const sub: ParsedIngredient[] = [];
   if (obj.sub_ingredients != null) {
@@ -102,7 +128,16 @@ export function parseIngredientEntry(entry: unknown, depth = 1): ParseResult<Par
     }
   }
 
-  return { value: { name, category, inclusion_pct: inclusionPct, note, sub } };
+  return {
+    value: {
+      name,
+      category,
+      inclusion_pct: inclusionPct,
+      note,
+      additive_category_printed: additiveCategoryPrinted,
+      sub,
+    },
+  };
 }
 
 /** Parse a whole list, preserving order — order is label order and carries meaning. */
@@ -132,6 +167,35 @@ export function flattenIngredientNames(list: ParsedIngredient[]): string[] {
   return names;
 }
 
+export function buildTopIngredientRows(foodId: string, list: ParsedIngredient[]) {
+  let prevalencePosition = 0;
+  let additiveSequence = 0;
+  const prevalencePositionByIndex = new Map<number, number>();
+  const topRows = list.map((ingredient, index) => {
+    const additive =
+      isAdditiveCategory(ingredient.category) &&
+      typeof ingredient.additive_category_printed === 'string' &&
+      ingredient.additive_category_printed.trim() !== '';
+    if (additive) additiveSequence += 1;
+    else {
+      prevalencePosition += 1;
+      prevalencePositionByIndex.set(index, prevalencePosition);
+    }
+    return {
+      food_id: foodId,
+      ingredient_name: ingredient.name,
+      ingredient_category: ingredient.category,
+      inclusion_pct: ingredient.inclusion_pct,
+      note: ingredient.note,
+      additive_category_printed: additive ? ingredient.additive_category_printed : null,
+      additive_sequence: additive ? additiveSequence : null,
+      parent_ingredient_id: null,
+      position_in_list: additive ? null : prevalencePosition,
+    };
+  });
+  return { topRows, prevalencePositionByIndex };
+}
+
 /**
  * Insert a parsed list as `food_ingredients` rows for one food.
  *
@@ -145,15 +209,7 @@ export async function insertParsedIngredients(
 ): Promise<{ written: number; error?: string }> {
   const client = supabaseAdmin;
 
-  const topRows = list.map((ingredient, index) => ({
-    food_id: foodId,
-    ingredient_name: ingredient.name,
-    ingredient_category: ingredient.category,
-    inclusion_pct: ingredient.inclusion_pct,
-    note: ingredient.note,
-    parent_ingredient_id: null,
-    position_in_list: index + 1,
-  }));
+  const { topRows, prevalencePositionByIndex } = buildTopIngredientRows(foodId, list);
 
   const { data: insertedTop, error: insertError } = await client
     .from('food_ingredients')
@@ -165,14 +221,15 @@ export async function insertParsedIngredients(
   let written = insertedTop?.length ?? 0;
 
   const idByPosition = new Map<number, string>();
-  for (const row of (insertedTop ?? []) as { id: string; position_in_list: number }[]) {
-    idByPosition.set(row.position_in_list, row.id);
+  for (const row of (insertedTop ?? []) as { id: string; position_in_list: number | null }[]) {
+    if (row.position_in_list !== null) idByPosition.set(row.position_in_list, row.id);
   }
 
   const subRows: Record<string, unknown>[] = [];
   list.forEach((ingredient, index) => {
     if (ingredient.sub.length === 0) return;
-    const parentId = idByPosition.get(index + 1);
+    const parentPosition = prevalencePositionByIndex.get(index);
+    const parentId = parentPosition === undefined ? undefined : idByPosition.get(parentPosition);
     if (!parentId) return;
     ingredient.sub.forEach((child, childIndex) => {
       subRows.push({
@@ -181,6 +238,8 @@ export async function insertParsedIngredients(
         ingredient_category: child.category,
         inclusion_pct: child.inclusion_pct,
         note: child.note,
+        additive_category_printed: null,
+        additive_sequence: null,
         parent_ingredient_id: parentId,
         position_in_list: childIndex + 1,
       });

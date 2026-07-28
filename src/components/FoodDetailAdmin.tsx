@@ -220,6 +220,9 @@ export default function FoodDetailAdmin({ foodId }: { foodId: string }) {
     );
   }
 
+  const compositionIngredients = ingredients.filter((ingredient) => ingredient.position_in_list !== null);
+  const additives = ingredients.filter((ingredient) => ingredient.additive_sequence != null);
+
   return (
     <div className="flex flex-col gap-6">
       <button type="button" onClick={() => router.push('/admin/foods')} className="btn-ghost btn-sm self-start">
@@ -278,11 +281,11 @@ export default function FoodDetailAdmin({ foodId }: { foodId: string }) {
       <div className="card card-pad">
         <p className="section-title">Ingredients</p>
         <p className="help-text mt-1">Ordered as listed on the packet/source.</p>
-        {ingredients.length === 0 ? (
+        {compositionIngredients.length === 0 ? (
           <p className="muted mt-3 text-[14px]">No ingredient list recorded.</p>
         ) : (
           <ol className="mt-3 flex flex-col gap-1.5">
-            {ingredients.map((ing) => (
+            {compositionIngredients.map((ing) => (
               <li key={ing.id} className="flex items-baseline gap-3 text-[14px]">
                 <span className="metric w-6 shrink-0 text-ink-soft">{ing.position_in_list}.</span>
                 <span className="text-ink">{ing.ingredient_name}</span>
@@ -292,6 +295,24 @@ export default function FoodDetailAdmin({ foodId }: { foodId: string }) {
               </li>
             ))}
           </ol>
+        )}
+        {additives.length > 0 && (
+          <div className="mt-5 border-t border-line pt-4">
+            <p className="section-title">Additives</p>
+            <p className="help-text mt-1">Separate label-panel order; not ingredient prevalence.</p>
+            <ol className="mt-3 flex flex-col gap-1.5">
+              {additives.map((additive) => (
+                <li key={additive.id} className="flex items-baseline gap-3 text-[14px]">
+                  <span className="metric w-6 shrink-0 text-ink-soft">{additive.additive_sequence}.</span>
+                  <span className="text-ink">{additive.ingredient_name}</span>
+                  {additive.note && <span className="text-ink-soft">{additive.note}</span>}
+                  {additive.additive_category_printed && (
+                    <span className="badge-neutral">{additive.additive_category_printed}</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
         )}
       </div>
 

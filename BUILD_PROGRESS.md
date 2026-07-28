@@ -1,5 +1,48 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Additive-panel safety gap closed (2026-07-28, latest)
+
+**Decision: Option A (`food_ingredients`), based on actual readers.** Both the
+allergy/condition hard filter and correlation matching already scan every
+`food_ingredients.ingredient_name` without a category or position predicate.
+A separate `food_additives` table would require a second safety query and create
+another path that could drift. Additive declarations now remain in
+`food_ingredients`, with distinct normalized categories
+(`additive_nutritional`, `additive_sensory`, `additive_technological`,
+`additive_antioxidant`) plus the exact printed heading in
+`additive_category_printed`.
+
+**Prevalence ordering remains isolated.** Additive-panel rows have
+`position_in_list = NULL`; `additive_sequence` records only printed additive
+order. The `food_full` view exposes separate `ingredients` and `additives`
+arrays, the admin detail UI renders separate sections, and the composition
+opacity trigger explicitly ignores null prevalence positions. Legacy generic
+`additive` rows without a printed panel heading stay prevalence-ranked rather
+than being reinterpreted.
+
+**Parser/backfill discipline.** `compositionParser.ts` now finds additive
+panels before or after analytical constituents, preserves nutritional/sensory/
+technological/antioxidant boundaries, and stores printed amount+unit verbatim in
+`note` without conversion. Run 1 was dry-only and found two real parsing
+problems (`DL-methionine, technically pure` split at its qualifier comma, and
+trailing Fish4Dogs marketing prose); both were fixed and regression-tested.
+Run 2 applied only rows parsed from each food's existing `composition_raw`.
+No brand/product knowledge was used.
+
+**Live result:** migrations `add_food_additive_storage` and
+`make_food_full_security_invoker` applied to project
+`ysffyuohwvdifvbopfcm`. 94 additive rows across 13 foods: 79 nutritional, 2
+sensory, 13 antioxidant; 0 ranked additive rows, 0 missing printed headings, 0
+duplicate additive sequences. Farmina N&D Ocean Adult Medium & Maxi now has
+23 prevalence-ranked composition ingredients plus all 25 printed additives.
+Direct name matching finds rosemary, green tea, taurine, copper, zinc, and
+selenium in `food_ingredients`, so existing hard-filter queries can see them.
+
+**Verification:** additive/parser/hard-filter/storage tests 44/44; main-branch suite
+179/179; `tsc --noEmit` clean; production build exit 0; `git diff --check`
+clean. Supabase advisor has no `food_full` or `food_ingredients` security
+finding after switching `food_full` to security-invoker.
+
 ## Pets at Home ruled out, Tier 2 live against two manufacturers, UK Pet Food directory, GS1 scaffold (2026-07-27, latest)
 
 **Pets at Home ruled out — the clearest prohibition found all session.** Its

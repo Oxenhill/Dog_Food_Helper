@@ -66,13 +66,14 @@ function isCrawlerRow(row: ContributionRow): boolean {
     !Array.isArray(row.payload?.ingredients);
 }
 
-/** parse_composition()'s legal_category has no equivalent in the food_ingredients nutritional vocabulary (protein_animal, carbohydrate, etc) — mapping it would be a guess, so it's dropped to null rather than invented. additive maps directly; it's the one category both vocabularies share. */
+/** Legal categories stay unclassified here; label-derived additive categories are preserved. */
 function toParsedIngredient(node: ParsedCompositionIngredient): ParsedIngredient {
   return {
     name: node.name,
-    category: node.category === 'additive' ? 'additive' : null,
+    category: node.category?.startsWith('additive') ? node.category : null,
     inclusion_pct: node.inclusion_pct,
     note: node.note,
+    additive_category_printed: node.additive_category_printed,
     sub: node.sub.map(toParsedIngredient),
   };
 }

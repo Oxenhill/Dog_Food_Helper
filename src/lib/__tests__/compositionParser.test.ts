@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseComposition,
   canonicalIngredientKey,
+  isAdditiveIngredientCategory,
   splitTopLevel,
   type ParsedCompositionIngredient,
 } from '../compositionParser';
@@ -99,7 +100,9 @@ test('additives block is parsed separately and tagged, headline stays clean', ()
   assert.equal(needsReview, false);
   assert.equal(ingredients[0].category, null);
   assert.equal(ingredients[1].category, null);
-  const additiveNames = ingredients.filter((i) => i.category === 'additive').map((i) => i.name);
+  const additiveNames = ingredients
+    .filter((i) => isAdditiveIngredientCategory(i.category))
+    .map((i) => i.name);
   assert.ok(additiveNames.some((n) => n.toLowerCase().includes('vitamin a')));
   assert.ok(additiveNames.some((n) => n.toLowerCase().includes('vitamin d3')));
 });
@@ -108,8 +111,85 @@ test('nutritional additives per kg heading is recognised', () => {
   const { ingredients } = parseComposition(
     'Chicken 80%, Rice 20%. Nutritional additives per kg: Vitamin E 40mg, Copper 12mg'
   );
-  const additives = ingredients.filter((i) => i.category === 'additive');
+  const additives = ingredients.filter((i) => isAdditiveIngredientCategory(i.category));
   assert.equal(additives.length, 2);
+  assert.ok(additives.every((additive) => additive.category === 'additive_nutritional'));
+});
+
+test('Farmina shape: additives after analytical constituents are retained with distinct printed categories', () => {
+  const { ingredients } = parseComposition(
+    'Cod (25%), pea starch. Analytical constituents: Crude Protein 30%; Crude Fat 18%. ' +
+    'Nutritional additives Vitamin A 15000IU; Zinc (zinc chelate): 163.80mg; Taurine 1000mg. ' +
+    'Sensory additives: green tea extract 100mg; rosemary extract. ' +
+    'Antioxidants: tocopherol extracts of plant oils.'
+  );
+  const additives = ingredients.filter((ingredient) =>
+    isAdditiveIngredientCategory(ingredient.category)
+  );
+
+  assert.deepEqual(
+    additives.map(({ name, category, note, additive_category_printed }) => ({
+      name,
+      category,
+      note,
+      additive_category_printed,
+    })),
+    [
+      {
+        name: 'Vitamin A',
+        category: 'additive_nutritional',
+        note: '15000IU',
+        additive_category_printed: 'Nutritional additives',
+      },
+      {
+        name: 'Zinc (zinc chelate)',
+        category: 'additive_nutritional',
+        note: '163.80mg',
+        additive_category_printed: 'Nutritional additives',
+      },
+      {
+        name: 'Taurine',
+        category: 'additive_nutritional',
+        note: '1000mg',
+        additive_category_printed: 'Nutritional additives',
+      },
+      {
+        name: 'green tea extract',
+        category: 'additive_sensory',
+        note: '100mg',
+        additive_category_printed: 'Sensory additives',
+      },
+      {
+        name: 'rosemary extract',
+        category: 'additive_sensory',
+        note: null,
+        additive_category_printed: 'Sensory additives',
+      },
+      {
+        name: 'tocopherol extracts of plant oils',
+        category: 'additive_antioxidant',
+        note: null,
+        additive_category_printed: 'Antioxidants',
+      },
+    ]
+  );
+});
+
+test('additive qualifiers and parenthesised printed amounts stay verbatim', () => {
+  const { ingredients } = parseComposition(
+    'Fish oil. Nutritional additives: DL-methionine, technically pure 4000mg. ' +
+    'Antioxidants: Tocopherol extracts from vegetable oils (1%).'
+  );
+  const additives = ingredients.filter((ingredient) =>
+    isAdditiveIngredientCategory(ingredient.category)
+  );
+  assert.deepEqual(
+    additives.map(({ name, note }) => ({ name, note })),
+    [
+      { name: 'DL-methionine, technically pure', note: '4000mg' },
+      { name: 'Tocopherol extracts from vegetable oils', note: '(1%)' },
+    ]
+  );
 });
 
 test('analytical constituents block is dropped, never parsed as an ingredient', () => {
@@ -196,10 +276,12 @@ test('real-crawled bug (fish4dogs.com Run 1): a thousands-separator comma in an 
   const { ingredients } = parseComposition(
     'Salmon (27%), Potato (21%). Additives (per kg): Vitamins: Vitamin A (Retinyl acetate) 22,500 IU, Vitamin D3 900 IU.'
   );
-  const additive = ingredients.find((i) => i.category === 'additive' && i.name.toLowerCase().includes('vitamin a'));
+  const additive = ingredients.find(
+    (i) => isAdditiveIngredientCategory(i.category) && i.name.toLowerCase().includes('vitamin a')
+  );
   assert.ok(additive, `expected a Vitamin A additive entry, got: ${JSON.stringify(ingredients)}`);
-  assert.match(additive!.name, /22,500/, 'the thousands separator must survive intact, not be split into "22" and "500 IU"');
-  assert.equal(ingredients.find((i) => i.name.includes('900 IU'))?.name, 'Vitamin D3 900 IU');
+  assert.equal(additive!.note, '22,500 IU', 'the amount and unit must survive verbatim in note');
+  assert.equal(ingredients.find((i) => i.name === 'Vitamin D3')?.note, '900 IU');
   // needsReview stays true here for an unrelated, honest reason: "(Retinyl
   // acetate)" is a mid-string qualifier paren, not a trailing one, which
   // splitTrailingParen doesn't resolve — correctly left flagged rather than
@@ -208,19 +290,19 @@ test('real-crawled bug (fish4dogs.com Run 1): a thousands-separator comma in an 
 
 test('real-crawled bug: "Additives (per kg):" with the qualifier in parens is recognised as a section heading, not just "Additives per kg:"', () => {
   const { ingredients } = parseComposition('Chicken 80%, Rice 20%. Additives (per kg): Vitamin E 40mg.');
-  assert.equal(ingredients.filter((i) => i.category === 'additive').length, 1);
+  assert.equal(ingredients.filter((i) => isAdditiveIngredientCategory(i.category)).length, 1);
 });
 
 test('real-crawled bug (emea.acana.com Run 1): "ADDITIVES (per kg)" with no colon at all is still recognised as a heading, not glued onto the last headline ingredient', () => {
   const { ingredients } = parseComposition('Turmeric. ADDITIVES (per kg) Technological additives: Citric acid 40mg.');
   const turmeric = ingredients.find((i) => i.name.toLowerCase() === 'turmeric');
   assert.ok(turmeric, `expected a clean "Turmeric" entry, got: ${JSON.stringify(ingredients)}`);
-  assert.equal(ingredients.some((i) => i.category === 'additive'), true);
+  assert.equal(ingredients.some((i) => isAdditiveIngredientCategory(i.category)), true);
 });
 
 test('"additives" used inline as a legal-category term (no "per kg", no colon) is NOT mistaken for a section heading', () => {
   const { ingredients } = parseComposition('Cereals, EC permitted additives, Minerals');
-  assert.equal(ingredients.filter((i) => i.category === 'additive').length, 0);
+  assert.equal(ingredients.filter((i) => isAdditiveIngredientCategory(i.category)).length, 0);
   assert.equal(ingredients.some((i) => i.name.toLowerCase() === 'ec permitted additives'), true);
 });
 

@@ -99,7 +99,13 @@ export interface FoodIngredient {
   food_id: string;
   ingredient_name: string;
   ingredient_category?: string;
-  position_in_list: number;
+  // Prevalence rank for composition ingredients only. Additive rows are null
+  // so they can never distort label-order prevalence.
+  position_in_list: number | null;
+  // Printed order inside the additives panel. Null on composition ingredients.
+  additive_sequence?: number | null;
+  // Exact printed heading, e.g. "Nutritional additives" or "Antioxidants".
+  additive_category_printed?: string | null;
   // Printed inclusion percentage (e.g. "Fresh Chicken (26%)" -> 26). Null when
   // the label doesn't state one — never inferred.
   inclusion_pct?: number | null;

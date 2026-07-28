@@ -38,6 +38,15 @@ export interface FoodFullIngredient {
   sub_ingredients: FoodFullIngredient[];
 }
 
+export interface FoodFullAdditive {
+  name: string;
+  category: string;
+  printed_category: string;
+  sequence: number;
+  /** Printed amount and unit, verbatim; null when the label prints no amount. */
+  note: string | null;
+}
+
 /** The eight guaranteed-analysis columns, plus the derived carbohydrate figure. */
 export interface FoodNutrients {
   protein_pct: number | null;
@@ -67,6 +76,8 @@ export interface FoodFull {
   nutrients: FoodNutrients;
   /** Empty when no ingredient list has been recorded. Never fabricated. */
   ingredients: FoodFullIngredient[];
+  /** Label-declared additives, kept outside prevalence-ranked ingredients. */
+  additives: FoodFullAdditive[];
   /** Top-level ingredient count as reported by the view. */
   ingredient_count: number;
 }
@@ -100,6 +111,24 @@ function mapIngredient(raw: unknown): FoodFullIngredient | null {
     inclusion_pct: num(r.inclusion_pct),
     note: typeof r.note === 'string' && r.note.trim() ? r.note : null,
     sub_ingredients: subs,
+  };
+}
+
+function mapAdditive(raw: unknown): FoodFullAdditive | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const name = typeof r.name === 'string' ? r.name.trim() : '';
+  const category = typeof r.category === 'string' ? r.category : '';
+  const printedCategory =
+    typeof r.printed_category === 'string' ? r.printed_category.trim() : '';
+  const sequence = num(r.sequence);
+  if (!name || !category || !printedCategory || sequence === null) return null;
+  return {
+    name,
+    category,
+    printed_category: printedCategory,
+    sequence,
+    note: typeof r.note === 'string' && r.note.trim() ? r.note : null,
   };
 }
 
@@ -142,6 +171,12 @@ export function mapFoodFullRow(row: Record<string, unknown>): FoodFull {
     : [];
 
   const carb = num(row.est_digestible_carbohydrate_pct);
+  const additives = Array.isArray(row.additives)
+    ? row.additives
+        .map(mapAdditive)
+        .filter((item): item is FoodFullAdditive => item !== null)
+        .sort((a, b) => a.sequence - b.sequence)
+    : [];
 
   return {
     id: String(row.id),
@@ -166,6 +201,7 @@ export function mapFoodFullRow(row: Record<string, unknown>): FoodFull {
       carbohydrate_band: carb === null ? null : carbBand(carb),
     },
     ingredients,
+    additives,
     ingredient_count: num(row.ingredient_count) ?? ingredients.length,
   };
 }

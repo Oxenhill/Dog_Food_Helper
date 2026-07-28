@@ -7,8 +7,8 @@ import { FoodType, SizeCategory } from '@/lib/types';
  * Admin food detail + correction endpoint. Admin-gated (requireAdmin —
  * verified session + user_profiles.is_admin).
  *
- * GET returns the food row plus its food_ingredients (ordered by
- * position_in_list) so the detail page can show provenance (what was
+ * GET returns the food row plus its food_ingredients (composition prevalence
+ * first, then additive panel order) so the detail page can show provenance (what was
  * actually extracted/ingested) alongside the editable nutrient/commercial
  * fields.
  *
@@ -63,7 +63,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .from('food_ingredients')
       .select('*')
       .eq('food_id', foodId)
-      .order('position_in_list', { ascending: true }),
+      .order('position_in_list', { ascending: true, nullsFirst: false })
+      .order('additive_sequence', { ascending: true, nullsFirst: false }),
   ]);
 
   if (foodRes.error) {

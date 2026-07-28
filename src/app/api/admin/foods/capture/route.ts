@@ -31,19 +31,21 @@ function cleanPct(value: unknown): number | null {
   return Math.round(n * 100) / 100;
 }
 
-/** parse_composition()'s legal_category has no equivalent in the food_ingredients nutritional vocabulary — mapping it would be a guess, so it's dropped to null rather than invented. additive maps directly; it's the one category both vocabularies share. Mirrors toParsedIngredient in /api/admin/contributions. */
+/** Legal categories stay unclassified here; label-derived additive categories are preserved. */
 function toPayloadIngredient(node: ParsedCompositionIngredient): {
   name: string;
   category: string | null;
   inclusion_pct: number | null;
   note: string | null;
+  additive_category_printed: string | null;
   sub: ReturnType<typeof toPayloadIngredient>[];
 } {
   return {
     name: node.name,
-    category: node.category === 'additive' ? 'additive' : null,
+    category: node.category?.startsWith('additive') ? node.category : null,
     inclusion_pct: node.inclusion_pct,
     note: node.note,
+    additive_category_printed: node.additive_category_printed,
     sub: node.sub.map(toPayloadIngredient),
   };
 }

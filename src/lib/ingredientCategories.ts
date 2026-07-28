@@ -63,8 +63,28 @@ export const INGREDIENT_CATEGORIES = [
   },
   {
     value: 'additive',
-    label: 'Additive',
-    hint: 'Preservatives, antioxidants, colourings, palatants.',
+    label: 'Additive — category not specified',
+    hint: 'Generic additive classification where no distinct printed category is available.',
+  },
+  {
+    value: 'additive_nutritional',
+    label: 'Nutritional additive',
+    hint: 'Nutritional additives, vitamins, trace elements — only as printed.',
+  },
+  {
+    value: 'additive_sensory',
+    label: 'Sensory additive',
+    hint: 'Sensory additives — only as printed.',
+  },
+  {
+    value: 'additive_technological',
+    label: 'Technological additive',
+    hint: 'Technological additives — only as printed.',
+  },
+  {
+    value: 'additive_antioxidant',
+    label: 'Antioxidant additive',
+    hint: 'Antioxidants — only when printed as an additive function/category.',
   },
   {
     value: 'legal_category',
@@ -78,6 +98,19 @@ export const INGREDIENT_CATEGORIES = [
 export type IngredientCategory = (typeof INGREDIENT_CATEGORIES)[number]['value'];
 
 export const INGREDIENT_CATEGORY_VALUES: string[] = INGREDIENT_CATEGORIES.map((c) => c.value);
+
+export const ADDITIVE_CATEGORY_VALUES = [
+  'additive',
+  'additive_nutritional',
+  'additive_sensory',
+  'additive_technological',
+  'additive_antioxidant',
+] as const;
+
+export function isAdditiveCategory(value: unknown): boolean {
+  return typeof value === 'string' &&
+    (ADDITIVE_CATEGORY_VALUES as readonly string[]).includes(value);
+}
 
 export function isIngredientCategory(value: unknown): value is IngredientCategory {
   return typeof value === 'string' && INGREDIENT_CATEGORY_VALUES.includes(value);
