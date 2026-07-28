@@ -25,4 +25,8 @@ npm-debug.log*
 
 # Isolated preview dev-server build output (see next.config.mjs NEXT_PREVIEW_DISTDIR)
 .next-preview/
+.next-ui-qa/
 .crawler-cache/
+
+# Local agent settings
+.claude/

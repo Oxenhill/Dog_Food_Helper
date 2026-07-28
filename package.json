@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "tsx --env-file=.env --test src/lib/__tests__/**/*.test.ts",
-    "seed:phase4": "tsx --env-file=.env scripts/seedPhase4Research.ts"
+    "seed:phase4": "tsx --env-file=.env scripts/seedPhase4Research.ts",
+    "research:discover": "tsx scripts/researchDiscoveryDryRun.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.4",

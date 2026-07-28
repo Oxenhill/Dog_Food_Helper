@@ -99,6 +99,9 @@ a user request." This design follows that.
 | `direction` | `supports`, `cautions_against`, `neutral`, `insufficient_evidence` |
 | `effect_summary` | one sentence, plain English, shown to users |
 | `evidence_grade` | see §5 |
+| `evidence_scope` | `canine_direct` for Groups A–F, or non-biological `veterinary_methodology` for Group G |
+| `grading_inputs_complete` | boolean — all inputs relevant to this grade branch are present |
+| `missing_grading_inputs` | array of absent grade inputs |
 | `study_design` | `systematic_review`, `rct`, `cohort`, `case_control`, `case_series`, `in_vitro`, `narrative_review` |
 | `species` | `dog`, `cat`, `human`, `rodent`, `other` |
 | `sample_size` | integer, nullable |
@@ -154,26 +157,49 @@ Companion-animal nutrition carries two further problems:
   Applying it to dogs is an inferential step the paper did not take.
 
 So grading is computed from objective, machine-readable metadata, not from the fact
-of publication.
+of publication. The grade represents study-design strength plus **known** penalties.
+Activation eligibility is separate. Missing metadata never masquerades as a negative
+finding: it leaves the grade provisional, sets `grading_inputs_complete = false`,
+and blocks unattended activation.
 
 | grade | criteria |
 |---|---|
 | **A** | systematic review or meta-analysis, in dogs |
-| **B** | RCT or controlled trial in dogs, independently funded, n ≥ 20 |
-| **C** | cohort/case-control in dogs, OR RCT in dogs with industry funding |
-| **D** | case series, small n, in vitro, or narrative review |
-| **E** | non-canine species, extrapolated |
+| **B** | RCT or controlled trial in dogs |
+| **C** | cohort/case-control in dogs; OR a grade-B design with known industry/mixed funding; OR a grade-B design with known n < 20 |
+| **D** | case series, in vitro, narrative review, preprint; OR a cohort/case-control with known n < 20 |
+| **E** | non-canine evidence encountered despite source filters; excluded from ingestion |
+
+Unknown sample size or funding does not downgrade a grade. Known small sample size
+applies only to primary studies: B becomes C, and C becomes D. It does not apply to
+systematic reviews or meta-analyses because their reported count may mean studies,
+animals or pooled observations. Known industry/mixed funding downgrades B to C.
+Unknown funding keeps the design grade but remains incomplete and ineligible for
+unattended activation.
+
+Completeness is branch-specific. RCT/controlled-trial grades require sample size
+and funding; cohort/case-control grades require sample size. Those fields are not
+called missing for reviews or other designs where they cannot change the grade.
 
 **Auto-activation rule.** A drafted claim goes live without owner review only if
 **all** hold:
 
 1. `evidence_grade` is A or B
 2. `species = dog`
-3. `funding_independent = true` (null does not count)
-4. at least one corroborating claim from a different document
-5. source document is not retracted (checked at ingest and re-checked monthly)
-6. `direction` is not `cautions_against` — anything steering a user *away* from a
+3. `evidence_scope = canine_direct`
+4. `grading_inputs_complete = true` and `missing_grading_inputs` is empty
+5. `funding_independent = true` (null does not count)
+6. two corroborating claims from two additional independent document/study families
+7. source document is not retracted (checked at ingest and re-checked monthly)
+8. `direction` is not `cautions_against` — anything steering a user *away* from a
    food gets human eyes regardless of grade
+
+Corroboration means the same proposition, population and direction. Separate claim
+IDs or DOIs are insufficient if they are duplicate publications or secondary
+analyses of one study population. Grade E, incomplete, unapproved or retracted
+claims never count as corroboration. Biological discovery (groups A–F) is
+canine-only and requires PubMed's structured `Dogs` MeSH heading. Group G
+veterinary-methodology records are appraisal context, never biological evidence.
 
 Everything else lands in `queued_for_review`. Nothing is discarded.
 
@@ -191,10 +217,39 @@ sets all its claims to `superseded` and raises a `system_alerts` row.
 
 Scheduled, autonomous, from an allowlist of sources only.
 
-**Allowlisted sources:** PubMed/PMC, named veterinary journals (JVIM, JSAP, Vet
-Dermatology, BMC Vet Research, Frontiers in Vet Science), WSAVA and FEDIAF guidance
-documents. Nothing outside the allowlist enters. No blogs, no manufacturer white
-papers, no press releases.
+### 6.1 Access reality
+
+There is no institutional or paid journal access. Full open-access text is fetched;
+abstract-only records are catalogued but keep unverifiable funding metadata null and
+therefore fail unattended activation.
+
+### 6.2 Sources
+
+**PubMed E-utilities is the primary discovery source.** Each canine topic query is
+led by `"Dogs"[Mesh]`, with publication type, title/abstract terms and publication
+date constrained in ESearch. PubMed's structured NLM publication types and MeSH
+headings supply study design and species metadata; a model never assigns them.
+
+There is no deliberate human or rodent biological discovery stream. Groups A–F
+are led by `"Dogs"[Mesh]`. Group G may use `"Veterinary Medicine"[Mesh]` to
+retrieve literature about reporting, bias and evidence appraisal; those records
+use `evidence_scope = veterinary_methodology`. Species is inapplicable rather
+than missing for that scope. It never corroborates biological claims or enters
+scoring, recommendations or unattended activation.
+
+Resolve returned PMIDs, DOIs and PMCIDs against **Europe PMC**. Europe PMC is the
+open-access full-text source, not the species-discovery source. Fetch
+`fullTextXML` only where Europe PMC reports OA availability, then parse the JATS
+`<funding-group>` and structured competing-interest declarations (`<fn-group>` or
+publisher-specific `<sec sec-type="COI-statement">`) verbatim. A metadata OA flag
+does not count as full-text access if `fullTextXML` itself fails.
+
+Other allowlisted sources are named veterinary journals (JVIM, JSAP, Veterinary
+Dermatology, BMC Veterinary Research, Frontiers in Veterinary Science), WSAVA and
+FEDIAF guidance documents. Nothing outside the allowlist enters. No blogs,
+manufacturer white papers, press releases, or secondary science journalism.
+
+### 6.3 Pipeline
 
 **Per document:** fetch metadata and abstract or open-access full text, store in
 `research_documents`, chunk, embed into `research_chunks`. Reduce before any model
@@ -435,10 +490,13 @@ not a source the claim layer accepts.
 2. ~~**Biome lab formats.**~~ **Answered 2026-07-28** — see §11. Biome4Pets and
    BIOME9 profiled from real reports. Remaining sub-question: which *other* labs do
    clients use? Each needs its own recon pass before its reports are accepted.
-3. **Corroboration threshold.** Auto-activation requires one corroborating claim.
-   Is one enough, or two?
-4. **Grade E claims.** Keep non-canine extrapolations as visible-but-flagged, or
-   exclude them entirely?
+3. ~~**Corroboration threshold.**~~ **Answered 2026-07-28** — require two
+   corroborating claims from two additional independent document/study families.
+   Duplicate publications or secondary analyses of one population do not count.
+4. ~~**Grade E claims.**~~ **Revised 2026-07-28** — exclude human/rodent
+   biological studies. Groups A–F require `"Dogs"[Mesh]`; Group G veterinary
+   methodology is retained in its own non-biological scope. Grade E remains only
+   fail-closed and never corroborates, scores, recommends or auto-activates.
 5. **Seed corpus.** Which 20–30 papers should bootstrap the layer? Owner-selected
    seeds calibrate everything downstream.
 

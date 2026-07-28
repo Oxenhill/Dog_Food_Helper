@@ -250,8 +250,34 @@ export type ReviewStatus = 'pending' | 'approved' | 'rejected';
 export interface ResearchDocument {
   id: string;
   topic: ResearchTopic;
+  topic_group?: ResearchTopicGroup | null;
+  discovery_topic?: string | null;
+  source_name?: ResearchSourceName | null;
+  source_id?: string | null;
   source_url?: string | null;
   title?: string | null;
+  doi?: string | null;
+  pmid?: string | null;
+  pmcid?: string | null;
+  journal?: string | null;
+  publication_year?: number | null;
+  study_design?: ResearchStudyDesign | null;
+  species?: ResearchSpecies | null;
+  sample_size?: number | null;
+  funding_declaration?: string | null;
+  competing_interests_declaration?: string | null;
+  funding_independent?: boolean | null;
+  grading_input_sources?: Record<string, string>;
+  missing_grading_inputs?: string[];
+  grading_inputs_complete?: boolean;
+  is_preprint?: boolean;
+  open_access?: boolean;
+  abstract_only?: boolean;
+  license?: string | null;
+  retracted?: boolean;
+  retraction_checked_at?: string | null;
+  evidence_grade?: EvidenceGrade;
+  evidence_scope?: ResearchEvidenceScope;
   retrieved_at: string;
   review_status: ReviewStatus;
   superseded_by?: string | null;
@@ -264,6 +290,73 @@ export interface ResearchChunk {
   chunk_index: number;
   // embedding intentionally omitted from the app-facing type — it's a
   // 1536-length vector, never something the client needs to see/hold.
+}
+
+export type ResearchTopicGroup = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
+export type ResearchSourceName = 'europe_pmc' | 'pubmed' | 'crossref' | 'wsava' | 'fediaf';
+export type ResearchSpecies = 'dog' | 'cat' | 'human' | 'rodent' | 'other';
+export type EvidenceGrade = 'A' | 'B' | 'C' | 'D' | 'E';
+export type ResearchEvidenceScope = 'canine_direct' | 'veterinary_methodology';
+export type ResearchStudyDesign =
+  | 'systematic_review'
+  | 'meta_analysis'
+  | 'rct'
+  | 'controlled_trial'
+  | 'comparative_study'
+  | 'clinical_trial'
+  | 'cohort'
+  | 'case_control'
+  | 'case_series'
+  | 'cross_sectional'
+  | 'in_vitro'
+  | 'narrative_review'
+  | 'guideline'
+  | 'other';
+export type ResearchClaimSubjectType =
+  | 'ingredient'
+  | 'nutrient'
+  | 'ingredient_class'
+  | 'processing_method'
+  | 'biome_marker';
+export type ResearchClaimDirection =
+  | 'supports'
+  | 'cautions_against'
+  | 'neutral'
+  | 'insufficient_evidence';
+export type ResearchClaimStatus =
+  | 'draft'
+  | 'active'
+  | 'queued_for_review'
+  | 'rejected'
+  | 'superseded';
+
+export interface ResearchClaim {
+  id: string;
+  document_id: string;
+  chunk_id: string;
+  supporting_quote: string;
+  subject_type: ResearchClaimSubjectType;
+  subject_value: string;
+  applies_to_condition?: string | null;
+  applies_to_life_stage?: 'growth' | 'adult' | 'senior' | 'all_life_stages' | null;
+  direction: ResearchClaimDirection;
+  effect_summary: string;
+  study_design?: ResearchStudyDesign | null;
+  species?: ResearchSpecies | null;
+  sample_size?: number | null;
+  funding_independent?: boolean | null;
+  is_preprint: boolean;
+  evidence_grade: EvidenceGrade;
+  evidence_scope: ResearchEvidenceScope;
+  missing_grading_inputs: string[];
+  grading_inputs_complete: boolean;
+  corroborating_claim_ids: string[];
+  status: ResearchClaimStatus;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // ============================================

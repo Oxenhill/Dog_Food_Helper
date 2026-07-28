@@ -1,131 +1,218 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { sessionAuthHeaders } from '@/lib/session';
-import { ResearchDocument, ResearchChunk, ReviewStatus } from '@/lib/types';
+import {
+  EvidenceGrade,
+  ResearchClaim,
+  ResearchClaimDirection,
+  ResearchClaimSubjectType,
+  ResearchDocument,
+} from '@/lib/types';
 
-type DocumentWithCount = ResearchDocument & { chunk_count: number };
+type ClaimDocument = Pick<
+  ResearchDocument,
+  | 'id'
+  | 'title'
+  | 'source_url'
+  | 'doi'
+  | 'journal'
+  | 'publication_year'
+  | 'study_design'
+  | 'species'
+  | 'sample_size'
+  | 'funding_declaration'
+  | 'competing_interests_declaration'
+  | 'funding_independent'
+  | 'grading_input_sources'
+  | 'missing_grading_inputs'
+  | 'grading_inputs_complete'
+  | 'is_preprint'
+  | 'open_access'
+  | 'abstract_only'
+  | 'retracted'
+  | 'retraction_checked_at'
+  | 'evidence_grade'
+  | 'evidence_scope'
+>;
 
-const STATUS_CLASS: Record<ReviewStatus, string> = {
-  approved: 'signal-better',
-  pending: 'badge-neutral',
+type ClaimRow = ResearchClaim & {
+  document: ClaimDocument | null;
+  chunk: { id: string; content: string; chunk_index: number } | null;
+};
+
+type ClaimEdit = Pick<
+  ResearchClaim,
+  | 'effect_summary'
+  | 'supporting_quote'
+  | 'subject_type'
+  | 'subject_value'
+  | 'applies_to_condition'
+  | 'applies_to_life_stage'
+  | 'direction'
+>;
+
+const GRADE_CLASS: Record<EvidenceGrade, string> = {
+  A: 'signal-better',
+  B: 'signal-better',
+  C: 'signal-steady',
+  D: 'badge-neutral',
+  E: 'signal-worse',
+};
+
+const STATUS_CLASS: Record<ResearchClaim['status'], string> = {
+  active: 'signal-better',
+  queued_for_review: 'badge-pine',
+  draft: 'badge-neutral',
   rejected: 'signal-worse',
+  superseded: 'badge-neutral',
 };
 
-const TOPIC_LABEL: Record<string, string> = {
-  gut_biome: 'gut biome',
-  allergy: 'allergy',
-  health_condition: 'health condition',
-  general: 'general',
-};
+const SUBJECT_TYPES: ResearchClaimSubjectType[] = [
+  'ingredient',
+  'nutrient',
+  'ingredient_class',
+  'processing_method',
+  'biome_marker',
+];
+const DIRECTIONS: ResearchClaimDirection[] = [
+  'supports',
+  'cautions_against',
+  'neutral',
+  'insufficient_evidence',
+];
 
-/**
- * Admin research-corpus status view (Phase 4 management surface). Lists
- * research_documents with a topic/status badge and chunk_count, and lets an
- * admin expand a document to read its chunks or change its review_status.
- *
- * VIEW/STATUS ONLY: this component never calls embedding or LLM code, never
- * triggers ingest, and never bulk-seeds the corpus — it only reads
- * GET /api/admin/research(/[docId]) and writes PATCH /api/admin/research/[docId]
- * (a plain review_status column update, no model call). Ingest, when needed,
- * happens separately via POST /api/research/ingest.
- */
+function metadataValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === '') return 'not supplied';
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  return String(value).replace(/_/g, ' ');
+}
+
+function editFromClaim(claim: ClaimRow): ClaimEdit {
+  return {
+    effect_summary: claim.effect_summary,
+    supporting_quote: claim.supporting_quote,
+    subject_type: claim.subject_type,
+    subject_value: claim.subject_value,
+    applies_to_condition: claim.applies_to_condition ?? null,
+    applies_to_life_stage: claim.applies_to_life_stage ?? null,
+    direction: claim.direction,
+  };
+}
+
 export default function ResearchAdmin() {
-  const [documents, setDocuments] = useState<DocumentWithCount[]>([]);
+  const [claims, setClaims] = useState<ClaimRow[]>([]);
+  const [filter, setFilter] = useState('queued_for_review');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [chunks, setChunks] = useState<ResearchChunk[]>([]);
-  const [chunksLoading, setChunksLoading] = useState(false);
-  const [chunksError, setChunksError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<Record<string, string>>({});
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edits, setEdits] = useState<Record<string, ClaimEdit>>({});
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
-  async function loadDocuments() {
+  const loadClaims = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/research', { headers: sessionAuthHeaders() });
-      if (!res.ok) {
-        setError(`Could not load research documents (${res.status}).`);
+      const response = await fetch(
+        `/api/admin/research/claims?status=${encodeURIComponent(filter)}`,
+        { headers: sessionAuthHeaders() },
+      );
+      const body = await response.json();
+      if (!response.ok) {
+        setError(body.error ?? `Could not load claims (${response.status}).`);
         return;
       }
-      const json = await res.json();
-      setDocuments(json.documents ?? []);
+      setClaims(Array.isArray(body.claims) ? body.claims : []);
     } catch {
-      setError('Could not load research documents.');
+      setError('Could not load research claims.');
     } finally {
       setLoading(false);
     }
-  }
+  }, [filter]);
 
   useEffect(() => {
-    void loadDocuments();
-  }, []);
+    void loadClaims();
+  }, [loadClaims]);
 
-  async function toggleExpand(doc: DocumentWithCount) {
-    if (expandedId === doc.id) {
-      setExpandedId(null);
-      setChunks([]);
-      return;
-    }
-    setExpandedId(doc.id);
-    setChunks([]);
-    setChunksError('');
-    setChunksLoading(true);
-    try {
-      const res = await fetch(`/api/admin/research/${doc.id}`, {
-        headers: sessionAuthHeaders(),
-      });
-      if (!res.ok) {
-        setChunksError(`Could not load chunks (${res.status}).`);
-        return;
-      }
-      const json = await res.json();
-      setChunks(json.chunks ?? []);
-    } catch {
-      setChunksError('Could not load chunks.');
-    } finally {
-      setChunksLoading(false);
-    }
-  }
+  async function review(
+    claim: ClaimRow,
+    action: 'approve' | 'reject' | 'edit_and_approve',
+  ) {
+    setBusyId(claim.id);
+    setActionErrors((current) => ({ ...current, [claim.id]: '' }));
+    const payload: Record<string, unknown> = {
+      action,
+      review_note: reviewNotes[claim.id]?.trim() || null,
+    };
+    if (action === 'edit_and_approve') Object.assign(payload, edits[claim.id]);
 
-  async function setStatus(doc: DocumentWithCount, review_status: ReviewStatus) {
-    setBusyId(doc.id);
-    setActionError((prev) => ({ ...prev, [doc.id]: '' }));
     try {
-      const res = await fetch(`/api/admin/research/${doc.id}`, {
+      const response = await fetch(`/api/admin/research/claims/${claim.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...sessionAuthHeaders() },
-        body: JSON.stringify({ review_status }),
+        headers: { ...sessionAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-      const json = await res.json();
-      if (!res.ok) {
-        setActionError((prev) => ({ ...prev, [doc.id]: json.error ?? `Error (${res.status})` }));
+      const body = await response.json();
+      if (!response.ok) {
+        setActionErrors((current) => ({
+          ...current,
+          [claim.id]: body.error ?? `Review failed (${response.status}).`,
+        }));
         return;
       }
-      setDocuments((prev) =>
-        prev.map((d) => (d.id === doc.id ? { ...d, review_status } : d)),
-      );
+      setClaims((current) => current.filter((row) => row.id !== claim.id));
+      setEditingId(null);
     } catch {
-      setActionError((prev) => ({ ...prev, [doc.id]: 'Request failed.' }));
+      setActionErrors((current) => ({ ...current, [claim.id]: 'Review request failed.' }));
     } finally {
       setBusyId(null);
     }
   }
 
+  function startEditing(claim: ClaimRow) {
+    setEdits((current) => ({ ...current, [claim.id]: editFromClaim(claim) }));
+    setEditingId(claim.id);
+  }
+
+  function updateEdit<K extends keyof ClaimEdit>(claimId: string, field: K, value: ClaimEdit[K]) {
+    setEdits((current) => ({
+      ...current,
+      [claimId]: { ...current[claimId], [field]: value },
+    }));
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <p className="help-text">
-          Read/approve view over the research corpus. Ingest happens separately at{' '}
-          <span className="metric">POST /api/research/ingest</span> (admin-gated) — this page
-          does not create or embed content.
-        </p>
+      <div className="callout-disclaimer">
+        Claims are drafted offline and reviewed here. A grade is computed from source metadata;
+        it is not a reviewer score. Metadata completeness is shown separately, and an incomplete
+        claim can never qualify for future unattended activation. Nothing on this screen
+        diagnoses, hard-filters a food, or activates a claim without a deliberate review action.
+      </div>
+
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <label className="field min-w-[220px]">
+          <span className="label">Claim status</span>
+          <select
+            className="select"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          >
+            <option value="queued_for_review">Queued for review</option>
+            <option value="draft">Draft</option>
+            <option value="active">Active</option>
+            <option value="rejected">Rejected</option>
+            <option value="superseded">Superseded</option>
+            <option value="all">All claims</option>
+          </select>
+        </label>
         <button
           type="button"
-          onClick={() => void loadDocuments()}
-          className="btn-secondary btn-sm shrink-0"
+          onClick={() => void loadClaims()}
+          className="btn-secondary btn-sm"
+          disabled={loading}
         >
           {loading ? 'Loading…' : 'Refresh'}
         </button>
@@ -137,105 +224,342 @@ export default function ResearchAdmin() {
         </div>
       )}
 
-      {!loading && !error && documents.length === 0 && (
-        <div className="callout-info">
-          No research documents yet — the corpus is built deliberately over time.
+      {!loading && !error && claims.length === 0 && (
+        <div className="card card-pad">
+          <p className="section-title">No {filter.replace(/_/g, ' ')} claims</p>
+          <p className="help-text mt-2">
+            This is expected before Gate 3 drafting run 2. Dry-run proposals are never written
+            into this queue.
+          </p>
         </div>
       )}
 
-      {documents.map((doc) => {
-        const expanded = expandedId === doc.id;
-        return (
-          <div key={doc.id} className="card card-pad">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex flex-col gap-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="badge-pine">{TOPIC_LABEL[doc.topic] ?? doc.topic}</span>
-                  <span className={STATUS_CLASS[doc.review_status]}>{doc.review_status}</span>
-                  <span className="metric text-[12px] text-ink-soft">
-                    {doc.chunk_count} chunk{doc.chunk_count === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void toggleExpand(doc)}
-                  className="text-left text-[15px] font-semibold text-ink hover:text-pine"
-                >
-                  {doc.title ?? '(untitled document)'}
-                </button>
-                {doc.source_url && (
-                  <a
-                    href={doc.source_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[13px] text-pine hover:underline"
-                  >
-                    {doc.source_url}
-                  </a>
-                )}
-                <span className="help-text">
-                  retrieved <span className="metric">{new Date(doc.retrieved_at).toLocaleDateString()}</span>
-                  {doc.superseded_by && (
-                    <>
-                      {' '}
-                      · superseded by <span className="metric">{doc.superseded_by}</span>
-                    </>
-                  )}
-                </span>
-              </div>
+      {claims.map((claim) => {
+        const document = claim.document;
+        const edit = edits[claim.id];
+        const isEditing = editingId === claim.id && edit;
+        const isBusy = busyId === claim.id;
+        const rejectionNote = reviewNotes[claim.id] ?? '';
 
-              <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  onClick={() => void setStatus(doc, 'approved')}
-                  disabled={busyId === doc.id || doc.review_status === 'approved'}
-                  className="btn-primary btn-sm"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void setStatus(doc, 'rejected')}
-                  disabled={busyId === doc.id || doc.review_status === 'rejected'}
-                  className="btn-danger btn-sm"
-                >
-                  Reject
-                </button>
+        return (
+          <article key={claim.id} className="card card-pad flex flex-col gap-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={GRADE_CLASS[claim.evidence_grade]}>
+                  grade {claim.evidence_grade}
+                </span>
+                <span className={document?.grading_inputs_complete ? 'signal-better' : 'signal-worse'}>
+                  {document?.grading_inputs_complete
+                    ? 'grading inputs complete'
+                    : 'grading inputs incomplete'}
+                </span>
+                <span className={STATUS_CLASS[claim.status]}>
+                  {claim.status.replace(/_/g, ' ')}
+                </span>
+                <span className="badge-pine">{claim.direction.replace(/_/g, ' ')}</span>
               </div>
+              <span className="metric text-[11px] text-ink-soft">
+                {new Date(claim.created_at).toLocaleDateString()}
+              </span>
             </div>
 
-            {actionError[doc.id] && <p className="error-text mt-2">{actionError[doc.id]}</p>}
+            {isEditing ? (
+              <div className="flex flex-col gap-4">
+                <label className="field">
+                  <span className="label">Effect summary</span>
+                  <textarea
+                    className="textarea"
+                    value={edit.effect_summary}
+                    onChange={(event) =>
+                      updateEdit(claim.id, 'effect_summary', event.target.value)
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span className="label">Verbatim supporting quote</span>
+                  <textarea
+                    className="textarea font-mono text-[13px]"
+                    value={edit.supporting_quote}
+                    onChange={(event) =>
+                      updateEdit(claim.id, 'supporting_quote', event.target.value)
+                    }
+                  />
+                  <span className="help-text">
+                    Save fails unless this exact text occurs in the source chunk.
+                  </span>
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="field">
+                    <span className="label">Subject type</span>
+                    <select
+                      className="select"
+                      value={edit.subject_type}
+                      onChange={(event) =>
+                        updateEdit(
+                          claim.id,
+                          'subject_type',
+                          event.target.value as ResearchClaimSubjectType,
+                        )
+                      }
+                    >
+                      {SUBJECT_TYPES.map((value) => (
+                        <option key={value} value={value}>
+                          {value.replace(/_/g, ' ')}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="label">Subject value</span>
+                    <input
+                      className="input"
+                      value={edit.subject_value}
+                      onChange={(event) =>
+                        updateEdit(claim.id, 'subject_value', event.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="label">Direction</span>
+                    <select
+                      className="select"
+                      value={edit.direction}
+                      onChange={(event) =>
+                        updateEdit(
+                          claim.id,
+                          'direction',
+                          event.target.value as ResearchClaimDirection,
+                        )
+                      }
+                    >
+                      {DIRECTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value.replace(/_/g, ' ')}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="label">Condition (optional)</span>
+                    <input
+                      className="input"
+                      value={edit.applies_to_condition ?? ''}
+                      onChange={(event) =>
+                        updateEdit(claim.id, 'applies_to_condition', event.target.value || null)
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <p className="eyebrow">
+                    {claim.subject_type.replace(/_/g, ' ')} · {claim.subject_value}
+                  </p>
+                  <p className="mt-2 text-[16px] font-semibold text-ink">
+                    {claim.effect_summary}
+                  </p>
+                  {(claim.applies_to_condition || claim.applies_to_life_stage) && (
+                    <p className="help-text mt-2">
+                      Applies to: {claim.applies_to_condition ?? 'any condition'}
+                      {claim.applies_to_life_stage
+                        ? ` · ${claim.applies_to_life_stage.replace(/_/g, ' ')}`
+                        : ''}
+                    </p>
+                  )}
+                </div>
 
-            <button
-              type="button"
-              onClick={() => void toggleExpand(doc)}
-              className="eyebrow mt-3 block text-pine"
-            >
-              {expanded ? 'Hide chunks ↑' : 'Show chunks →'}
-            </button>
+                <blockquote className="rounded border-l-4 border-pine bg-pine-tint/40 px-4 py-3">
+                  <p className="eyebrow">Verbatim supporting quote</p>
+                  <p className="mt-2 whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
+                    {claim.supporting_quote}
+                  </p>
+                  {claim.chunk && (
+                    <p className="help-text mt-2">Source chunk {claim.chunk.chunk_index}</p>
+                  )}
+                </blockquote>
+              </>
+            )}
 
-            {expanded && (
-              <div className="hairline mt-3 flex flex-col gap-3 pt-3">
-                {chunksLoading && <p className="muted text-[14px]">Loading chunks…</p>}
-                {chunksError && (
-                  <div className="callout-alarm" role="alert">
-                    {chunksError}
-                  </div>
+            <div className="rounded border border-line bg-paper p-4">
+              <p className="eyebrow">Source and grade inputs</p>
+              <p className="mt-2 font-semibold">{document?.title ?? 'Source document missing'}</p>
+              <p className="help-text mt-1">
+                {[document?.journal, document?.publication_year].filter(Boolean).join(' · ') ||
+                  'Journal/year not supplied'}
+              </p>
+              {document?.evidence_scope === 'veterinary_methodology' && (
+                <div className="callout-alarm mt-3">
+                  <p className="font-semibold">Veterinary methodology context</p>
+                  <p className="mt-1 text-[13px]">
+                    This informs evidence appraisal but cannot corroborate a biological claim
+                    and must never enter scoring, recommendations, or unattended activation.
+                  </p>
+                </div>
+              )}
+              {!document?.grading_inputs_complete && (
+                <div className="callout-alarm mt-3">
+                  <p className="font-semibold">Grade computed with missing metadata</p>
+                  <p className="mt-1 text-[13px]">
+                    Missing: {document?.missing_grading_inputs?.join(', ') || 'not reported'}.
+                    This is not weak evidence; these inputs were not populated from structured
+                    source metadata.
+                  </p>
+                </div>
+              )}
+              <dl className="mt-4 grid gap-x-5 gap-y-2 text-[13px] sm:grid-cols-2">
+                <div>
+                  <dt className="muted">Evidence scope</dt>
+                  <dd className="metric">{metadataValue(document?.evidence_scope)}</dd>
+                </div>
+                <div>
+                  <dt className="muted">Study design</dt>
+                  <dd className="metric">{metadataValue(document?.study_design)}</dd>
+                  <dd className="help-text">
+                    {document?.grading_input_sources?.study_design ?? 'Source not recorded'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="muted">Species</dt>
+                  <dd className="metric">{metadataValue(document?.species)}</dd>
+                  <dd className="help-text">
+                    {document?.grading_input_sources?.species ?? 'Source not recorded'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="muted">Sample size</dt>
+                  <dd className="metric">{metadataValue(document?.sample_size)}</dd>
+                  <dd className="help-text">
+                    {document?.grading_input_sources?.sample_size ?? 'Source not recorded'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="muted">Funding independent</dt>
+                  <dd className="metric">{metadataValue(document?.funding_independent)}</dd>
+                  <dd className="help-text">
+                    {document?.grading_input_sources?.funding_independent ?? 'Source not recorded'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="muted">Preprint</dt>
+                  <dd className="metric">{metadataValue(document?.is_preprint)}</dd>
+                </div>
+                <div>
+                  <dt className="muted">Access</dt>
+                  <dd className="metric">
+                    {document?.open_access
+                      ? 'open-access full text'
+                      : document?.abstract_only
+                        ? 'abstract only'
+                        : 'not supplied'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="muted">Retracted</dt>
+                  <dd className="metric">{metadataValue(document?.retracted)}</dd>
+                </div>
+                <div>
+                  <dt className="muted">DOI</dt>
+                  <dd className="metric break-all">{metadataValue(document?.doi)}</dd>
+                </div>
+              </dl>
+              <div className="mt-3">
+                <p className="muted text-[13px]">Funding declaration</p>
+                <p className="mt-1 text-[13px]">
+                  {document?.funding_declaration || 'Not supplied by structured source metadata.'}
+                </p>
+              </div>
+              <div className="mt-3">
+                <p className="muted text-[13px]">Competing-interests declaration</p>
+                <p className="mt-1 text-[13px]">
+                  {document?.competing_interests_declaration
+                    || 'Not supplied by structured source metadata.'}
+                </p>
+              </div>
+              {document?.source_url && (
+                <a
+                  className="mt-3 inline-block text-[13px] font-semibold text-pine hover:underline"
+                  href={document.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open source ↗
+                </a>
+              )}
+            </div>
+
+            {claim.status !== 'active' && claim.status !== 'rejected' && claim.status !== 'superseded' && (
+              <div className="hairline flex flex-col gap-3 pt-4">
+                <label className="field">
+                  <span className="label">Review note</span>
+                  <textarea
+                    className="textarea min-h-[72px]"
+                    value={rejectionNote}
+                    placeholder="Required for rejection; optional for approval"
+                    onChange={(event) =>
+                      setReviewNotes((current) => ({
+                        ...current,
+                        [claim.id]: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm"
+                    disabled={isBusy}
+                    onClick={() => void review(claim, 'approve')}
+                  >
+                    Approve
+                  </button>
+                  {isEditing ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary btn-sm"
+                        disabled={isBusy}
+                        onClick={() => void review(claim, 'edit_and_approve')}
+                      >
+                        Save edits and approve
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={isBusy}
+                        onClick={() => setEditingId(null)}
+                      >
+                        Cancel edit
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      disabled={isBusy}
+                      onClick={() => startEditing(claim)}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-danger btn-sm"
+                    disabled={isBusy || rejectionNote.trim().length === 0}
+                    onClick={() => void review(claim, 'reject')}
+                  >
+                    Reject
+                  </button>
+                </div>
+                {actionErrors[claim.id] && (
+                  <p className="error-text" role="alert">
+                    {actionErrors[claim.id]}
+                  </p>
                 )}
-                {!chunksLoading && !chunksError && chunks.length === 0 && (
-                  <p className="muted text-[14px]">No chunks for this document.</p>
-                )}
-                {chunks.map((chunk) => (
-                  <div key={chunk.id} className="rounded border border-line bg-paper p-3">
-                    <span className="metric text-[11px] text-ink-soft">
-                      chunk {chunk.chunk_index}
-                    </span>
-                    <p className="mt-1 whitespace-pre-wrap text-[14px] text-ink">{chunk.content}</p>
-                  </div>
-                ))}
               </div>
             )}
-          </div>
+          </article>
         );
       })}
     </div>

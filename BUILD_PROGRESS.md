@@ -38,8 +38,8 @@ duplicate additive sequences. Farmina N&D Ocean Adult Medium & Maxi now has
 Direct name matching finds rosemary, green tea, taurine, copper, zinc, and
 selenium in `food_ingredients`, so existing hard-filter queries can see them.
 
-**Verification:** additive/parser/hard-filter/storage tests 44/44; main-branch suite
-179/179; `tsc --noEmit` clean; production build exit 0; `git diff --check`
+**Verification:** additive/parser/hard-filter/storage tests 44/44; full suite
+200/200; `tsc --noEmit` clean; production build exit 0; `git diff --check`
 clean. Supabase advisor has no `food_full` or `food_ingredients` security
 finding after switching `food_full` to security-invoker.
 

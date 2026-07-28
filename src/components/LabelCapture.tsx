@@ -254,6 +254,7 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
+          dog_id: mode === 'confirm' ? dogId : undefined,
           brand: draft.brand ?? '',
           name: draft.product_name ?? '',
           food_type: draft.food_type || 'other',

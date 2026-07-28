@@ -28,6 +28,7 @@ const NUTRIENT_COLUMNS = [
 ] as const;
 
 interface ConfirmBody {
+  dog_id?: string;
   brand?: string;
   name?: string;
   food_type?: string;
@@ -48,6 +49,17 @@ interface ConfirmBody {
   /** Verbatim OCR of the composition/analytical-constituents panel — every numeric field above is verified against this before being written. See labelVerification.ts. */
   composition_panel_text?: string | null;
   gtin?: string | null;
+}
+
+interface ConfirmLabelResult {
+  outcome: 'created' | 'already_known';
+  food_id: string;
+  brand: string;
+  name: string;
+  is_treat: boolean;
+  event_id: string;
+  submission_id: string | null;
+  ingredients_saved: number;
 }
 
 function cleanPct(value: unknown): number | null {
@@ -99,7 +111,14 @@ export async function POST(request: NextRequest) {
     const brand = (body.brand ?? '').trim();
     const name = (body.name ?? '').trim();
     const foodType = (body.food_type ?? '').trim();
+    const dogId = (body.dog_id ?? '').trim();
 
+    if (!dogId) {
+      return NextResponse.json(
+        { error: 'Choose the dog this food belongs to before saving the capture.' },
+        { status: 400 }
+      );
+    }
     if (!brand || !name) {
       return NextResponse.json(
         { error: 'Brand and product name are both required — please fill them in from the packet.' },
@@ -111,6 +130,19 @@ export async function POST(request: NextRequest) {
         { error: `Food type must be one of: ${VALID_FOOD_TYPES.join(', ')}` },
         { status: 400 }
       );
+    }
+
+    // Give a clear owner-facing error here; the transaction function checks
+    // this ownership again under a row lock so a race cannot bypass it.
+    const { data: dog, error: dogError } = await supabaseAdmin
+      .from('dogs')
+      .select('id')
+      .eq('id', dogId)
+      .eq('owner_id', user.id)
+      .maybeSingle();
+
+    if (dogError || !dog) {
+      return NextResponse.json({ error: 'Dog not found.' }, { status: 404 });
     }
 
     const ingredients = Array.isArray(body.ingredients)
@@ -174,13 +206,19 @@ export async function POST(request: NextRequest) {
     // why that can't be synchronous on a 30-lookups/day free tier.
     const validatedGtin = validateScrapedGtin(body.gtin ?? null);
 
-    // Already hold this product? Record the observation, change nothing.
+    // Already hold this product? Record the observation and link that known
+    // catalogue identity to the dog in the same database transaction.
     const duplicate = await findDuplicateFood(brand, name);
     if (duplicate) {
-      const { data: queued, error: queueError } = await supabaseAdmin
-        .from('ingredient_review_queue')
-        .insert({
-          raw_ocr_json: {
+      const { data: result, error: confirmError } = await supabaseAdmin.rpc(
+        'confirm_label_food_for_dog',
+        {
+          p_owner_id: user.id,
+          p_dog_id: dogId,
+          p_existing_food_id: duplicate.id,
+          p_food: null,
+          p_ingredients: [],
+          p_review_observation: {
             brand,
             product_name: name,
             ingredients,
@@ -195,24 +233,25 @@ export async function POST(request: NextRequest) {
             _calories_per_kg: calories,
             ...nutrients,
           },
-          submitted_by: user.id,
-          status: 'pending',
-        })
-        .select('id')
-        .single();
+        }
+      );
 
-      if (queueError) {
-        console.error('ingredients/confirm: failed to record duplicate observation', queueError);
-        return NextResponse.json({ error: 'Could not record your submission.' }, { status: 500 });
+      if (confirmError || !result) {
+        console.error(
+          'ingredients/confirm: failed to record and link duplicate observation',
+          confirmError
+        );
+        return NextResponse.json(
+          { error: 'Could not record and link your submission.' },
+          { status: 500 }
+        );
       }
 
       return NextResponse.json(
         {
-          outcome: 'already_known',
-          food_id: duplicate.id,
-          submission_id: queued.id,
+          ...(result as ConfirmLabelResult),
           message:
-            'Thanks — we already have this food, so your version has been recorded alongside it rather than replacing it. If the two differ, we will check which is current.',
+            'Thanks — we already have this food. It is now linked to your dog, and your packet version has been recorded alongside it rather than replacing it.',
         },
         { status: 200 }
       );
@@ -241,60 +280,55 @@ export async function POST(request: NextRequest) {
         ? `Transcribed from packet photos and confirmed by the submitting owner, but ${statusIssues.join('; ')}.`
         : 'Transcribed from packet photos and confirmed by the submitting owner.';
 
-    // Genuinely new product — create it.
-    const { data: newFood, error: foodError } = await supabaseAdmin
-      .from('foods')
-      .insert({
-        brand,
-        name,
-        food_type: foodType,
-        is_treat: isTreat,
-        calories_per_kg: calories,
-        gtin: validatedGtin,
-        ...nutrients,
-        composition_raw: panelText,
-        // Informational only — never a filter, never a gate (see the
-        // column comment). Verbatim, deterministic pull from the panel
-        // text; not something the model is asked to interpret.
-        dietetic_feeding_duration: extractFeedingGuidance(panelText),
-        ingredient_source: 'label_photo',
-        submitted_by: user.id,
-        // The packet in the owner's hand IS the current recipe, and they have
-        // just read it — which is exactly what these audit columns record.
-        ingredient_data_status: ingredientDataStatus,
-        recipe_version_status: 'current',
-        product_availability_status: 'available',
-        ingredient_status_reason: statusReason,
-        ingredient_status_checked_at: new Date().toISOString(),
-        last_verified_at: new Date().toISOString(),
-      })
-      .select('id, brand, name')
-      .single();
-
-    if (foodError || !newFood) {
-      console.error('ingredients/confirm: food insert failed', foodError);
-      return NextResponse.json({ error: 'Could not save this food.' }, { status: 500 });
-    }
-
-    const rows = ingredients.map((ingredient_name, index) => ({
-      food_id: newFood.id,
+    const ingredientRows = ingredients.map((ingredient_name) => ({
       ingredient_name,
       ingredient_category: isLegalCategory(ingredient_name) ? 'legal_category' : null,
-      position_in_list: index + 1,
     }));
 
-    const { error: ingredientsError } = await supabaseAdmin.from('food_ingredients').insert(rows);
-    if (ingredientsError) {
-      // A food row with no ingredients is worse than none: it would look
-      // complete while contributing nothing to the allergy filter. Roll back.
-      console.error('ingredients/confirm: ingredient insert failed, rolling back food', ingredientsError);
-      await supabaseAdmin.from('foods').delete().eq('id', newFood.id);
-      return NextResponse.json({ error: 'Could not save the ingredient list.' }, { status: 500 });
+    // Food + ingredients + dog pointer + event identity are committed by one
+    // Postgres transaction. Any error aborts every write; an orphan food row
+    // is therefore never reported as a successful capture.
+    const { data: result, error: confirmError } = await supabaseAdmin.rpc(
+      'confirm_label_food_for_dog',
+      {
+        p_owner_id: user.id,
+        p_dog_id: dogId,
+        p_existing_food_id: null,
+        p_food: {
+          brand,
+          name,
+          food_type: foodType,
+          is_treat: isTreat,
+          calories_per_kg: calories,
+          gtin: validatedGtin,
+          ...nutrients,
+          composition_raw: panelText,
+          // Informational only — never a filter or gate.
+          dietetic_feeding_duration: extractFeedingGuidance(panelText),
+          ingredient_data_status: ingredientDataStatus,
+          ingredient_status_reason: statusReason,
+        },
+        p_ingredients: ingredientRows,
+        p_review_observation: null,
+      }
+    );
+
+    if (confirmError || !result) {
+      console.error('ingredients/confirm: atomic food confirmation failed', confirmError);
+      return NextResponse.json(
+        { error: 'Could not save and link this food. Nothing was created.' },
+        { status: 500 }
+      );
     }
+
+    const confirmed = result as ConfirmLabelResult;
 
     if (validatedGtin) {
       try {
-        await enqueueGtinVerification(validatedGtin, { foodId: newFood.id, submittedBy: user.id });
+        await enqueueGtinVerification(validatedGtin, {
+          foodId: confirmed.food_id,
+          submittedBy: user.id,
+        });
       } catch (err) {
         // Never fail the submission over the verification queue — the food
         // and its ingredients are already safely saved at this point.
@@ -304,12 +338,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        outcome: 'created',
-        food_id: newFood.id,
-        brand: newFood.brand,
-        name: newFood.name,
-        ingredients_saved: rows.length,
-        is_treat: isTreat,
+        ...confirmed,
+        message: isTreat
+          ? 'This treat is saved and linked to your dog.'
+          : 'This food is saved and linked as your dog’s current food.',
       },
       { status: 201 }
     );

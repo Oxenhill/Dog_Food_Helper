@@ -57,11 +57,27 @@ function AddFood() {
         <p className="eyebrow mt-4">Add a food</p>
         <h1 className="page-title mt-1">Scan a packet</h1>
         <p className="lead mt-2">
-          Photograph the front and back of any dog food or treat and we&apos;ll read the label. You
-          check it, correct anything we got wrong, and it&apos;s added.
+          Photograph the front and back of the packet and we&apos;ll read the label. You check it,
+          correct anything we got wrong, and it&apos;s linked to your dog.
         </p>
 
-        <div className="mt-6">{ready && <LabelCapture dogId={dogId} />}</div>
+        <div className="mt-6">
+          {ready &&
+            (dogId ? (
+              <LabelCapture dogId={dogId} />
+            ) : (
+              <div className="callout-info">
+                <p className="font-semibold text-ink">Choose a dog first</p>
+                <p className="mt-1">
+                  A packet capture must be linked to the dog eating it; an unlinked food is not a
+                  successful capture.
+                </p>
+                <Link href="/dogs" className="btn-primary mt-3 inline-flex">
+                  Choose a dog
+                </Link>
+              </div>
+            ))}
+        </div>
 
         <div className="callout-disclaimer mt-8">
           We only ever record what&apos;s printed on the packet. Nothing is guessed or filled in from
