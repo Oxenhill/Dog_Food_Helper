@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { authHeaders } from '@/lib/clientAuth';
 
 interface DogDocument {
@@ -29,6 +30,21 @@ const STATUS_LABELS: Record<DogDocument['processing_status'], string> = {
   unsupported_lab: 'Lab format not supported',
   failed: 'Text extraction failed',
 };
+
+async function responseBody(response: Response): Promise<Record<string, any>> {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as Record<string, any>;
+  } catch {
+    return {
+      error:
+        response.status === 413
+          ? 'This PDF is too large for the application upload route.'
+          : `Upload service returned an unreadable response (${response.status}).`,
+    };
+  }
+}
 
 export default function DogDocumentsCard({ dogId }: { dogId: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
@@ -75,22 +91,67 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
       return;
     }
 
-    const form = new FormData();
-    form.set('document', file);
-    form.set('document_type', documentType);
-
     setUploading(true);
     try {
-      const response = await fetch(`/api/dogs/${dogId}/documents`, {
+      const prepareResponse = await fetch(`/api/dogs/${dogId}/documents`, {
         method: 'POST',
-        headers: authHeaders(),
-        body: form,
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          action: 'prepare',
+          document_type: documentType,
+          original_filename: file.name,
+          file_size: file.size,
+          mime_type: file.type || 'application/pdf',
+        }),
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? 'Could not upload the PDF');
+      const prepareBody = await responseBody(prepareResponse);
+      if (!prepareResponse.ok) {
+        throw new Error(prepareBody.error ?? 'Could not prepare the private upload');
+      }
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        throw new Error('Private document storage is not configured.');
+      }
+
+      const storageClient = createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { error: storageError } = await storageClient.storage
+        .from('dog-documents')
+        .uploadToSignedUrl(
+          String(prepareBody.storage_path),
+          String(prepareBody.upload_token),
+          file,
+          { contentType: 'application/pdf' }
+        );
+      if (storageError) {
+        console.error('dog documents: direct storage upload failed', storageError);
+        throw new Error('Could not upload the PDF to private storage.');
+      }
+
+      const finalizeResponse = await fetch(`/api/dogs/${dogId}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          action: 'finalize',
+          document_id: prepareBody.document_id,
+          document_type: documentType,
+          original_filename: file.name,
+        }),
+      });
+      const body = await responseBody(finalizeResponse);
+      if (!finalizeResponse.ok) {
+        throw new Error(body.error ?? 'Could not process the uploaded PDF');
+      }
 
       setDocuments((current) => [body.document, ...current]);
-      setNotice('PDF stored privately. Extracted text is shown below for you to check.');
+      setNotice(
+        body.source_file_deleted
+          ? 'Report processed privately. The source PDF was deleted after extraction; the extracted text is shown below for you to check.'
+          : 'PDF stored privately. Extracted text is shown below for you to check.'
+      );
       if (body.warning) {
         setWarning(body.warning);
       } else if (body.document.processing_status === 'needs_review') {
@@ -112,8 +173,8 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
         Lab reports &amp; documents
       </h2>
       <p className="lead mt-1">
-        PDFs are private to your account. After upload, check the extracted text to see exactly
-        what Bowl could read.
+        PDFs are uploaded privately and deleted after successful extraction. Check the extracted
+        text to see exactly what Bowl could read.
       </p>
 
       <form className="mt-5 grid gap-4 sm:grid-cols-[1fr_auto]" onSubmit={upload}>

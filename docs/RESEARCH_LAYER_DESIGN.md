@@ -114,7 +114,13 @@ Per `FOOD_DISCOVERY_DESIGN.md` and the privacy boundary: keyed to `auth.users`,
 
 `dog_id`, `owner_id`, `document_type` (`gut_biome`, `allergen_test`, `vet_report`,
 `other`), `original_filename`, `storage_path`, `extracted_text`, `lab_name`,
-`collected_date`, `processing_status`.
+`collected_date`, `processing_status`, `source_file_deleted_at`.
+
+The uploaded PDF is a temporary transport object. Once a profiled parser has
+stored the extracted text and every asserted finding, delete the source object,
+set `storage_path` null, and record `source_file_deleted_at`. Retain the source
+only when extraction or finding persistence fails, so the only recoverable copy
+is never destroyed before its data is safe.
 
 ### New: `dog_document_findings` — parsed, structured, private
 
