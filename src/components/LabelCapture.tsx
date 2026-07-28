@@ -151,6 +151,10 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
           back_size: back?.size ?? null,
         },
       });
+      reportClientError('capture_attempt', {
+        bytes: front.size + (back?.size ?? 0),
+        context: { outcome: 'resize_failed' },
+      });
       setError('Could not process that photo on this device. Try a different photo, or retake it.');
       setBusy(false);
       return;
@@ -186,12 +190,18 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
         bytes: payloadBytes,
         message: err instanceof Error ? err.message : String(err),
       });
+      reportClientError('capture_attempt', { bytes: payloadBytes, context: { outcome: 'network_failed' } });
       setError('Could not reach the server. Check your connection and try again.');
       setBusy(false);
       return;
     }
 
     reportClientError('extract_response', { status: res.status, bytes: payloadBytes });
+    reportClientError('capture_attempt', {
+      status: res.status,
+      bytes: payloadBytes,
+      context: { outcome: res.ok ? 'server_ok' : 'server_error' },
+    });
 
     let json: { extracted?: Extraction; existing_food?: ExistingFood | null; error?: string };
     try {
@@ -204,6 +214,11 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
         bytes: payloadBytes,
         message: err instanceof Error ? err.message : String(err),
         context: { body_snippet: bodyText.slice(0, 500) },
+      });
+      reportClientError('capture_attempt', {
+        status: res.status,
+        bytes: payloadBytes,
+        context: { outcome: 'response_parse_failed' },
       });
       setError(`Unexpected response from the server (status ${res.status}). Please try again.`);
       setBusy(false);

@@ -7,6 +7,7 @@ import { validateScrapedGtin } from '@/lib/gtin';
 import { enqueueGtinVerification } from '@/lib/gs1Verify';
 import { verifyNumericFields } from '@/lib/labelVerification';
 import { isLegalCategory } from '@/lib/compositionParser';
+import { extractFeedingGuidance } from '@/lib/labelPanelParsing';
 
 export const runtime = 'nodejs';
 
@@ -252,6 +253,10 @@ export async function POST(request: NextRequest) {
         gtin: validatedGtin,
         ...nutrients,
         composition_raw: panelText,
+        // Informational only — never a filter, never a gate (see the
+        // column comment). Verbatim, deterministic pull from the panel
+        // text; not something the model is asked to interpret.
+        dietetic_feeding_duration: extractFeedingGuidance(panelText),
         ingredient_source: 'label_photo',
         submitted_by: user.id,
         // The packet in the owner's hand IS the current recipe, and they have

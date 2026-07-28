@@ -6,6 +6,7 @@ import { insertParsedIngredients, type ParsedIngredient } from '@/lib/ingredient
 import { ValidatedContribution } from '@/lib/contributedFoods';
 import { parseComposition, type ParsedCompositionIngredient } from '@/lib/compositionParser';
 import { FoodType } from '@/lib/types';
+import { extractFeedingGuidance } from '@/lib/labelPanelParsing';
 
 /**
  * Admin review of third-party food contributions — the ONE approval path
@@ -312,6 +313,10 @@ export async function POST(request: NextRequest) {
     };
   }
 
+  // Informational only, never a filter/gate — pulled verbatim from whatever
+  // composition text this row ended up with, deterministic, no model call.
+  const dieteticFeedingDuration = extractFeedingGuidance(foodInsert.composition_raw);
+
   // Re-check now, not just at submission time.
   const duplicate = await findDuplicateFood(foodInsert.brand, foodInsert.name);
   if (duplicate) {
@@ -349,6 +354,7 @@ export async function POST(request: NextRequest) {
           ingredient_source: ingredientSource,
           source_url: isAdminCapture ? null : row.source_url,
           source_domain: sourceDomain,
+          dietetic_feeding_duration: dieteticFeedingDuration,
         },
         ingredients_preview: ingredientsToWrite,
       },
@@ -363,6 +369,7 @@ export async function POST(request: NextRequest) {
       ingredient_source: ingredientSource,
       source_url: isAdminCapture ? null : row.source_url,
       source_domain: sourceDomain,
+      dietetic_feeding_duration: dieteticFeedingDuration,
       // The reviewer has just checked the parsed list against the excerpt —
       // that IS the ingredient-completeness verification this status
       // records, the same way a label-photo confirmation does.

@@ -40,6 +40,7 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import { resolveIngredientFootnotes } from './labelPanelParsing';
 
 const HAIKU_MODEL = process.env.AI_GATEWAY_HAIKU_MODEL || 'anthropic/claude-haiku-4.5';
 
@@ -185,7 +186,7 @@ export async function extractFromLabelPhotos(images: LabelImage[]): Promise<Labe
           content: [
             {
               type: 'text',
-              text: `These photos show one dog food product. Transcribe it.\n\nPhotos supplied, in order:\n${faceList}\n\nCombine the faces into a single record: identity from the front, composition and analytical constituents from the back. Copy the ingredient list verbatim and in order. If the same detail appears on both faces and they disagree, prefer the back-of-pack printed panel and mention the discrepancy in notes.\n\nAlso fill composition_panel_text with a verbatim transcription of the composition/ingredients block and the analytical constituents panel, including any separate percentage-declaration sentence (e.g. "Protein sources: ..."). Every numeric field you report (calories, protein, fat, fibre, moisture, ash, phosphorus, sodium, calcium, linoleic acid, EPA+DHA, omega-3) must be a figure you can actually point to in that transcription — if you cannot, return null for that field instead of a plausible estimate.`,
+              text: `These photos show one dog food product. Transcribe it.\n\nPhotos supplied, in order:\n${faceList}\n\nSTRICT FRONT/REAR RULE: the FRONT face supplies brand, product_name, life_stage_text and pack_size_text ONLY. The BACK face is the ONLY source for ingredients, composition_panel_text and every analytical-constituent number. Never read an ingredient or a nutrient figure off the front panel, even if it looks legible there — a front-of-pack flash ("26% chicken") is marketing copy, not the legal composition list. If no back-of-pack photo was supplied at all, ingredients MUST be an empty array and every analytical field MUST be null — do not infer or estimate them from the front.\n\nCopy the ingredient list verbatim and in order. If the same detail appears on both faces and they disagree, prefer the back-of-pack printed panel and mention the discrepancy in notes.\n\nAlso fill composition_panel_text with a verbatim transcription of the composition/ingredients block, the analytical constituents panel, and any feeding-guide/daily-amount statement, including any separate percentage-declaration sentence (e.g. "Protein sources: ..."). Every numeric field you report (calories, protein, fat, fibre, moisture, ash, phosphorus, sodium, calcium, linoleic acid, EPA+DHA, omega-3) must be a figure you can actually point to in that transcription — if you cannot, return null for that field instead of a plausible estimate.`,
             },
             ...images.map((img) => ({
               type: 'image' as const,
@@ -196,6 +197,41 @@ export async function extractFromLabelPhotos(images: LabelImage[]): Promise<Labe
         },
       ],
     });
+
+    // Front/rear rule, enforced deterministically rather than trusted to the
+    // prompt alone (owner decision, 2026-07-28): with no back-of-pack photo,
+    // there is no legal source for an ingredient list or a nutrient figure —
+    // whatever the model returned for those fields is discarded outright.
+    const hasBackPhoto = images.some((i) => i.face === 'back');
+    if (!hasBackPhoto) {
+      object.ingredients = [];
+      object.protein_pct = null;
+      object.fat_pct = null;
+      object.fibre_pct = null;
+      object.moisture_pct = null;
+      object.ash_pct = null;
+      object.phosphorus_pct = null;
+      object.sodium_pct = null;
+      object.calcium_pct = null;
+      object.calories_per_kg = null;
+      object.linoleic_acid_pct = null;
+      object.epa_dha_pct = null;
+      object.omega3_pct = null;
+      object.composition_panel_text = null;
+    }
+
+    // Fold a resolvable asterisk-footnote legend ("(*dried)") into the
+    // ingredient name; an unresolvable marker is kept as printed (never
+    // dropped) and flagged in notes for human review.
+    const { resolved, needsReview } = resolveIngredientFootnotes(
+      object.ingredients,
+      object.composition_panel_text
+    );
+    object.ingredients = resolved;
+    if (needsReview.length > 0) {
+      const flag = `Footnote marker not resolved against a legend, kept as printed: ${needsReview.join(', ')}`;
+      object.notes = object.notes ? `${object.notes} ${flag}` : flag;
+    }
 
     return object;
   } catch (err) {
