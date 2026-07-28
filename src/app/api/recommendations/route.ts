@@ -15,6 +15,7 @@ import { fetchDogCorrelationContext } from '@/lib/correlationScoring';
 import { buildResearchScoreContext, getResearchScores } from '@/lib/researchScoreCache';
 import { NOT_YET_SCORED_RESULT } from '@/lib/researchScoring';
 import { fetchFoodFullMany, flattenIngredientNames } from '@/lib/foodFull';
+import { deriveDataState, dataStateMessage, needsRefusedDomainCaution, REFUSED_DOMAIN_LINE } from '@/lib/dataState';
 
 const DISCLAIMER =
   'This is a decision-support tool, not veterinary advice. Always consult your vet before changing your dog\'s diet, especially if your dog has existing health conditions.';
@@ -144,6 +145,15 @@ export async function POST(request: NextRequest) {
       .eq('dog_id', dog_id);
     const restrictionSubstances = (restrictionRows ?? []).map((r) => r.substance);
 
+    // DECISION 6 (owner, 2026-07-28): domains the allowlist has since marked
+    // approved=false — fetched once, reused per-candidate below rather than a
+    // query per food.
+    const { data: refusedDomainRows } = await supabaseAdmin
+      .from('source_domain_allowlist')
+      .select('domain')
+      .eq('approved', false);
+    const refusedDomains = new Set((refusedDomainRows ?? []).map((r) => r.domain));
+
     // 1. Hard filter — deterministic SQL, never LLM (architecture doc §2)
     const hardFilterResult = await applyHardFilter(dog_id);
 
@@ -240,7 +250,16 @@ export async function POST(request: NextRequest) {
       scored.push(...batchResults);
     }
 
-    scored.sort((a, b) => b.overall_score - a.overall_score);
+    // DECISION 3 (owner, 2026-07-28): at equal score, a food with an
+    // ingredient list ranks above one without. Tie-break only — no score
+    // number is invented for this.
+    scored.sort((a, b) => {
+      if (b.overall_score !== a.overall_score) return b.overall_score - a.overall_score;
+      const aHasIngredients = (detail.get(a.food.id)?.ingredients ?? []).length > 0;
+      const bHasIngredients = (detail.get(b.food.id)?.ingredients ?? []).length > 0;
+      if (aHasIngredients === bHasIngredients) return 0;
+      return aHasIngredients ? -1 : 1;
+    });
     const top = scored.slice(0, TOP_N);
 
     // 5. Owner-facing food contents (WS4 #3). Clients need to see what is
@@ -259,12 +278,29 @@ export async function POST(request: NextRequest) {
         restrictionSubstances.length > 0 && s.food.composition_is_opaque
           ? `Composition lists ${(s.food.composition_opaque_terms ?? []).join(', ')} without naming the source, so this food cannot be confirmed free of ${restrictionSubstances.join(', ')}. Check the pack or ask your vet.`
           : null;
+
+      // DECISION 2 (owner, 2026-07-28): every recommendation carries a
+      // data-state statement — informational, never a score input.
+      const hasIngredients = (full?.ingredients ?? []).length > 0;
+      const dataState = deriveDataState(hasIngredients, s.food.composition_is_opaque === true);
+      const dataStateMsg = dataStateMessage(dataState, s.food.composition_opaque_terms);
+
+      // DECISION 6 (owner, 2026-07-28): refused-domain provenance caution —
+      // separate line, same informational treatment as opacity.
+      const sourceDomainRefused = !!s.food.source_domain && refusedDomains.has(s.food.source_domain);
+      const refusedDomainCaution = needsRefusedDomainCaution(hasIngredients, sourceDomainRefused)
+        ? REFUSED_DOMAIN_LINE
+        : null;
+
       return {
         food_id: s.food.id,
         brand: s.food.brand,
         name: s.food.name,
         food_type: s.food.food_type,
         opacity_caution: opacityCaution,
+        data_state: dataState,
+        data_state_message: dataStateMsg,
+        refused_domain_caution: refusedDomainCaution,
         score: Math.round(s.overall_score * 1000) / 1000,
         confidence: s.confidence,
         reason: s.reason,

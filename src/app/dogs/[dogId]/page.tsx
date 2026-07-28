@@ -22,6 +22,13 @@ interface Recommendation {
   // restriction AND this food's composition includes an unnamed legal
   // category (e.g. "Meat and animal derivatives") that could conceal it.
   opacity_caution: string | null;
+  // DECISION 2 (owner, 2026-07-28): always present, three distinct states.
+  // Informational only — never changes score or ranking.
+  data_state: 'no_ingredients' | 'opaque' | 'clean';
+  data_state_message: string | null;
+  // DECISION 6 (owner, 2026-07-28): set only when this food's ingredient
+  // data came from a domain the allowlist has since refused. Informational.
+  refused_domain_caution: string | null;
   estimated_monthly_cost: number | null;
   // WS4 #3 — clients need to see what's actually in a recommended food.
   // Empty means no ingredient list has been recorded yet, never "no ingredients".
@@ -294,6 +301,13 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
                     )}
                     {r.opacity_caution && (
                       <div className="callout-disclaimer mt-2 text-[13px]">{r.opacity_caution}</div>
+                    )}
+                    {/* DECISION 2: state C carries no message by design. */}
+                    {r.data_state_message && (
+                      <div className="callout-disclaimer mt-2 text-[13px]">{r.data_state_message}</div>
+                    )}
+                    {r.refused_domain_caution && (
+                      <div className="callout-disclaimer mt-2 text-[13px]">{r.refused_domain_caution}</div>
                     )}
 
                     {/* What's actually in it — the owner's request. Never

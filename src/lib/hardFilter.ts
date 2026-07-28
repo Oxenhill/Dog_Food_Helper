@@ -56,20 +56,28 @@ export interface CandidateFoodRow {
 
 /**
  * True when a dog has at least one criterion that would exclude a food based
- * on its ingredients: an explicit restriction, or a health condition matching
- * an approved ingredient-based contraindication.
+ * on its ingredients: an explicit restriction, or a recorded health
+ * condition.
  *
- * This decides whether the ingredient-completeness gate below applies at all.
- * A dog with no ingredient-based exclusion criterion gets today's behaviour
- * (no gate, full candidate pool) — the gate exists to stop a missing
- * ingredient list from reading as "no allergen match found" for a dog who
- * actually needs that match to be checked, not to thin every dog's results.
+ * Owner decision (2026-07-28, DECISION 1): the gate applies whenever the dog
+ * has ANY dog_restrictions row OR ANY dog_health_conditions row — not only
+ * when a condition happens to have an approved ingredient-based
+ * contraindication mapped. A food with no ingredient list on record cannot
+ * be confirmed free of an unmapped condition's risk either, so "no approved
+ * mapping yet" must not read as "safe to skip the gate".
+ *
+ * This decides whether the ingredient-completeness gate below applies at
+ * all. A dog with neither gets today's behaviour (no gate, full candidate
+ * pool including foods with no composition data) — the gate exists to stop
+ * a missing ingredient list from reading as "no allergen match found" for a
+ * dog who actually needs that match to be checked, not to thin every dog's
+ * results.
  */
 export function dogNeedsIngredientGate(
   hasIngredientRestrictions: boolean,
-  hasApprovedIngredientContraindications: boolean
+  hasAnyHealthCondition: boolean
 ): boolean {
-  return hasIngredientRestrictions || hasApprovedIngredientContraindications;
+  return hasIngredientRestrictions || hasAnyHealthCondition;
 }
 
 /**
@@ -144,12 +152,12 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     );
 
     const hasIngredientRestrictions = !!restrictions && restrictions.length > 0;
-    const hasApprovedIngredientContraindications = applicable.some(
-      (rule) => !!rule.contraindicated_ingredient
-    );
+    // DECISION 1: any recorded health condition triggers the gate, whether or
+    // not it happens to have an approved ingredient contraindication mapped.
+    const hasAnyHealthCondition = dogConditions.size > 0;
     const needsIngredientGate = dogNeedsIngredientGate(
       hasIngredientRestrictions,
-      hasApprovedIngredientContraindications
+      hasAnyHealthCondition
     );
 
     // Get the candidate universe.
@@ -184,6 +192,23 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
       { needsIngredientGate, foodIdsWithIngredients }
     );
     const candidateFoodIds = new Set(candidateFoods.map((f) => f.id));
+
+    // DECISION 1 (owner, 2026-07-28): record the audit reason for foods the
+    // gate itself dropped — a food that is available and not a treat, but
+    // still gated out for having no (complete) ingredient list, is excluded
+    // specifically because its composition cannot be checked, not because it
+    // was unavailable. Availability exclusions are intentionally not
+    // recorded here — this reason is only for the ingredient-completeness gate.
+    if (needsIngredientGate) {
+      for (const food of foods as unknown as CandidateFoodRow[]) {
+        if (UNAVAILABLE_STATUSES.has(food.product_availability_status)) continue;
+        const failsGate =
+          food.ingredient_data_status !== 'complete' || !foodIdsWithIngredients.has(food.id);
+        if (failsGate) {
+          addExcluded(food.id, 'No ingredient list on record, cannot confirm absence.');
+        }
+      }
+    }
 
     // --- 1) Ingredient restrictions (allergy / intolerance / preference) ----
     if (restrictions && restrictions.length > 0) {
