@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
+import { buildIlikeTerm } from '@/lib/postgrestFilter';
 
 /**
  * Admin food-database list. Admin-gated (requireAdmin — verified session +
@@ -40,8 +41,11 @@ export async function GET(request: NextRequest) {
     .order('name', { ascending: true });
 
   if (q) {
-    const escaped = q.replace(/[%_]/g, (m) => `\\${m}`);
-    query = query.or(`brand.ilike.%${escaped}%,name.ilike.%${escaped}%`);
+    // Quoted so a comma, parenthesis or quote in the search term (e.g. a
+    // product name like "Cod, Pumpkin & Orange") can't be parsed as a
+    // logic-tree separator by PostgREST's .or().
+    const term = buildIlikeTerm(q);
+    query = query.or(`brand.ilike.${term},name.ilike.${term}`);
   }
 
   const { data, error } = await query;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
+import { buildIlikeTerm } from '@/lib/postgrestFilter';
 
 /**
  * GET /api/foods — owner-facing catalogue search.
@@ -59,10 +60,11 @@ export async function GET(request: NextRequest) {
     if (type === 'treat') query = query.eq('is_treat', true);
 
     if (q) {
-      // Escape PostgREST's LIKE wildcards so a user typing '%' searches for a
-      // literal '%' rather than matching everything.
-      const escaped = q.replace(/[%_]/g, (m) => `\\${m}`);
-      query = query.or(`brand.ilike.%${escaped}%,name.ilike.%${escaped}%`);
+      // Quoted so a comma, parenthesis or quote in the search term (e.g. a
+      // product name like "Cod, Pumpkin & Orange") can't be parsed as a
+      // logic-tree separator by PostgREST's .or().
+      const term = buildIlikeTerm(q);
+      query = query.or(`brand.ilike.${term},name.ilike.${term}`);
     }
 
     const { data, error } = await query;
