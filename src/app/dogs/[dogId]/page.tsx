@@ -8,6 +8,7 @@ import { Dog } from '@/lib/types';
 import type { FoodFullIngredient } from '@/lib/foodFull';
 import CurrentFoodCard from '@/components/CurrentFoodCard';
 import FoodInsightsCard from '@/components/FoodInsightsCard';
+import DogDocumentsCard from '@/components/DogDocumentsCard';
 
 interface Recommendation {
   food_id: string;
@@ -241,6 +242,8 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
         <CurrentFoodCard dogId={params.dogId} />
 
         <FoodInsightsCard dogId={params.dogId} />
+
+        <DogDocumentsCard dogId={params.dogId} />
 
         <div className="card card-pad mt-6">
           <div className="flex items-center justify-between gap-3">

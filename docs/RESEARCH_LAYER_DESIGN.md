@@ -119,9 +119,11 @@ Per `FOOD_DISCOVERY_DESIGN.md` and the privacy boundary: keyed to `auth.users`,
 ### New: `dog_document_findings` — parsed, structured, private
 
 One row per finding extracted from an uploaded document. `document_id`, `dog_id`,
-`finding_type` (`biome_marker`, `allergen_reactive`, `allergen_clear`), `marker_name`,
-`value`, `unit`, `reference_range`, `interpretation_flag` (`high`, `low`, `normal`,
-`reactive`, `unclear`), `verbatim_source_text`.
+`finding_type` (`biome_marker`, `classification`, `allergen_reactive`,
+`allergen_clear`), `source_kind` (`text_label`, `prose`, `chart`),
+`review_status` (`accepted`, `needs_review`), `marker_name`, `value`, `unit`,
+`reference_range`, `interpretation_flag` (`high`, `low`, `normal`, `reactive`,
+`unclear`), `verbatim_source_text`.
 
 Same rule as composition: **the verbatim text is stored, and nothing is recorded that
 cannot be pointed at in it.**
@@ -296,15 +298,24 @@ Consequences:
 - Every extracted finding stores `verbatim_source_text`. If a value cannot be
   pointed at in the document text, it is not written.
 - Never repair a name by inference. Never infer a missing value.
+- A literal-substring assertion proves a value **appeared** in the document. It
+  never proves what the value **refers to**. Attribution must come from an
+  explicit label, adjacent text, or a chart legend that names the series. Where
+  attribution cannot be established from the document itself, the value is null
+  regardless of passing the substring check. Attribution conventions are
+  established **once per lab template** during the recon pass, recorded, then
+  applied deterministically.
 
 ### 11.2 Profiled labs
 
 Two real reports reviewed 2026-07-28.
 
-**Biome4Pets Ltd — fully extractable.**
+**Biome4Pets Ltd — accepted through profiled text routes.**
 
-Values sit in the text layer as labelled numbers, with reference ranges printed
-alongside. Both the value and its interpretation band are verbatim-traceable.
+The overview and prose values accepted by the parser are in the text layer beside
+their own labels or in explicit sentences. Some chart legends are visible artwork
+but are not extractable text; those charts remain useful only as non-writing
+cross-check candidates and cannot independently supply a finding.
 
 ```
 Bacteroidetes: 37.4%   Fusobacteria: 32.3%   Firmicutes: 23.2%
@@ -317,6 +328,33 @@ Dysbiosis Pattern Score: 0.6
 Also carries a narrative veterinary summary and a classification
 (`Imbalanced (Level 2)`). Populates `reference_range` and `interpretation_flag`
 directly from the document rather than by inference.
+
+**Profiled Biome4Pets chart convention:**
+
+- Axis ticks are a regular arithmetic sequence beginning at 0; discard them.
+- Remaining numbers are data labels in series order.
+- The legend names the series; the series named `Your Pet` is the dog's value.
+- The profiled series order is target, high, low, `Your Pet`, but position may
+  only be used when those series names are themselves extractable from that
+  chart's PDF text layer. A visually present vector-artwork legend does not
+  satisfy this gate.
+- `reference_range` must retain the legend's series names with their values. An
+  unlabelled numeric triple is null.
+- If the legend text is absent from extraction, or the data-label count does not
+  equal the four named series, the chart value is unattributable and null.
+  Position is never assumed.
+- Where the same marker is stated in both explicitly-labelled prose and a chart,
+  the two values are asserted equal. A mismatch marks that finding
+  `needs_review`; neither source silently overrides the other. Each stored
+  finding records whether its value came from `text_label`, `prose`, or `chart`.
+
+For the two profiled samples, legend text was not extractable for any of the four
+charts checked: Sample A Bacteroidales, Sample A Clostridia, Sample B
+Bacteroidales, and Sample B Clostridia. Their fourth numeric labels are therefore
+never written by position. The non-writing prose/chart agreement check passes for
+Sample A Bacteroidales (37/37) and Clostridia (20/20). Sample B Bacteroidales has
+no prose route, and Sample B Clostridia mismatches (18/31), so its prose-backed
+finding is `needs_review`.
 
 **BIOME9 (GutDiscovery®) — partial only.**
 
@@ -346,9 +384,13 @@ BIOME9's PDF drops `fi`/`ff`/`tt` ligatures on text extraction:
 A naive parser writes mangled organism names that silently fail to match any
 reference vocabulary — and a silent mismatch is worse than a loud failure.
 
-**Rule:** normalise every extracted organism name against a canonical genus and
-phylum vocabulary. Fuzzy-match to suggest, never to auto-accept. Anything unmatched
-goes to owner review with the raw string preserved. Do not repair by inference.
+**Canonical mapping rule:** compare every extracted organism name with a versioned
+canonical phylum/genus vocabulary. An exact match may be recognised, but the
+document finding always preserves the lab's raw string. A fuzzy match may only
+produce a separate **suggestion**; it never replaces or auto-accepts the raw name.
+Anything unmatched goes to owner review with the raw string preserved. Do not
+repair by inference. For example, Biome4Pets' `Bacteriodetes` remains the stored
+raw name while `Bacteroidetes` may be suggested for review.
 
 ### 11.4 Status values
 
