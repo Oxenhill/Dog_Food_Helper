@@ -400,6 +400,7 @@ not a source the claim layer accepts.
 
 1. `dog_documents` + `dog_document_findings` tables, RLS, private bucket, upload UI.
    Store and display only — nothing reads them yet.
+   *(Steps 1–2 are the scope for the first implementation session. See §14.)*
 2. Biome4Pets parser (§11.2) — the fully-extractable format, so the pipeline is
    proven end to end on the easy case first. Then BIOME9 at `partial`.
 3. `research_claims` table + admin review screen. No ingestion yet.
@@ -410,5 +411,100 @@ not a source the claim layer accepts.
 6. Scheduled ingestion from the source allowlist.
 7. Runtime join: claims surfaced as reasons on recommendations.
 8. Document findings wired into the profile used at step 7.
+
+---
+
+## 14. Notes for an implementing agent
+
+Written for an agent that has not seen this project before. Everything here is fact
+verified against the live database, not assumption.
+
+### 14.1 Stack
+
+Next.js / TypeScript on Vercel (project `dog-food-helper`). Supabase Postgres 17
+(project ref `ysffyuohwvdifvbopfcm`). Repo `Oxenhill/Dog_Food_Helper`.
+
+### 14.2 Fixed constraints you cannot choose
+
+- `research_chunks.embedding` is already **`vector(1536)`**. The embedding model is
+  therefore pinned to a 1536-dimension model. Do not alter the column; other
+  scaffolding assumes it.
+- `pgvector` 0.8.2 and `pg_cron` 1.6.4 are installed. **`pg_net` is not** — nothing
+  can make an outbound HTTP call from inside Postgres. Ingestion and embedding must
+  run in an Edge Function or a Next.js route, not in a database function.
+- `research_documents`, `research_chunks`, `research_score_cache` and
+  `research_score_queue` already exist and are empty. Reuse them; do not recreate.
+- `user_profiles.is_admin` is the admin flag. Verify it **server-side** on every
+  request. Never trust a client-supplied admin claim.
+- `contributed_foods` has RLS enabled with **zero policies** — a cautionary example.
+  Client-side reads against it return nothing. Do not repeat that pattern: any new
+  table gets explicit policies.
+
+### 14.3 Project doctrine that governs this work
+
+These are not stylistic preferences. Each was learned expensively.
+
+1. **A model never authors a value that reaches the database.** A model may write an
+   extractor or draft a claim for review. It may never be the thing that decides a
+   stored value is correct.
+2. **Verbatim or nothing.** Every `research_claims.supporting_quote` must be asserted
+   a literal substring of its source chunk. Every `dog_document_findings` value must
+   be a literal substring of the document text. Assertion failure discards the row —
+   it never repairs it.
+3. **Never infer a missing value.** Null is a legitimate, preferred answer.
+4. **Two-run discipline on anything that writes.** Run 1 parses and prints what it
+   would write, and writes nothing. The owner reviews. Run 2 commits.
+5. **Raw HTML and raw PDFs never enter a model context.** Reduce first; assert the
+   reduced text is under 8192 characters before any model sees it.
+6. `food_ingredients.position_in_list` is **parent-scoped**, not a global rank.
+   Children restart at 1 under each `parent_ingredient_id`. Any query touching it
+   must project `parent_ingredient_id` alongside. This has caused three wrong
+   diagnoses. Relevant when claims are matched against food composition.
+
+### 14.4 Privacy boundary — non-negotiable
+
+`dogs.owner_id` references `auth.users`. Everything keyed to it is permanently
+private: `dogs`, all `dog_*` tables, `user_profiles`, `contributed_foods`.
+
+`dog_documents` and `dog_document_findings` join that set. They must:
+
+- be owner-scoped by RLS on `auth.uid() = owner_id`
+- never appear in the `catalogue` schema or any view in it
+- be added to the private-table list checked by `public.run_scheduled_assertions()`
+
+A daily `pg_cron` job runs that assertion and writes failures to `system_alerts`. It
+is live and it has caught a real boundary regression. Confirm your migration leaves
+it passing.
+
+Publishing anything keyed to `auth.users` would be a UK GDPR breach. This is the one
+constraint with no acceptable trade-off.
+
+### 14.5 Scope of the first session
+
+**Sequence steps 1 and 2 only** (§13): the two document tables with RLS and a private
+bucket, the upload UI, and the Biome4Pets parser.
+
+Do **not** build in this session: `research_claims`, ingestion, embeddings, claim
+drafting, or any change to recommendation, scoring or `hardFilter` code. Nothing
+reads `dog_documents` yet.
+
+### 14.6 Do not touch — parallel work in progress
+
+Another agent is working in the same repository on food discovery. Avoid:
+
+`manufacturer_targets`, `manufacturer_target_domains`, `manufacturer_entities`,
+`terms_clause_patterns`, `crawl_targets`, `source_domain_allowlist`,
+`contributed_foods`, `foods`, `food_ingredients`, the `catalogue` schema, the
+`manufacturer-recon` Edge Function, and anything under `/admin` other than a new
+route you create.
+
+If your work appears to require touching any of these, stop and say so.
+
+### 14.7 Reference material
+
+Two real lab reports were reviewed to produce §11. The Biome4Pets format extracts
+fully from the PDF text layer; BIOME9 does not — its abundance data exists only in
+chart images. Build Biome4Pets first. Request the sample reports from the owner
+before writing the parser; do not build against the field list in §11.2 alone.
 
 Steps 1–2 are safe to build now. Step 4 is the quality gate for everything after it.
