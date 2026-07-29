@@ -1,5 +1,33 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer Gate 2 ingestion complete (2026-07-29, latest)
+
+**UI UNVERIFIED.** The production research-admin page redirected to `/signin`
+and no authenticated test-admin session was available.
+
+The owner-approved, frozen Gate 1 corpus selection was ingested into Supabase
+project `ysffyuohwvdifvbopfcm`: 30 documents, 695 chunks, 88 topic centroids
+and 2,282 document/topic relevance rows. Access is 24 OA JATS full text and 6
+PubMed abstract-only; grades are A3/B4/C0/D23/E0; grading metadata is 27
+complete and 3 incomplete. All 28 biological records are canine-direct with
+structured PubMed `Dogs` MeSH; the two veterinary-methodology records are
+Group-G appraisal context only.
+
+All 783 embeddings used the Vercel AI Gateway with
+`openai/text-embedding-3-small`, pinned to 1,536 dimensions. Actual usage was
+199,245 tokens (approximately $0.0039849). Relevance ranking stores the maximum
+chunk-to-centroid cosine score and derives eligibility using topic top-five plus
+a 0.35 floor: 384 pairs are eligible, no topic exceeds five, and no eligible
+pair is below the floor.
+
+Live verification: 695/695 chunk and 88/88 centroid vectors have 1,536
+dimensions; `research_claims=0`; protected recommendation, scoring,
+hard-filter, client-document and section-14.6 table counts did not change.
+Exact-manifest idempotency dry run: 0 inserts, 0 updates, 30 exact skips.
+Tests 211/211, `tsc --noEmit` clean, production build exit 0. No Gate 3
+drafting, claim activation or recommendation connection began. Full report:
+`docs/research-gate2-2026-07-29.md`.
+
 ## Additive-panel safety gap closed (2026-07-28, latest)
 
 **Decision: Option A (`food_ingredients`), based on actual readers.** Both the
