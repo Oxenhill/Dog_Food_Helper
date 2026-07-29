@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
-import { DietExposureAudit, Dog } from '@/lib/types';
+import { DietExposureAudit, Dog, type ResearchEvidence } from '@/lib/types';
 import type { FoodFullIngredient } from '@/lib/foodFull';
 import CurrentFoodCard from '@/components/CurrentFoodCard';
 import FoodInsightsCard from '@/components/FoodInsightsCard';
@@ -34,6 +34,8 @@ interface Recommendation {
   // WS4 #3 — clients need to see what's actually in a recommended food.
   // Empty means no ingredient list has been recorded yet, never "no ingredients".
   ingredients: FoodFullIngredient[];
+  // Active, manually reviewed evidence only. Informational and zero-weight.
+  research_evidence: ResearchEvidence[];
 }
 
 interface RecommendationsResponse {
@@ -300,6 +302,7 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
               {recs.message && <p className="muted text-[14px]">{recs.message}</p>}
               {recs.recommendations.map((r, i) => {
                 const ingredients = r.ingredients ?? [];
+                const researchEvidence = r.research_evidence ?? [];
                 const preview = ingredients.slice(0, INGREDIENT_PREVIEW_COUNT);
                 const remaining = ingredients.length - preview.length;
                 return (
@@ -327,6 +330,76 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
                     )}
                     {r.refused_domain_caution && (
                       <div className="callout-disclaimer mt-2 text-[13px]">{r.refused_domain_caution}</div>
+                    )}
+
+                    {researchEvidence.length > 0 && (
+                      <section
+                        className="mt-3 rounded-xl border border-pine/20 bg-pine/[0.04] p-3 sm:p-4"
+                        aria-label={`Reviewed research evidence for ${r.brand} ${r.name}`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="font-semibold text-ink">Reviewed research evidence</h4>
+                          <span className="badge-pine">Informational only</span>
+                        </div>
+                        <p className="help-text mt-1">
+                          This evidence does not change this food&apos;s score and is not veterinary
+                          advice.
+                        </p>
+
+                        <div className="mt-3 flex flex-col gap-3">
+                          {researchEvidence.map((evidence) => (
+                            <article
+                              key={evidence.claim_id}
+                              className="rounded-lg border border-ink/10 bg-white p-3"
+                            >
+                              <div className="flex flex-wrap gap-2 text-[12px]">
+                                <span className="badge-pine normal-case">
+                                  Grade {evidence.evidence_grade}
+                                </span>
+                                <span className="badge-neutral normal-case">
+                                  Direction: {evidence.direction.replace(/_/g, ' ')}
+                                </span>
+                                <span className="badge-neutral normal-case">
+                                  {evidence.grading_inputs_complete
+                                    ? 'Grading metadata complete'
+                                    : 'Grading metadata incomplete'}
+                                </span>
+                                {evidence.access_type === 'abstract_only' && (
+                                  <span className="badge-neutral normal-case">Abstract only</span>
+                                )}
+                              </div>
+
+                              <p className="mt-2 text-[14px] leading-6 text-ink">
+                                {evidence.effect_summary}
+                              </p>
+                              <blockquote className="mt-2 border-l-2 border-pine/30 pl-3 text-[13px] italic leading-5 text-ink-soft">
+                                “{evidence.supporting_quote}”
+                              </blockquote>
+                              <p className="help-text mt-2">
+                                Source:{' '}
+                                {evidence.source_url ? (
+                                  <a
+                                    href={evidence.source_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-semibold text-pine hover:underline"
+                                  >
+                                    {evidence.title}
+                                  </a>
+                                ) : (
+                                  <span className="font-semibold text-ink">{evidence.title}</span>
+                                )}
+                                {evidence.doi && (
+                                  <>
+                                    {' '}
+                                    <span className="metric">DOI {evidence.doi}</span>
+                                  </>
+                                )}
+                              </p>
+                            </article>
+                          ))}
+                        </div>
+                      </section>
                     )}
 
                     {/* What's actually in it — the owner's request. Never

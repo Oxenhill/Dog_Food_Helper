@@ -10,23 +10,20 @@ import {
   scoreFood,
   ScoredFood,
 } from '@/lib/recommendationScoring';
-import { retrieveResearchFor } from '@/lib/ragRetrieval';
 import { fetchDogCorrelationContext } from '@/lib/correlationScoring';
-import { buildResearchScoreContext, getResearchScores } from '@/lib/researchScoreCache';
-import { NOT_YET_SCORED_RESULT } from '@/lib/researchScoring';
 import { fetchFoodFullMany, flattenIngredientNames } from '@/lib/foodFull';
 import { deriveDataState, dataStateMessage, needsRefusedDomainCaution, REFUSED_DOMAIN_LINE } from '@/lib/dataState';
+import {
+  researchRankingResult,
+  retrieveActiveClaimEvidence,
+} from '@/lib/activeClaimRetrieval';
 
 const DISCLAIMER =
   'This is a decision-support tool, not veterinary advice. Always consult your vet before changing your dog\'s diet, especially if your dog has existing health conditions.';
 
 const TOP_N = 10;
-const RESEARCH_TOP_K = 5;
-// Scoring no longer makes any model call (research relevance is read from
-// `research_score_cache` — see src/lib/researchScoreCache.ts). Candidates are
-// still processed in small concurrent batches because correlation scoring does
-// one ingredient lookup per food for a dog that has log history; bounding the
-// concurrency keeps that from opening ~265 simultaneous DB round trips.
+// Research retrieval makes no model or embedding call. Candidate scoring
+// remains bounded to preserve the existing correlation runtime behaviour.
 const SCORING_BATCH_SIZE = 10;
 
 /**
@@ -107,14 +104,15 @@ export async function GET(request: NextRequest) {
  *
  * Flow (architecture doc §5):
  *   1. Hard filter (deterministic, §2) — excludes restricted-ingredient foods
- *   2. Retrieve RAG research context for this dog's profile (Phase 4)
- *   3. Read PRECOMPUTED research-relevance scores from cache; queue misses
- *   4. Score candidates: nutritional_fit + research_relevance + budget_fit
+ *   2. Retrieve eligible active claims and deterministically match them
+ *   3. Keep the Gate 4 research ranking contribution at exactly zero
+ *   4. Score candidates: nutritional_fit + zero research contribution + budget_fit
  *      + correlation_signal
  *   5. Attach each recommended food's full ingredient list and nutrients
  *   6. Persist the set, then return it
  *
- * No language-model call happens anywhere in this request.
+ * No language-model, embedding, pending-document RAG or score-queue call
+ * happens anywhere in this request.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -183,45 +181,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: foodsError.message }, { status: 500 });
     }
 
-    // 2. Retrieve RAG research context for this dog's profile (Phase 4) —
-    // dog-level, computed once and reused across every candidate food below,
-    // same pattern as der/weights.
-    const researchChunks = await retrieveResearchFor(dog_id, RESEARCH_TOP_K);
-
     // Phase 6 — this dog's own correlation signals AND its rolling ingredient
-    // suspect set, fetched once and reused across every candidate food, same
-    // pattern as researchChunks. Switch-derived signals take precedence over
+    // suspect set, fetched once and reused across every candidate food.
+    // Switch-derived signals take precedence over
     // the weak per-food-period ones; the suspect set is applied as a ranking
     // preference only, never an exclusion.
     const correlationContext = await fetchDogCorrelationContext(dog_id);
 
     const foodsToScore = (candidateFoods ?? []) as Food[];
 
-    // Full detail (ingredients + nutrients) for every candidate. Needed twice
-    // over: it is the research cache key's food fingerprint, and it is what
-    // gets attached to the returned recommendations at step 5.
+    // Full detail (ingredients + nutrients) for every candidate. It supplies
+    // both deterministic claim matching and owner-facing composition.
     const detail = await fetchFoodFullMany(foodsToScore.map((f) => f.id));
 
-    // 3. Research relevance: read from the precomputed cache in ONE query for
-    // all candidates, and enqueue anything not yet scored for the offline
-    // worker. This replaces one Sonnet call per candidate food per request.
-    const researchContext = buildResearchScoreContext(typedDog, researchChunks);
-    const researchScores = await getResearchScores(
-      foodsToScore.map((f) => {
-        const full = detail.get(f.id);
-        return {
-          id: f.id,
-          // Flattened for the same reason as the correlation call below: the
-          // fingerprint must change when ANY ingredient changes, and a
-          // top-level-only list would leave a cached score stale after an edit
-          // to a nested sub-ingredient.
-          ingredientNames: flattenIngredientNames(full?.ingredients ?? []),
-          nutrients: full
-            ? (full.nutrients as unknown as Record<string, number | null>)
-            : null,
-        };
-      }),
-      researchContext
+    // 2. Active claims only: four bounded reads (conditions, claims, documents,
+    // chunks) regardless of candidate count, followed by in-memory matching.
+    const activeResearch = await retrieveActiveClaimEvidence(
+      typedDog,
+      [...detail.values()]
     );
 
     // 4. Score remaining candidates
@@ -240,7 +217,11 @@ export async function POST(request: NextRequest) {
             der,
             weights,
             monthlyBudget,
-            researchScores.get(food.id) ?? NOT_YET_SCORED_RESULT,
+            researchRankingResult(
+              (activeResearch.evidenceByFoodId.get(food.id) ?? []).map(
+                (evidence) => evidence.direction
+              )
+            ),
             correlationContext,
             // Flattened, so nested sub-ingredients are matched too — a
             // beef-flavoured food's hidden chicken is a nested row.
@@ -308,6 +289,7 @@ export async function POST(request: NextRequest) {
         nutritional_fit: Math.round(s.nutritional_fit.score * 1000) / 1000,
         research_relevance: Math.round(s.research_relevance * 1000) / 1000,
         research_summary: s.research_summary,
+        research_evidence: activeResearch.evidenceByFoodId.get(s.food.id) ?? [],
         budget_fit: Math.round(s.budget_fit.score * 1000) / 1000,
         correlation_signal: Math.round(s.correlation_signal * 1000) / 1000,
         correlation_summary: s.correlation_summary,
@@ -331,14 +313,11 @@ export async function POST(request: NextRequest) {
       weights_used: weights,
       life_stage_used: der.lifeStage,
       weight_assumed: der.weightAssumed,
-      // Research context surfaced for transparency (architecture doc §9 /
-      // Phase 4 spec item 2 — "include source_url + title for transparency").
-      research_context: researchChunks.map((c) => ({
-        topic: c.topic,
-        title: c.title,
-        source_url: c.source_url,
-        similarity: Math.round(c.similarity * 1000) / 1000,
-      })),
+      research_runtime: {
+        eligible_claim_count: activeResearch.eligibleClaimCount,
+        unsupported_claim_count: activeResearch.unsupportedClaimIds.length,
+        ranking_effect: 'none',
+      },
       disclaimer: DISCLAIMER,
     };
 

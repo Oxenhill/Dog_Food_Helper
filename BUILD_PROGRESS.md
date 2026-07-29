@@ -1,5 +1,45 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer Gate 4 active-claim runtime integration (2026-07-29, latest)
+
+Gate 4 replaces request-time embedding/chunk RAG and research score-cache/queue
+use with a deterministic server-side active-claim path. Eligibility requires an
+active, reviewed, canine-direct claim; a present non-retracted/non-superseded
+document; a present matching chunk; a still-literal supporting quote; and any
+populated dog condition/life-stage restrictions. Claims, conditions, documents
+and chunks are loaded in four bounded reads and matched to the batched
+`food_full` candidate data in memory, with no per-food database query.
+
+Subject matching is exact and structured: canonical ingredient equality, an
+explicit nutrient-column/declared-additive allowlist, the repository's existing
+ingredient-category taxonomy, and recorded food types only. Unknown ingredient
+classes and processing methods report unsupported; biome markers never match a
+food directly. A narrow canonical synonym group makes the active
+`green lentil` claim match exactly three foods with `whole green lentils`;
+generic/red lentils and lentil fibre remain nonmatches.
+
+Recommendation results now carry cited `research_evidence` (identity, cautious
+summary, exact quote, direction, grade, grading completeness, access type,
+title, DOI and source URL). The dog UI renders this as a responsive evidence
+card with an informational/not-veterinary-advice statement. All research
+directions and grades contribute exactly zero to ranking; weights are unchanged
+and historical offline drafting/scoring code remains intact.
+
+Live state before and after: 2 claims (1 reviewed active, 1 unreviewed queued),
+0 rejected and 0 corroborating arrays. The active grade-B claim remains
+metadata-incomplete and abstract-only. No database migration or write occurred;
+all protected counts are unchanged, including score cache/queue at zero. The
+live module returned the active claim for exactly the three expected Acana food
+IDs and no unsupported active claim.
+
+Verification: 247/247 tests, clean `tsc --noEmit`, production build exit 0,
+and Supabase advisors unchanged at 20 security/53 performance findings.
+`next lint` remains unconfigured and opens an interactive first-run prompt.
+Authenticated UI verification remains pending: production redirected the
+in-app browser to `/signin`, and the service-role one-time admin-link method was
+not used without separate explicit authorization. Full report:
+`docs/research-gate4-2026-07-29.md`.
+
 ## Research Layer Gate 3 drafting run 1 complete (2026-07-29, latest)
 
 **UI UNVERIFIED.** Production `/admin/research` redirected to `/signin`; no

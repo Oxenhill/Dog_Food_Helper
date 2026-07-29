@@ -135,12 +135,13 @@ export interface RecommendationResult {
   // Phase 3 sub-scores (0-1 each) — surfaced so the UI/debugging can show the
   // breakdown, not just the blended overall_score.
   nutritional_fit: number;
-  research_relevance: number; // real, RAG-backed as of Phase 4
-  research_summary: string; // plain-language reasoning behind research_relevance, Phase 4
+  research_relevance: number; // fixed at 0 in Gate 4; evidence is disclosed separately
+  research_summary: string; // states whether active evidence matched and confirms zero ranking effect
   budget_fit: number;
   correlation_signal: number; // Phase 6 — real; 0.5 = neutral/no history yet
   correlation_summary: string; // plain-language reasoning behind correlation_signal, Phase 6
   estimated_monthly_cost: number | null;
+  research_evidence: ResearchEvidence[];
 }
 
 // ============================================
@@ -461,6 +462,26 @@ export interface ResearchClaim {
   review_note?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Human-reviewed research attached to a recommendation. This is evidence
+ * disclosure only in Gate 4: it never contributes a numeric ranking value.
+ */
+export interface ResearchEvidence {
+  claim_id: string;
+  claim_identity: string;
+  subject_type: ResearchClaimSubjectType;
+  subject_value: string;
+  direction: ResearchClaimDirection;
+  effect_summary: string;
+  supporting_quote: string;
+  evidence_grade: EvidenceGrade;
+  grading_inputs_complete: boolean;
+  access_type: 'open_access_full_text' | 'abstract_only';
+  title: string;
+  doi: string | null;
+  source_url: string | null;
 }
 
 // ============================================

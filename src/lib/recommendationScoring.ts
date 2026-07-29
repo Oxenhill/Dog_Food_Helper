@@ -6,10 +6,10 @@ import { type ResearchRelevanceResult } from './researchScoring';
 import { type DogCorrelationContext, scoreCorrelationSignalForFood } from './correlationScoring';
 
 /**
- * Recommendation scoring (Phase 3, research_relevance wired up in Phase 4)
+ * Recommendation scoring (Phase 3, Gate 4 research boundary)
  *
  * overall_score = nutritional_fit_weight*nutritional_fit
- *               + research_relevance_weight*research_relevance   (Phase 4 — RAG-backed, real)
+ *               + research_relevance_weight*research_relevance   (Gate 4 — fixed at zero)
  *               + budget_fit_weight*budget_fit
  *               + correlation_signal_weight*correlation_signal   (Phase 6 — dog's own log history, real; 0.5 neutral if no data yet)
  *
@@ -78,8 +78,8 @@ export interface ScoredFood {
   confidence: number;
   nutritional_fit: NutritionalFitResult;
   budget_fit: BudgetFitResult;
-  research_relevance: number; // Phase 4 — RAG-backed, real (0 only if no relevant approved research found)
-  research_summary: string; // plain-language reasoning behind research_relevance, Phase 4
+  research_relevance: number; // Gate 4 — always zero; active evidence is attached separately
+  research_summary: string; // states evidence visibility and the zero ranking boundary
   correlation_signal: number; // Phase 6 — real (0.5 neutral if this dog has no eligible signal history yet)
   correlation_summary: string;
   reason: string;
@@ -88,12 +88,10 @@ export interface ScoredFood {
 /**
  * Per-food scoring.
  *
- * `research` is now a PRECOMPUTED result, looked up from
- * `research_score_cache` once per request for all candidates
- * (src/lib/researchScoreCache.ts). It used to be a live Claude Sonnet call
- * made here, once per candidate food per request — that is gone. This
- * function makes no model calls at all, so scoring cost no longer scales with
- * the size of the food catalogue.
+ * `research` is a deterministic Gate 4 boundary result: score zero, with a
+ * plain-language note saying whether active evidence is shown separately.
+ * Historical offline scoring code remains available outside this request path,
+ * but this function makes no model calls and receives no model-derived score.
  *
  * As of Phase 6 it also takes this dog's ingredient_outcome_signals
  * (fetchDogCorrelationSignals — dog-level, fetched once per request and
@@ -126,13 +124,9 @@ export async function scoreFood(
     weights.budget_fit_weight * budget_fit.score +
     weights.correlation_signal_weight * correlation_signal;
 
-  // Confidence honesty (architecture doc §9): all four factors are now real
-  // (Phase 6 completes correlation_signal), so confidence is no longer
-  // capped below the full weight sum — it's simply the sum of the active
-  // weights (== 1.0 after normalization). Left as an explicit sum rather
-  // than a hardcoded 1.0 so a future factor added without being wired into
-  // scoreFood would still visibly cap confidence, same defensive pattern as
-  // Phases 3-4.
+  // Preserve the existing confidence calculation and active weights in this
+  // gate. Research evidence changes neither: its score contribution is zero
+  // until a separately reviewed policy is approved.
   const confidence = Math.round(
     (weights.nutritional_fit_weight +
       weights.research_relevance_weight +
