@@ -2,14 +2,14 @@
 
 ## Status
 
-Implementation and deterministic/live-data verification are complete.
-Authenticated production UI verification is pending because the in-app browser
-had no signed-in session. A service-role-generated production-admin magic link
-was not used after the approval boundary rejected that authentication method
-without a separate explicit authorization.
+Implementation, deterministic/live-data verification and authenticated
+production UI verification are complete. The owner supplied an already
+signed-in in-app browser session; no additional admin account or authentication
+link was created.
 
 No database migration was required or applied. No model or embedding call was
-made during this gate.
+made during this gate. The required owner-side recommendation E2E created one
+normal saved recommendation set for Ron.
 
 ## Outcome
 
@@ -330,15 +330,32 @@ The exact live state remains:
 - non-empty corroboration: 0.
 
 Both claim statuses, reviewer IDs, review timestamps, update timestamps and
-empty corroboration arrays are unchanged. Every protected table count exactly
+empty corroboration arrays are unchanged. Every protected research/source,
+scoring, hard-filter, client-document and section-14.6 table count exactly
 matches the pre-write baseline. In particular:
 
-- no recommendation set was written;
 - score cache and queue remain empty;
 - no source document, chunk, centroid, relevance, dog document, dog finding,
   weight, contraindication, food or ingredient row changed.
 
-Only read-only database operations were used in this gate.
+`dog_recommendation_sets` increased from 1 to 2 because the explicitly required
+authenticated recommendation flow generated and saved Ron's result. The new
+set is `7cb693a1-322f-412d-b0da-b3682d41efb1`, generated at
+`2026-07-29T12:53:36.024Z`. It contains 10 recommendations and reports:
+
+```json
+{
+  "research_runtime": {
+    "eligible_claim_count": 1,
+    "unsupported_claim_count": 0,
+    "ranking_effect": "none"
+  }
+}
+```
+
+Only Acana Senior Dog carries research evidence in that payload. Its
+`research_relevance` is `0`, and the attached claim ID is the active claim
+`43899f4f-b0a4-45d8-ae64-8a77f7ad73d9`. The queued claim does not appear.
 
 ### Supabase advisors
 
@@ -352,26 +369,47 @@ advisor backlog remains outside this gate.
 
 ### Authenticated UI verification
 
-The production in-app browser reached `/admin/research` and was redirected to
-`/signin`; there was no ambient authenticated session. The browser session was
-therefore unable to verify the admin cards or generate a recommendation.
+The owner supplied a signed-in production session. No additional admin account
+was required or created.
 
-The attempted service-role one-time-link method was stopped by the approval
-boundary before any link or session was created. Authenticated browser
-verification still requires either:
+Admin verification at `/admin/research` confirmed:
 
-- an already signed-in in-app browser tab; or
-- explicit authorization for that one-time existing-admin link method.
+- the green-lentil claim appears under Active with its exact quote, neutral
+  direction, grade B, incomplete-grading label, abstract-only label, title, DOI
+  and PubMed link;
+- the taurine claim appears under Queued with its real
+  `queued_for_review` status, grade D, complete-grading label, open-access label
+  and exact source quote;
+- no review action or claim mutation was performed.
 
-No claim or application data was changed during this attempt.
+Owner verification used Ron's dog page, not the admin screen. A fresh
+recommendation request returned Acana Senior Dog at rank 8 with the approved
+green-lentil evidence. The other nine foods showed the explicit no-match
+message and no evidence card. The active card displayed:
+
+- the cautious effect summary and exact supporting quote;
+- grade B, neutral direction, incomplete grading metadata and abstract-only
+  status;
+- the source title, DOI and a working link to the expected PubMed record;
+- the informational-only, zero-score and not-veterinary-advice statements.
+
+The PubMed target resolved successfully. The evidence layout remained readable
+at 1440×900 and 390×844, with no horizontal evidence-card overflow, and browser
+console error/warning logs were empty.
+
+Ron’s page separately displayed an existing Lab reports/documents error
+(`Unexpected token '<', "<!DOCTYPE "... is not valid JSON`). It was present
+outside the recommendation evidence flow, produced no console log entry during
+the Gate 4 request, and was left untouched as an unrelated issue in the shared
+worktree.
 
 ## What is usable in production
 
-After deployment, the reviewed green-lentil claim is deterministically usable
-as cited, zero-weight evidence on the three identified Acana foods whenever one
-appears in the returned top ten for a compatible dog. Acana Senior Dog already
-appears in Harry's most recently saved top ten, making it the clearest live
-verification target after regeneration.
+In production, the reviewed green-lentil claim is deterministically usable as
+cited, zero-weight evidence on the three identified Acana foods whenever one
+appears in the returned top ten for a compatible dog. The authenticated Ron
+flow proves the complete production path: Acana Senior Dog appeared at rank 8
+with the active evidence, exact citation and honest metadata labels.
 
 The queued taurine claim is not usable and cannot leak, even though catalogue
 foods have matching taurine additive rows.
@@ -394,4 +432,3 @@ define:
   manually activated incomplete evidence from being over-weighted.
 
 Gate 4 intentionally implements none of those ranking decisions.
-

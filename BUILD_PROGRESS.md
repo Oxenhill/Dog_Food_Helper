@@ -27,17 +27,25 @@ and historical offline drafting/scoring code remains intact.
 
 Live state before and after: 2 claims (1 reviewed active, 1 unreviewed queued),
 0 rejected and 0 corroborating arrays. The active grade-B claim remains
-metadata-incomplete and abstract-only. No database migration or write occurred;
-all protected counts are unchanged, including score cache/queue at zero. The
-live module returned the active claim for exactly the three expected Acana food
-IDs and no unsupported active claim.
+metadata-incomplete and abstract-only. No database migration occurred. All
+protected research/source/scoring counts are unchanged, including score
+cache/queue at zero. The required owner-side E2E wrote one normal saved
+recommendation set for Ron, increasing that table from 1 to 2; it did not
+change any research data. The live module returned the active claim for exactly
+the three expected Acana food IDs and no unsupported active claim.
 
 Verification: 247/247 tests, clean `tsc --noEmit`, production build exit 0,
 and Supabase advisors unchanged at 20 security/53 performance findings.
 `next lint` remains unconfigured and opens an interactive first-run prompt.
-Authenticated UI verification remains pending: production redirected the
-in-app browser to `/signin`, and the service-role one-time admin-link method was
-not used without separate explicit authorization. Full report:
+Authenticated production verification is complete using the owner's signed-in
+session: the admin queue shows the real active/queued states and honest source
+metadata; Ron's owner recommendation flow returned Acana Senior Dog at rank 8
+with the active green-lentil evidence, exact quote and working PubMed citation.
+The other nine foods had no evidence, the queued claim did not appear,
+`research_relevance` remained zero, and the evidence card was readable at
+desktop and 390px mobile widths with empty console error/warning logs. A
+separate pre-existing Lab reports/documents JSON-response alert on Ron's page
+was observed and left untouched as unrelated. Full report:
 `docs/research-gate4-2026-07-29.md`.
 
 ## Research Layer Gate 3 drafting run 1 complete (2026-07-29, latest)
