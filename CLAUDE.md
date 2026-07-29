@@ -53,7 +53,7 @@ Follow the sequence in the architecture doc §8 and technical build spec Part E.
 
 1. **Safety layer separation** (§2 of architecture doc): hard-filter logic (SQL, deterministic, allergies/health conditions) is completely separate from inference layer (LLM, RAG, scoring). Never blend them.
 
-2. **Baseline-relative tracking** (§4 of architecture doc): don't log absolute stool scores or body condition as standalone numbers. Log *shift from baseline* (better/worse/no change) + optionally re-select full chart for recalibration. This is what the product cares about.
+2. **Baseline-relative tracking** (§4 of architecture doc): body condition and general wellness log *shift from baseline* (better/worse/no change) + optional chart recalibration. Stool is the explicit event-level exception added 2026-07-29: baseline stores the representative score set and usual count range; monitoring stores one exact score per actual stool; daily worst/median/count/spread are derived at read time and compared with baseline.
 
 3. **Metric-specific lag windows** (architecture doc §4, technical build spec Part A): digestive metrics settle ~10 days post-food-switch, energy/weight ~21 days, coat/skin ~56 days. Use `metric_minimum_lag_days` reference table—don't hardcode one lag value for everything.
 

@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { event, previousEvent } = await startMainFoodEvent({
+    const { event, previousEvent, monitoringWindow } = await startMainFoodEvent({
       dogId: dog_id,
       foodId: food_or_treat_id ?? null,
       freetext: food_or_treat_freetext ?? null,
@@ -126,6 +126,7 @@ export async function POST(request: NextRequest) {
         // Non-null means this was a switch, and the analysis engine now has a
         // switch point to work with.
         previous_event: previousEvent,
+        stool_monitoring_window: monitoringWindow,
       },
       { status: 201 }
     );

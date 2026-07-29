@@ -1,5 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { DogLogEntry, OutcomeMetric } from './types';
+import { loadDailyStoolObservationLogs } from './stoolEvents';
 
 /**
  * The conditional treat-logging nudge.
@@ -19,6 +20,7 @@ import { DogLogEntry, OutcomeMetric } from './types';
 /** Digestive metrics — the ones a treat plausibly moves within days. */
 const DIGESTIVE_METRICS: OutcomeMetric[] = [
   'stool_score',
+  'stool_frequency',
   'stool_odor',
   'gas_frequency',
   'gas_odor',
@@ -70,19 +72,33 @@ export async function evaluateTreatLoggingSuggestion(
   since.setDate(since.getDate() - TREAT_PROMPT_THRESHOLDS.lookbackDays);
   const sinceDate = since.toISOString().split('T')[0];
 
-  const { data, error } = await supabaseAdmin
-    .from('dog_log_entries')
-    .select('metric, trend, log_date, within_expected_variability_window')
-    .eq('dog_id', dogId)
-    .in('metric', DIGESTIVE_METRICS)
-    .gte('log_date', sinceDate)
-    // Logs inside a post-switch settling window are expected to be unsettled,
-    // so they are not evidence that something is wrong.
-    .eq('within_expected_variability_window', false);
+  const [{ data, error }, stoolLogs] = await Promise.all([
+    supabaseAdmin
+      .from('dog_log_entries')
+      .select('metric, trend, log_date, within_expected_variability_window')
+      .eq('dog_id', dogId)
+      .in('metric', DIGESTIVE_METRICS)
+      .gte('log_date', sinceDate)
+      // Logs inside a post-switch settling window are expected to be unsettled,
+      // so they are not evidence that something is wrong.
+      .eq('within_expected_variability_window', false),
+    loadDailyStoolObservationLogs(dogId),
+  ]);
 
   if (error) throw error;
 
-  const logs = (data ?? []) as Pick<DogLogEntry, 'metric' | 'trend'>[];
+  const logs: Pick<DogLogEntry, 'metric' | 'trend'>[] = [
+    ...((data ?? []) as Pick<DogLogEntry, 'metric' | 'trend'>[]).filter(
+      (log) => log.metric !== 'stool_score' && log.metric !== 'stool_frequency'
+    ),
+    ...stoolLogs
+      .filter(
+        (log) =>
+          log.log_date >= sinceDate &&
+          !log.within_expected_variability_window
+      )
+      .map((log) => ({ metric: log.metric, trend: log.trend })),
+  ];
 
   const worse = logs.filter((l) => l.trend === 'worse');
   const better = logs.filter((l) => l.trend === 'better');

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { STOOL_SCORE_IDEAL, BCS_IDEAL } from './chartReference';
+import { loadDailyStoolObservationLogs } from './stoolEvents';
 import {
   BeforeState,
   DogFoodEvent,
@@ -102,6 +103,7 @@ export const UNCHANGED_SIGNAL_STRENGTH = {
 /** Metrics a food change plausibly moves, used for the tolerated/not verdict. */
 const DIGESTIVE_METRICS: OutcomeMetric[] = [
   'stool_score',
+  'stool_frequency',
   'stool_odor',
   'gas_frequency',
   'gas_odor',
@@ -287,7 +289,23 @@ export async function analyseSwitchesForDog(
     .eq('dog_id', dogId);
 
   if (logsError) throw logsError;
-  const logs = (logRows ?? []) as DogLogEntry[];
+  const storedLogs = (logRows ?? []) as DogLogEntry[];
+  // Baseline stool rows are representative profiles, not bowel movements.
+  // New event data contributes exactly one derived sample per observed day.
+  const nonStoolLogs = storedLogs.filter(
+    (log) => log.metric !== 'stool_score' && log.metric !== 'stool_frequency'
+  );
+  const allDailyStoolLogs = await loadDailyStoolObservationLogs(dogId);
+  const logsForBeforeState = [...nonStoolLogs, ...allDailyStoolLogs];
+
+  const { data: monitoringRows, error: monitoringError } = await supabaseAdmin
+    .from('dog_stool_monitoring_windows')
+    .select('id, food_event_id')
+    .eq('dog_id', dogId);
+  if (monitoringError) throw monitoringError;
+  const monitoringByFoodEvent = new Map<string, string>(
+    (monitoringRows ?? []).map((row) => [row.food_event_id as string, row.id as string])
+  );
 
   const { data: lagRows, error: lagError } = await supabaseAdmin
     .from('metric_minimum_lag_days')
@@ -323,7 +341,12 @@ export async function analyseSwitchesForDog(
       : switchedAt;
 
     const metricOutcomes: Record<string, SwitchMetricOutcome> = {};
-    const metricsPresent = Array.from(new Set(logs.map((l) => l.metric)));
+    const monitoringWindowId = monitoringByFoodEvent.get(toEvent.id);
+    const windowStoolLogs = monitoringWindowId
+      ? await loadDailyStoolObservationLogs(dogId, monitoringWindowId)
+      : [];
+    const analysisLogs = [...nonStoolLogs, ...windowStoolLogs];
+    const metricsPresent = Array.from(new Set(analysisLogs.map((log) => log.metric)));
 
     for (const metric of metricsPresent) {
       const lagDays = lagByMetric.get(metric) ?? 0;
@@ -337,7 +360,7 @@ export async function analyseSwitchesForDog(
         )
       );
 
-      const eligible = logs.filter((l) => {
+      const eligible = analysisLogs.filter((l) => {
         if (l.metric !== metric) return false;
         if (l.trend == null) return false; // baseline rows carry no trend
         if (l.within_expected_variability_window) return false;
@@ -352,7 +375,11 @@ export async function analyseSwitchesForDog(
 
       metricOutcomes[metric] = {
         outcome: classifyOutcome(net, sampleSize),
-        before_state: beforeStateForMetric(logs, metric as OutcomeMetric, switchedAt),
+        before_state: beforeStateForMetric(
+          logsForBeforeState,
+          metric as OutcomeMetric,
+          switchedAt
+        ),
         sample_size: sampleSize,
         net: Number(net.toFixed(4)),
         lag_days: lagDays,

@@ -5,7 +5,6 @@ import { computeVariabilityWindow } from '@/lib/lagWindow';
 import { OutcomeMetric, TrendDirection } from '@/lib/types';
 
 const VALID_METRICS: OutcomeMetric[] = [
-  'stool_score',
   'coat_condition',
   'stool_odor',
   'gas_frequency',

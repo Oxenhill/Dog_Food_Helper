@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import BristolChartSelector from './BristolChartSelector';
 import BCSChartSelector from './BCSChartSelector';
 import WellnessLevelSelector from './WellnessLevelSelector';
 import { authHeaders } from '@/lib/clientAuth';
@@ -20,7 +19,6 @@ export default function RecalibrationForm({
   dogId: string;
   onComplete?: () => void;
 }) {
-  const [stoolScore, setStoolScore] = useState<number | null>(null);
   const [bodyConditionScore, setBodyConditionScore] = useState<number | null>(null);
   const [coatCondition, setCoatCondition] = useState<Level | null>(null);
   const [stoolOdor, setStoolOdor] = useState<Level | null>(null);
@@ -32,7 +30,6 @@ export default function RecalibrationForm({
 
   async function handleSubmit() {
     const entries: { metric: string; raw_value: string }[] = [];
-    if (stoolScore !== null) entries.push({ metric: 'stool_score', raw_value: String(stoolScore) });
     if (bodyConditionScore !== null)
       entries.push({ metric: 'body_condition_score', raw_value: String(bodyConditionScore) });
     if (coatCondition) entries.push({ metric: 'coat_condition', raw_value: coatCondition });
@@ -65,7 +62,6 @@ export default function RecalibrationForm({
   }
 
   const hasAnySelection =
-    stoolScore !== null ||
     bodyConditionScore !== null ||
     coatCondition !== null ||
     stoolOdor !== null ||
@@ -91,7 +87,6 @@ export default function RecalibrationForm({
         </div>
       )}
 
-      <BristolChartSelector value={stoolScore} onChange={setStoolScore} />
       <BCSChartSelector value={bodyConditionScore} onChange={setBodyConditionScore} />
       <WellnessLevelSelector metric="coat_condition" value={coatCondition} onChange={setCoatCondition} />
       <WellnessLevelSelector metric="stool_odor" value={stoolOdor} onChange={setStoolOdor} />

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import QuickLogForm from '@/components/QuickLogForm';
+import StoolEventForm from '@/components/StoolEventForm';
 
 export default function LogPage({ params }: { params: { dogId: string } }) {
   return (
@@ -21,12 +22,18 @@ export default function LogPage({ params }: { params: { dogId: string } }) {
         </Link>
 
         <p className="eyebrow mt-4">Everyday tracking</p>
-        <h1 className="page-title mt-2">Quick log</h1>
+        <h1 className="page-title mt-2">Log today</h1>
         <p className="lead mt-2 max-w-prose">
-          Tap better, worse, or no change for whichever indicators you noticed today.
+          Record each stool when it happens, then add any broader changes you noticed.
         </p>
 
-        <div className="mt-6">
+        <div className="card card-pad mt-6">
+          <h2 className="section-title mb-4">Stool event</h2>
+          <StoolEventForm dogId={params.dogId} />
+        </div>
+
+        <div className="mt-8">
+          <h2 className="section-title mb-4">Other indicators</h2>
           <QuickLogForm dogId={params.dogId} />
         </div>
 

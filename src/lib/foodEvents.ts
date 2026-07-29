@@ -1,5 +1,6 @@
 import { supabaseAdmin } from './supabase';
-import { DogFoodEvent } from './types';
+import { openStoolMonitoringWindow } from './stoolEvents';
+import { DogFoodEvent, DogStoolMonitoringWindow } from './types';
 
 /**
  * Food attribution — the shared write path for `dog_food_events`.
@@ -46,6 +47,8 @@ export interface StartMainFoodResult {
   event: DogFoodEvent;
   /** The event this switch closed, if the dog was already on a recorded food. */
   previousEvent: DogFoodEvent | null;
+  /** Opened only for a real change from an existing food. */
+  monitoringWindow: DogStoolMonitoringWindow | null;
 }
 
 export async function getOpenMainFoodEvent(dogId: string): Promise<DogFoodEvent | null> {
@@ -102,7 +105,7 @@ export async function startMainFoodEvent(input: StartMainFoodInput): Promise<Sta
     previousEvent.food_or_treat_id &&
     previousEvent.food_or_treat_id === foodId
   ) {
-    return { event: previousEvent, previousEvent: null };
+    return { event: previousEvent, previousEvent: null, monitoringWindow: null };
   }
 
   if (previousEvent) {
@@ -150,6 +153,26 @@ export async function startMainFoodEvent(input: StartMainFoodInput): Promise<Sta
     throw insertError ?? new Error('Failed to open food event');
   }
 
+  let monitoringWindow: DogStoolMonitoringWindow | null = null;
+  if (previousEvent) {
+    try {
+      monitoringWindow = await openStoolMonitoringWindow(
+        dogId,
+        event.id,
+        startedAt.toISOString()
+      );
+    } catch (monitoringError) {
+      // Monitoring is part of recording a change, not a best-effort side
+      // effect. Restore the previous food period if the window cannot open.
+      await supabaseAdmin.from('dog_food_events').delete().eq('id', event.id);
+      await supabaseAdmin
+        .from('dog_food_events')
+        .update({ ended_at: previousEvent.ended_at ?? null })
+        .eq('id', previousEvent.id);
+      throw monitoringError;
+    }
+  }
+
   // `dogs.current_food_*` stays in step because the baseline anchor
   // (baselines/establish) and the recommendation profile both read it. It is a
   // convenience pointer to "now"; the event history is the source of truth for
@@ -168,7 +191,7 @@ export async function startMainFoodEvent(input: StartMainFoodInput): Promise<Sta
     console.error(`startMainFoodEvent: dog ${dogId} pointer update failed`, dogUpdateError);
   }
 
-  return { event: event as DogFoodEvent, previousEvent };
+  return { event: event as DogFoodEvent, previousEvent, monitoringWindow };
 }
 
 export interface LogTreatInput {

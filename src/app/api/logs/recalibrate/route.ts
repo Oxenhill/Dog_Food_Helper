@@ -6,7 +6,6 @@ import { deriveTrend } from '@/lib/trendLogic';
 import { OutcomeMetric } from '@/lib/types';
 
 const VALID_METRICS: OutcomeMetric[] = [
-  'stool_score',
   'coat_condition',
   'stool_odor',
   'gas_frequency',

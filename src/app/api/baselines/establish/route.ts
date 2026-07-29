@@ -6,12 +6,12 @@ import { OutcomeMetric } from '@/lib/types';
 /**
  * establishBaseline (Part B)
  *
- * Input: dog_id, full visual chart selections (Bristol stool_score, BCS
- * body_condition_score) plus the other indicator readings, an optional
- * initial behaviour_tag list, and log_date (defaults to today).
+ * Input: dog_id, representative Bristol stool score set, the dog's usual
+ * stools-per-day range, BCS body_condition_score, the other indicator
+ * readings, and an optional initial behaviour_tag list.
  *
- * Writes the initial dog_log_entries rows (one per metric) and a
- * dog_baselines pointer row. Anchors to the dog's current_food_id.
+ * Stool baseline is stored separately because it is a representative pattern,
+ * not a bowel movement. It must never be counted as a stool event.
  *
  * Only callable once per dog unless explicitly reset (force_reset: true) —
  * a reset is logged as a distinct new dog_baselines row, never a silent
@@ -29,7 +29,9 @@ export async function POST(request: NextRequest) {
     const {
       dog_id,
       log_date,
-      stool_score, // 1-7
+      stool_scores, // distinct representative values, each 1-7
+      stools_per_day_min,
+      stools_per_day_max,
       body_condition_score, // 1-9
       coat_condition, // good|questionable|poor
       stool_odor, // good|questionable|poor
@@ -43,7 +45,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'dog_id is required' }, { status: 400 });
     }
     if (
-      stool_score === undefined ||
+      !Array.isArray(stool_scores) ||
+      stool_scores.length === 0 ||
+      !stool_scores.every(
+        (score: unknown) => Number.isInteger(score) && Number(score) >= 1 && Number(score) <= 7
+      ) ||
+      !Number.isInteger(stools_per_day_min) ||
+      !Number.isInteger(stools_per_day_max) ||
+      stools_per_day_min < 0 ||
+      stools_per_day_max < stools_per_day_min ||
+      stools_per_day_max > 30 ||
       body_condition_score === undefined ||
       !coat_condition ||
       !stool_odor ||
@@ -53,7 +64,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Full baseline requires stool_score, body_condition_score, coat_condition, stool_odor, gas_frequency and gas_odor',
+            'Full baseline requires stool_scores, a valid stools-per-day range, body_condition_score, coat_condition, stool_odor, gas_frequency and gas_odor',
         },
         { status: 400 }
       );
@@ -115,6 +126,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: baselineError.message }, { status: 500 });
     }
 
+    const { data: stoolBaseline, error: stoolBaselineError } = await supabaseAdmin
+      .from('dog_stool_baselines')
+      .insert({
+        dog_id,
+        dog_baseline_id: baseline.id,
+        established_at: establishedAt,
+        typical_scores: Array.from(new Set(stool_scores)).sort((a, b) => a - b),
+        typical_count_min: stools_per_day_min,
+        typical_count_max: stools_per_day_max,
+      })
+      .select()
+      .single();
+
+    if (stoolBaselineError || !stoolBaseline) {
+      await supabaseAdmin.from('dog_baselines').delete().eq('id', baseline.id);
+      return NextResponse.json(
+        { error: stoolBaselineError?.message ?? 'Failed to save stool baseline' },
+        { status: 500 }
+      );
+    }
+
     const behaviourTagValue = Array.isArray(behaviour_tags)
       ? behaviour_tags.join(',')
       : behaviour_tags ?? null;
@@ -129,16 +161,6 @@ export async function POST(request: NextRequest) {
       food_id_active: string | null;
       notes: null;
     }[] = [
-      {
-        dog_id,
-        log_date: logDateStr,
-        metric: 'stool_score',
-        raw_value: String(stool_score),
-        trend: null,
-        within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
-        notes: null,
-      },
       {
         dog_id,
         log_date: logDateStr,
@@ -210,6 +232,7 @@ export async function POST(request: NextRequest) {
       .select();
 
     if (logEntriesError) {
+      await supabaseAdmin.from('dog_baselines').delete().eq('id', baseline.id);
       return NextResponse.json({ error: logEntriesError.message }, { status: 500 });
     }
 
@@ -218,6 +241,7 @@ export async function POST(request: NextRequest) {
         message: 'Baseline established',
         baseline_id: baseline.id,
         baseline,
+        stool_baseline: stoolBaseline,
         log_entries: logEntries,
       },
       { status: 201 }

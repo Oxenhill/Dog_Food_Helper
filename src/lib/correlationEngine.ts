@@ -1,5 +1,6 @@
 import { supabaseAdmin } from './supabase';
 import { DogLogEntry, EvidenceBasis, OutcomeMetric } from './types';
+import { loadDailyStoolObservationLogs } from './stoolEvents';
 import {
   analyseSwitchesForDog,
   deriveSuspectSet,
@@ -241,15 +242,25 @@ async function accumulateSingleFoodPeriodSignals(
 ): Promise<Map<string, SignalAccumulator>> {
   const acc = new Map<string, SignalAccumulator>();
 
-  const { data: logsData, error: logsError } = await supabaseAdmin
-    .from('dog_log_entries')
-    .select('*')
-    .eq('dog_id', dogId)
-    .eq('within_expected_variability_window', false)
-    .not('food_id_active', 'is', null);
+  const [{ data: logsData, error: logsError }, stoolLogs] = await Promise.all([
+    supabaseAdmin
+      .from('dog_log_entries')
+      .select('*')
+      .eq('dog_id', dogId)
+      .eq('within_expected_variability_window', false)
+      .not('food_id_active', 'is', null),
+    loadDailyStoolObservationLogs(dogId),
+  ]);
 
   if (logsError) throw logsError;
-  const logs = (logsData ?? []) as DogLogEntry[];
+  const logs = [
+    ...((logsData ?? []) as DogLogEntry[]).filter(
+      (log) => log.metric !== 'stool_score' && log.metric !== 'stool_frequency'
+    ),
+    ...stoolLogs.filter(
+      (log) => !log.within_expected_variability_window && log.food_id_active != null
+    ),
+  ];
   if (logs.length === 0) return acc;
 
   const activeFoodIds = Array.from(
@@ -415,7 +426,11 @@ export async function runCorrelationEngine(): Promise<{
   // Any dog with a food event is now in scope, not only those with an
   // attributed log — a dog with events but no eligible logs yet still needs
   // its (empty) analysis computed so stale rows from a previous run clear.
-  const [{ data: eventDogs, error: eventError }, { data: logDogs, error: logError }] =
+  const [
+    { data: eventDogs, error: eventError },
+    { data: logDogs, error: logError },
+    { data: stoolDogs, error: stoolError },
+  ] =
     await Promise.all([
       supabaseAdmin.from('dog_food_events').select('dog_id'),
       supabaseAdmin
@@ -423,15 +438,18 @@ export async function runCorrelationEngine(): Promise<{
         .select('dog_id')
         .eq('within_expected_variability_window', false)
         .not('food_id_active', 'is', null),
+      supabaseAdmin.from('dog_stool_events').select('dog_id'),
     ]);
 
   if (eventError) throw eventError;
   if (logError) throw logError;
+  if (stoolError) throw stoolError;
 
   const dogIds = Array.from(
     new Set([
       ...(eventDogs ?? []).map((r) => r.dog_id as string),
       ...(logDogs ?? []).map((r) => r.dog_id as string),
+      ...(stoolDogs ?? []).map((r) => r.dog_id as string),
     ])
   );
 

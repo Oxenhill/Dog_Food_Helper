@@ -5,7 +5,6 @@ import { authHeaders } from '@/lib/clientAuth';
 import { OutcomeMetric, TrendDirection } from '@/lib/types';
 
 const QUICK_LOG_METRICS: { metric: OutcomeMetric; label: string }[] = [
-  { metric: 'stool_score', label: 'Stool consistency' },
   { metric: 'body_condition_score', label: 'Body condition' },
   { metric: 'coat_condition', label: 'Coat condition' },
   { metric: 'stool_odor', label: 'Stool odour' },

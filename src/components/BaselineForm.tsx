@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import BristolChartSelector from './BristolChartSelector';
+import BristolMultiChartSelector from './BristolMultiChartSelector';
 import BCSChartSelector from './BCSChartSelector';
 import WellnessLevelSelector from './WellnessLevelSelector';
 import { authHeaders } from '@/lib/clientAuth';
@@ -17,7 +17,9 @@ export default function BaselineForm({
   onComplete?: () => void;
   forceReset?: boolean;
 }) {
-  const [stoolScore, setStoolScore] = useState<number | null>(null);
+  const [stoolScores, setStoolScores] = useState<number[]>([]);
+  const [stoolCountMin, setStoolCountMin] = useState<number | null>(null);
+  const [stoolCountMax, setStoolCountMax] = useState<number | null>(null);
   const [bodyConditionScore, setBodyConditionScore] = useState<number | null>(null);
   const [coatCondition, setCoatCondition] = useState<Level | null>(null);
   const [stoolOdor, setStoolOdor] = useState<Level | null>(null);
@@ -28,7 +30,14 @@ export default function BaselineForm({
   const [error, setError] = useState<string | null>(null);
 
   const isComplete =
-    stoolScore !== null &&
+    stoolScores.length > 0 &&
+    stoolCountMin !== null &&
+    stoolCountMax !== null &&
+    Number.isInteger(stoolCountMin) &&
+    Number.isInteger(stoolCountMax) &&
+    stoolCountMin >= 0 &&
+    stoolCountMax >= stoolCountMin &&
+    stoolCountMax <= 30 &&
     bodyConditionScore !== null &&
     coatCondition !== null &&
     stoolOdor !== null &&
@@ -45,7 +54,9 @@ export default function BaselineForm({
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           dog_id: dogId,
-          stool_score: stoolScore,
+          stool_scores: stoolScores,
+          stools_per_day_min: stoolCountMin,
+          stools_per_day_max: stoolCountMax,
           body_condition_score: bodyConditionScore,
           coat_condition: coatCondition,
           stool_odor: stoolOdor,
@@ -74,8 +85,8 @@ export default function BaselineForm({
     <div className="flex flex-col gap-6">
       <div className="callout-disclaimer">
         This is a one-time full check-in used as the reference point everything else compares
-        against. Ongoing logging afterwards is a quick better/worse/no-change tap — this level
-        of detail isn&apos;t needed every day.
+        against. Stool baseline records every consistency type that is usual for this dog plus
+        the normal daily-count range. Later stools are recorded one event at a time.
       </div>
 
       {error && (
@@ -84,7 +95,49 @@ export default function BaselineForm({
         </div>
       )}
 
-      <BristolChartSelector value={stoolScore} onChange={setStoolScore} />
+      <BristolMultiChartSelector values={stoolScores} onChange={setStoolScores} />
+      <fieldset className="rounded-lg border border-line p-4">
+        <legend className="label px-1">Usual number of stools per day</legend>
+        <p className="help-text mb-3">
+          Record a range. Use the same number twice if it is usually exact.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="field">
+            <label className="label" htmlFor="stool-count-min">
+              From
+            </label>
+            <input
+              id="stool-count-min"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={30}
+              value={stoolCountMin ?? ''}
+              onChange={(event) =>
+                setStoolCountMin(event.target.value === '' ? null : Number(event.target.value))
+              }
+              className="input"
+            />
+          </div>
+          <div className="field">
+            <label className="label" htmlFor="stool-count-max">
+              To
+            </label>
+            <input
+              id="stool-count-max"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={30}
+              value={stoolCountMax ?? ''}
+              onChange={(event) =>
+                setStoolCountMax(event.target.value === '' ? null : Number(event.target.value))
+              }
+              className="input"
+            />
+          </div>
+        </div>
+      </fieldset>
       <BCSChartSelector value={bodyConditionScore} onChange={setBodyConditionScore} />
       <WellnessLevelSelector metric="coat_condition" value={coatCondition} onChange={setCoatCondition} />
       <WellnessLevelSelector metric="stool_odor" value={stoolOdor} onChange={setStoolOdor} />

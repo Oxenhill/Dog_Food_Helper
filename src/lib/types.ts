@@ -163,6 +163,7 @@ export type TrendDirection = 'better' | 'worse' | 'no_change';
 // stool score" for clarity, but the DB/API value must stay `stool_score`.
 export type OutcomeMetric =
   | 'stool_score'
+  | 'stool_frequency'
   | 'coat_condition'
   | 'stool_odor'
   | 'gas_frequency'
@@ -200,6 +201,46 @@ export interface DogLogEntry {
   within_expected_variability_window: boolean;
   food_id_active?: string | null;
   notes?: string | null;
+  created_at: string;
+}
+
+export interface DogStoolEvent {
+  id: string;
+  dog_id: string;
+  occurred_on: string;
+  occurred_at?: string | null;
+  time_of_day_captured: boolean;
+  score?: number | null;
+  mucus?: boolean | null;
+  blood?: boolean | null;
+  urgency?: boolean | null;
+  straining?: boolean | null;
+  undigested_food?: boolean | null;
+  note?: string | null;
+  legacy_log_entry_id?: string | null;
+  legacy_trend?: TrendDirection | null;
+  monitoring_window_id?: string | null;
+  created_at: string;
+}
+
+export interface DogStoolBaseline {
+  id: string;
+  dog_id: string;
+  dog_baseline_id: string;
+  established_at: string;
+  typical_scores: number[];
+  typical_count_min?: number | null;
+  typical_count_max?: number | null;
+  created_at: string;
+}
+
+export interface DogStoolMonitoringWindow {
+  id: string;
+  dog_id: string;
+  baseline_id?: string | null;
+  food_event_id: string;
+  opened_at: string;
+  closed_at?: string | null;
   created_at: string;
 }
 

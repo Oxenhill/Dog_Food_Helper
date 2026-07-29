@@ -48,17 +48,28 @@ export async function GET(request: NextRequest) {
     }
 
     const logDate = new Date(baseline.established_at).toISOString().split('T')[0];
-    const { data: entries, error: entriesError } = await supabaseAdmin
-      .from('dog_log_entries')
-      .select('*')
-      .eq('dog_id', dogId)
-      .eq('log_date', logDate);
+    const [{ data: entries, error: entriesError }, { data: stoolBaseline, error: stoolError }] =
+      await Promise.all([
+        supabaseAdmin
+          .from('dog_log_entries')
+          .select('*')
+          .eq('dog_id', dogId)
+          .eq('log_date', logDate),
+        supabaseAdmin
+          .from('dog_stool_baselines')
+          .select('*')
+          .eq('dog_baseline_id', baseline.id)
+          .maybeSingle(),
+      ]);
 
     if (entriesError) {
       return NextResponse.json({ error: entriesError.message }, { status: 500 });
     }
+    if (stoolError) {
+      return NextResponse.json({ error: stoolError.message }, { status: 500 });
+    }
 
-    return NextResponse.json({ baseline, entries }, { status: 200 });
+    return NextResponse.json({ baseline, stool_baseline: stoolBaseline, entries }, { status: 200 });
   } catch (error) {
     console.error('Get baseline error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -24,6 +24,7 @@ interface Insights {
 
 const METRIC_LABELS: Record<string, string> = {
   stool_score: 'stool consistency',
+  stool_frequency: 'stool frequency',
   stool_odor: 'stool odour',
   gas_frequency: 'wind',
   gas_odor: 'wind odour',
