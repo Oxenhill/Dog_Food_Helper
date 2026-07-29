@@ -1,11 +1,11 @@
 import { DiscoveryRunResult, uniqueCandidates } from './researchDiscovery';
 import { RESEARCH_DISCOVERY_TOPICS } from './researchTopics';
 
-// Verified 2026-07-28 against the official model card and Batch API reference.
-// Standard text-embedding-3-small input: $0.02 / 1M tokens.
-// Batch API: 50% discount, so estimator uses $0.01 / 1M input tokens.
+// Re-verified 2026-07-29 against the Vercel AI Gateway model catalog.
+// openai/text-embedding-3-small is $0.02 / 1M input tokens with zero Gateway
+// markup.
 export const EMBEDDING_MODEL = 'text-embedding-3-small';
-export const EMBEDDING_BATCH_USD_PER_MILLION_TOKENS = 0.01;
+export const EMBEDDING_GATEWAY_USD_PER_MILLION_TOKENS = 0.02;
 export const DEFAULT_DOCUMENT_CAP = 30;
 export const DEFAULT_ESTIMATED_OA_FULL_TEXT_CHARS = 40_000;
 
@@ -18,7 +18,7 @@ export interface ResearchCostEstimate {
   estimated_centroid_tokens: number;
   estimated_embedding_tokens: number;
   embedding_model: string;
-  embedding_batch_usd_per_million_tokens: number;
+  embedding_gateway_usd_per_million_tokens: number;
   estimated_embedding_cost_usd: number;
   drafting_cost_usd: null;
   drafting_cost_note: string;
@@ -46,7 +46,7 @@ export function estimateResearchCosts(
   const centroidTokens = estimatedTokensFromChars(centroidChars);
   const embeddingTokens = documentTokens + centroidTokens;
   const embeddingCost =
-    (embeddingTokens / 1_000_000) * EMBEDDING_BATCH_USD_PER_MILLION_TOKENS;
+    (embeddingTokens / 1_000_000) * EMBEDDING_GATEWAY_USD_PER_MILLION_TOKENS;
 
   return {
     document_cap: documentCap,
@@ -57,7 +57,7 @@ export function estimateResearchCosts(
     estimated_centroid_tokens: centroidTokens,
     estimated_embedding_tokens: embeddingTokens,
     embedding_model: EMBEDDING_MODEL,
-    embedding_batch_usd_per_million_tokens: EMBEDDING_BATCH_USD_PER_MILLION_TOKENS,
+    embedding_gateway_usd_per_million_tokens: EMBEDDING_GATEWAY_USD_PER_MILLION_TOKENS,
     estimated_embedding_cost_usd: Number(embeddingCost.toFixed(6)),
     drafting_cost_usd: null,
     drafting_cost_note:

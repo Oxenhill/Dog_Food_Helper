@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "status": "owner_approved",
+  "approved_at": "2026-07-29",
+  "source_report": "docs/research-gate1-2026-07-28.md",
+  "source_report_sha256": "02466e9510664fef24d110bf65daa6f83716821f810ac0e4695c6c67b8ead43b",
+  "document_cap": 30,
+  "policy": {
+    "eligibility": [
+      "Use only identifiers frozen in the Gate 1 report.",
+      "Reject retracted records and evidence grade E.",
+      "Require structured Dogs MeSH for canine_direct records.",
+      "Allow veterinary_methodology only in Group G.",
+      "Deduplicate by canonical Gate 1 source record before selection."
+    ],
+    "coverage": "Use fixed quotas A6, B4, C5, D6, E4, F3, G2 and prefer distinct topic coverage within each group.",
+    "priority": "Prefer usable OA canine evidence, then stronger evidence grade, complete grading inputs, and publication recency. Replace structured-query topic mismatches with the next relevant record. Because topic relevance cannot be resolved reliably from title/MeSH alone, the exact identifier list requires owner review and becomes immutable after approval."
+  },
+  "group_quotas": {
+    "A": 6,
+    "B": 4,
+    "C": 5,
+    "D": 6,
+    "E": 4,
+    "F": 3,
+    "G": 2
+  },
+  "selected": [
+    {
+      "group": "A",
+      "pmid": "25313818",
+      "reason": "OA Grade A meta-analysis covering adult-dog energy requirements."
+    },
+    {
+      "group": "A",
+      "pmid": "34043623",
+      "reason": "OA Grade A systematic review covering processing and nutrient availability."
+    },
+    {
+      "group": "A",
+      "pmid": "35077028",
+      "reason": "OA canine-direct raw-diet safety evidence."
+    },
+    {
+      "group": "A",
+      "pmid": "33345431",
+      "reason": "OA canine-direct diet-associated DCM evidence."
+    },
+    {
+      "group": "A",
+      "pmid": "34798889",
+      "reason": "OA home-prepared-diet composition evidence with calcium/phosphorus topic membership."
+    },
+    {
+      "group": "A",
+      "pmid": "34133456",
+      "reason": "OA palatability evidence, adding topic coverage rather than a second home-prepared-diet record."
+    },
+    {
+      "group": "B",
+      "pmid": "29460302",
+      "reason": "OA Grade B canine FMT trial."
+    },
+    {
+      "group": "B",
+      "pmid": "34514619",
+      "reason": "OA canine gut-microbiome analysis covering dysbiosis, FMT and test interpretation."
+    },
+    {
+      "group": "B",
+      "pmid": "39505993",
+      "reason": "OA metagenomic profiling comparison supporting microbiome-method appraisal."
+    },
+    {
+      "group": "B",
+      "pmid": "33653538",
+      "reason": "Canine-direct diet–microbiome and SCFA/barrier review; selected over OA gallbladder microbiota, which is a poor food-topic match."
+    },
+    {
+      "group": "C",
+      "pmid": "29945610",
+      "reason": "OA evidence on undeclared animal species in novel and hydrolysed diets."
+    },
+    {
+      "group": "C",
+      "pmid": "28818076",
+      "reason": "OA evidence on protein hydrolysis and poultry-allergen recognition."
+    },
+    {
+      "group": "C",
+      "pmid": "34373420",
+      "reason": "OA canine CAFR IgE-reactivity evidence."
+    },
+    {
+      "group": "C",
+      "pmid": "35264164",
+      "reason": "OA commercial-food chicken-DNA detection evidence."
+    },
+    {
+      "group": "C",
+      "pmid": "26260508",
+      "reason": "OA canine atopic-dermatitis diagnostic and allergen-identification guidance."
+    },
+    {
+      "group": "D",
+      "pmid": "36142319",
+      "reason": "OA Grade A systematic review/meta-analysis for osteoarthritis diets and nutraceuticals."
+    },
+    {
+      "group": "D",
+      "pmid": "40843644",
+      "reason": "OA Grade B randomised crossover dietary study in diabetic dogs."
+    },
+    {
+      "group": "D",
+      "pmid": "35751062",
+      "reason": "OA prospective multicentre fibre intervention for chronic large-bowel diarrhoea."
+    },
+    {
+      "group": "D",
+      "pmid": "39377170",
+      "reason": "OA canine fibre intervention for anal-sac impaction."
+    },
+    {
+      "group": "D",
+      "pmid": "27611724",
+      "reason": "OA canine/feline consensus recommendations for urolith treatment and prevention."
+    },
+    {
+      "group": "D",
+      "pmid": "30523666",
+      "reason": "OA canine/feline chronic-enteropathy therapy review."
+    },
+    {
+      "group": "E",
+      "pmid": "34747447",
+      "reason": "Grade B longitudinal taurine/amino-acid monitoring study in dogs."
+    },
+    {
+      "group": "E",
+      "pmid": "36482834",
+      "reason": "OA canine cardiac biomarker and diet comparison."
+    },
+    {
+      "group": "E",
+      "pmid": "31758868",
+      "reason": "OA review of canine cobalamin status and metabolism disorders."
+    },
+    {
+      "group": "E",
+      "pmid": "30222209",
+      "reason": "OA review of biomarkers for canine inflammatory enteropathies."
+    },
+    {
+      "group": "F",
+      "pmid": "40624095",
+      "reason": "OA canine microbiota association with anxiety and aggression scores."
+    },
+    {
+      "group": "F",
+      "pmid": "34842769",
+      "reason": "OA dog-derived evidence on nutrients, cognition and brain ageing."
+    },
+    {
+      "group": "F",
+      "pmid": "29851313",
+      "reason": "OA canine coprophagy evidence."
+    },
+    {
+      "group": "G",
+      "pmid": "23035739",
+      "reason": "OA Grade B caregiver-placebo methodology context."
+    },
+    {
+      "group": "G",
+      "pmid": "34438246",
+      "reason": "Veterinary meta-research on systematic-review reporting quality."
+    }
+  ]
+}
