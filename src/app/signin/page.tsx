@@ -47,7 +47,7 @@ export default function SignInPage() {
         setError('Signed in, but no session was returned.');
         return;
       }
-      saveSession(json.session);
+      await saveSession(json.session);
       let isAdmin = false;
       try {
         const meRes = await fetch('/api/auth/me', {

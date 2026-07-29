@@ -40,6 +40,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 let browserClient: SupabaseClient | null = null;
 let initialised = false;
+let initialisationPromise: Promise<void> | null = null;
 
 function read(): StoredSession | null {
   if (typeof window === 'undefined') return null;
@@ -103,29 +104,51 @@ function getClient(): SupabaseClient | null {
  * Arm auto-refresh from the stored session on first load, so a returning user's
  * token gets silently refreshed. Safe to call repeatedly; only runs once.
  */
-function ensureInit() {
-  if (initialised) return;
+function ensureInit(): Promise<void> {
+  if (initialised) return initialisationPromise ?? Promise.resolve();
   initialised = true;
   const stored = read();
   const client = getClient();
-  if (stored && client) {
-    void client.auth.setSession({
-      access_token: stored.access_token,
-      refresh_token: stored.refresh_token,
-    });
-  }
+  initialisationPromise = (async () => {
+    if (!client) return;
+
+    try {
+      // Wait for supabase-js to finish recovering its own persisted session
+      // before applying our compatibility-store session. Without this barrier,
+      // a stale recovery can finish after a fresh sign-in and silently replace
+      // the newly authenticated user.
+      await client.auth.getSession();
+      if (!stored) return;
+
+      const { error } = await client.auth.setSession({
+        access_token: stored.access_token,
+        refresh_token: stored.refresh_token,
+      });
+      if (error) erase();
+    } catch {
+      // A broken old session must not prevent a subsequent fresh sign-in.
+      erase();
+    }
+  })();
+  return initialisationPromise;
 }
 
 if (typeof window !== 'undefined') {
-  ensureInit();
+  void ensureInit();
 }
 
 /**
  * Persist a freshly-created session (from POST /api/auth/signin or /signup's
  * returned `session`) and arm auto-refresh. Call this on successful login.
  */
-export function saveSession(session: Session | null | undefined) {
+export async function saveSession(session: Session | null | undefined): Promise<void> {
   if (!session?.access_token || !session?.user?.id) return;
+
+  // Serialize a fresh login after any in-flight recovery of the prior session.
+  // This ordering is load-bearing: the prior recovery must never be allowed to
+  // win the race and overwrite the new account after navigation.
+  await ensureInit();
+
   write({
     access_token: session.access_token,
     refresh_token: session.refresh_token,
@@ -133,9 +156,19 @@ export function saveSession(session: Session | null | undefined) {
   });
   const client = getClient();
   if (client) {
-    void client.auth.setSession({
+    const { error } = await client.auth.setSession({
       access_token: session.access_token,
       refresh_token: session.refresh_token,
+    });
+    if (error) throw error;
+
+    // onAuthStateChange normally mirrors this. Write once more after the
+    // awaited replacement so the synchronous authHeaders() store is guaranteed
+    // to agree with the session that actually won.
+    write({
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      user_id: session.user.id,
     });
   }
 }

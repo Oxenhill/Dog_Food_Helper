@@ -62,7 +62,7 @@ export default function ChartIllustrationsAdmin() {
         setSignInError('Signed in, but no session token was returned — check your email confirmation status.');
         return;
       }
-      saveSession(json.session);
+      await saveSession(json.session);
       setHasToken(true);
     } finally {
       setSigningIn(false);

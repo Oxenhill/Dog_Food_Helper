@@ -54,7 +54,7 @@ export default function SignUpPage() {
         router.push('/signin?created=1');
         return;
       }
-      saveSession(signinJson.session);
+      await saveSession(signinJson.session);
       let isAdmin = false;
       try {
         const meRes = await fetch('/api/auth/me', {
