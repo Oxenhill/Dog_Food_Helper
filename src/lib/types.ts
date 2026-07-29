@@ -435,6 +435,7 @@ export type ResearchClaimStatus =
 
 export interface ResearchClaim {
   id: string;
+  claim_identity: string;
   document_id: string;
   chunk_id: string;
   supporting_quote: string;

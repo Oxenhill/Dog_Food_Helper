@@ -1,0 +1,19 @@
+{
+  "schema_version": "research-gate3-owner-approval.v1",
+  "status": "owner_approved",
+  "approved_at": "2026-07-29T12:43:01.3131052+01:00",
+  "approved_manifest": "docs/research-gate3-proposed-claims-2026-07-29.json",
+  "approved_manifest_sha256": "8ba2231ee4ec1d2b07d5bdc380c44c5ba74c3248cccbc255160cbdb49bd3b343",
+  "approved_claim_identities": [
+    "bd42395624e9196a728db76260d9e67c977e4192505cc4bfac084c6a2b638fb3",
+    "6f268c891527a149e04d43a0b5a85ffa492a0b8ec0ff4766773564622fa18b70"
+  ],
+  "claim_identity_migration_approved": true,
+  "insertion_contract": {
+    "status": "queued_for_review",
+    "active_claims": 0,
+    "corroborating_claim_ids": [],
+    "claim_cap": 2,
+    "generated_columns_written": false
+  }
+}

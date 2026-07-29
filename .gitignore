@@ -28,6 +28,7 @@ npm-debug.log*
 .next-ui-qa/
 .crawler-cache/
 .research-gate2/
+.research-gate3/
 
 # Local agent settings
 .claude/

@@ -1,5 +1,39 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer Gate 3 drafting run 1 complete (2026-07-29, latest)
+
+**UI UNVERIFIED.** Production `/admin/research` redirected to `/signin`; no
+authenticated test-admin session was available.
+
+Eight bounded offline drafting calls used Vercel AI Gateway only with
+`anthropic/claude-sonnet-5`. Actual usage was 13,081 input and 1,453 output
+tokens; accounted cost was $0.041142 against the approved $0.06 ceiling. Strict
+review retained 2 of 5 structured proposals, rejected 3 unsafe proposals,
+accepted 2 model nulls and discarded 1 output-limit failure without retry.
+
+The owner approved exactly two immutable identities plus a deterministic
+`claim_identity` uniqueness migration. Live `research_claims=2`: both Group E,
+`neutral`, `canine_direct`, `queued_for_review`, unreviewed and non-active; one
+Grade B abstract-only claim with incomplete metadata and one Grade D OA claim
+with complete metadata. Both quotes are literal source-chunk substrings, both
+chunks belong to their documents, copied grading metadata matches, and
+corroboration arrays are empty. The similar taurine propositions are a review
+cluster only, not asserted independent corroboration.
+
+Initial insertion was 2 inserted, 0 updated, 0 skipped. The immediate repeat was
+0 inserted and 2 exact skips. There are no Grade E, non-canine, Group G,
+preprint, active or reviewed claims. All 30 documents remain pending; the
+30/695/88/2,282 corpus and 384-pair eligibility calculation are unchanged.
+Protected recommendation, scoring, hard-filter, client-document and
+section-14.6 counts are unchanged. No runtime AI or claim-consumer path was
+added.
+
+Verification: 227/227 tests, `tsc --noEmit`, and production build all pass.
+Supabase advisors have no new finding (security 20→20, performance 53→53).
+Gate 3 stops before approval, activation, auto-activation, corroboration,
+scoring or recommendation integration. Full report:
+`docs/research-gate3-2026-07-29.md`.
+
 ## Research Layer Gate 2 ingestion complete (2026-07-29, latest)
 
 **UI UNVERIFIED.** The production research-admin page redirected to `/signin`

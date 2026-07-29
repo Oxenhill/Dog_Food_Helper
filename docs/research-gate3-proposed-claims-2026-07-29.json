@@ -1,0 +1,336 @@
+{
+  "schema_version": "research-gate3-owner-review-manifest.v1",
+  "status": "awaiting_owner_claim_approval",
+  "created_at": "2026-07-29T11:28:52.875Z",
+  "parent_drafting_manifest_sha256": "c72731c69f6df31aed10387b005df72990009cf956483d20e7a4227c42fc9c1e",
+  "drafting_amendment_sha256": "b229293aa1ee0ff7c7334b546c8df130e411f1f385927de12e9f328876e1a65c",
+  "raw_results_sha256": "222851b97800cdfb49deed9094b25f83caf5f15dd629fd2b934c5bb91dcf3939",
+  "machine_validated_results_sha256": "458b969773bdfed8942658906f4a77e1afd7e6c49dee06dcf1c6b401d7d8f76e",
+  "model": "anthropic/claude-sonnet-5",
+  "route": "Vercel AI Gateway only",
+  "execution": {
+    "gateway_requests": 8,
+    "sdk_retries": 0,
+    "model_proposals": 5,
+    "model_nulls": 2,
+    "generation_failures": 1,
+    "machine_validation_passed": 5,
+    "semantic_review_recommended_for_queue": 2,
+    "semantic_review_discarded": 3,
+    "input_tokens": 13081,
+    "output_tokens": 1453,
+    "total_tokens": 14534,
+    "reasoning_tokens": 577,
+    "catalogue_calculated_inference_cost_usd": 0.040692,
+    "gateway_reported_cost_calls_3_to_8_usd": 0.028358,
+    "catalogue_calculated_cost_calls_1_to_2_usd": 0.012784,
+    "accounted_total_cost_usd": 0.041142,
+    "approved_total_ceiling_usd": 0.06
+  },
+  "claims_recommended_for_queue": [
+    {
+      "claim_identity": "bd42395624e9196a728db76260d9e67c977e4192505cc4bfac084c6a2b638fb3",
+      "call_index": 5,
+      "source": {
+        "pmid": "36482834",
+        "doi": "10.1111/jvim.16606",
+        "title": "Comparison of echocardiographic measurements and cardiac biomarkers in healthy dogs eating nontraditional or traditional diets.",
+        "source_url": "https://pubmed.ncbi.nlm.nih.gov/36482834/",
+        "document_id": "5003c891-f4e8-43ae-9bfa-449b79a411fe",
+        "chunk_id": "b4852480-303e-4897-9173-dbf2119fd9fb",
+        "chunk_index": 20,
+        "chunk_sha256": "8729510f0ff2cb0d7fbb1c8cfbabe1c18666c51ce2029b97a5892ed65a2a0b8f",
+        "group": "E",
+        "topic_key": "serum-taurine",
+        "topic_rank": 1,
+        "document_similarity": 0.58044,
+        "chunk_similarity": 0.46625,
+        "access_type": "open_access_full_text",
+        "evidence_scope": "canine_direct",
+        "evidence_grade": "D",
+        "grading_inputs_complete": true,
+        "missing_grading_inputs": [],
+        "funding_status": "declared_not_independent",
+        "funding_independent": false
+      },
+      "claim": {
+        "supporting_quote": "Neither whole blood nor plasma taurine concentrations were significantly different between diet groups in the current study.",
+        "subject_type": "nutrient",
+        "subject_value": "taurine",
+        "applies_to_condition": null,
+        "applies_to_life_stage": null,
+        "direction": "neutral",
+        "effect_summary": "The study found no significant difference in whole blood or plasma taurine concentrations between dogs eating nontraditional versus traditional diets."
+      },
+      "validation": {
+        "literal_substring": true,
+        "chunk_belongs_to_document": true,
+        "machine_result": "passed",
+        "semantic_result": "recommended_for_queue",
+        "semantic_reason": "The exact quote reports the measured null comparison, and the effect summary preserves the studied diet comparison without claiming that taurine can never differ."
+      },
+      "review_cluster_ids": [
+        "taurine-blood-plasma-no-lowering"
+      ]
+    },
+    {
+      "claim_identity": "6f268c891527a149e04d43a0b5a85ffa492a0b8ec0ff4766773564622fa18b70",
+      "call_index": 8,
+      "source": {
+        "pmid": "34747447",
+        "doi": "10.1093/jas/skab315",
+        "title": "Longitudinal assessment of taurine and amino acid concentrations in dogs fed a green lentil diet.",
+        "source_url": "https://pubmed.ncbi.nlm.nih.gov/34747447/",
+        "document_id": "cba3a7f2-4e51-43f3-9557-25abd87ee1e6",
+        "chunk_id": "440c468b-9071-4bdf-a19e-35afed66594f",
+        "chunk_index": 2,
+        "chunk_sha256": "56f8653c48630c34b2a7a836ecab6ef04966a14e7bcc470647fd666f4d1a91df",
+        "group": "E",
+        "topic_key": "serum-taurine",
+        "topic_rank": 3,
+        "document_similarity": 0.485574,
+        "chunk_similarity": 0.466759,
+        "access_type": "abstract_only",
+        "evidence_scope": "canine_direct",
+        "evidence_grade": "B",
+        "grading_inputs_complete": false,
+        "missing_grading_inputs": [
+          "sample_size",
+          "funding_independent"
+        ],
+        "funding_status": "unknown",
+        "funding_independent": null
+      },
+      "claim": {
+        "supporting_quote": "the inclusion of 45% green lentil in extruded diets does not lower whole blood and plasma taurine concentrations during a 90-d period",
+        "subject_type": "ingredient",
+        "subject_value": "green lentil",
+        "applies_to_condition": null,
+        "applies_to_life_stage": null,
+        "direction": "neutral",
+        "effect_summary": "The study found that including 45% green lentil in extruded diets did not lower whole blood and plasma taurine concentrations in dogs over a 90-day period."
+      },
+      "validation": {
+        "literal_substring": true,
+        "chunk_belongs_to_document": true,
+        "machine_result": "passed",
+        "semantic_result": "recommended_for_queue",
+        "semantic_reason": "The quote and summary remain bounded to dogs, 45% green lentil, blood and plasma taurine, and 90 days. Abstract-only and incomplete grading restrictions remain explicit."
+      },
+      "activation_restriction": "abstract_only_never_unattended_activation",
+      "review_cluster_ids": [
+        "taurine-blood-plasma-no-lowering"
+      ]
+    }
+  ],
+  "discarded_outcomes": [
+    {
+      "call_index": 1,
+      "pmid": "25313818",
+      "doi": "10.1371/journal.pone.0109681",
+      "title": "Energy requirements of adult dogs: a meta-analysis.",
+      "group": "A",
+      "topic_key": "energy-requirements",
+      "topic_rank": 1,
+      "document_similarity": 0.580538,
+      "document_id": "0d764d35-0b76-4ce9-a8b5-2a1370c2b0a4",
+      "chunk_id": "0492b7f9-c0e2-4d17-9f68-0a0ad97e6c64",
+      "chunk_index": 19,
+      "chunk_similarity": 0.537807,
+      "access_type": "open_access_full_text",
+      "evidence_scope": "canine_direct",
+      "evidence_grade": "A",
+      "grading_inputs_complete": true,
+      "funding_status": "stored_not_independent_declaration_absent",
+      "proposal": null,
+      "rejection_reasons": [
+        "model_returned_null"
+      ]
+    },
+    {
+      "call_index": 2,
+      "pmid": "34514619",
+      "doi": "10.1111/vcp.13031",
+      "title": "Analysis of the gut microbiome in dogs and cats.",
+      "group": "B",
+      "topic_key": "antibiotic-microbiome",
+      "topic_rank": 1,
+      "document_similarity": 0.766645,
+      "document_id": "dc894cde-1cd9-4e2e-b08e-56da277db68f",
+      "chunk_id": "bae9168c-7c7d-4026-b73e-d42d347334c0",
+      "chunk_index": 22,
+      "chunk_similarity": 0.766645,
+      "access_type": "open_access_full_text",
+      "evidence_scope": "canine_direct",
+      "evidence_grade": "D",
+      "grading_inputs_complete": true,
+      "funding_status": "unknown",
+      "proposal": null,
+      "rejection_reasons": [
+        "model_generation_failed",
+        "output_token_limit_consumed_by_reasoning",
+        "no_json_object_returned",
+        "not_retried"
+      ]
+    },
+    {
+      "claim_identity": "698d373c5d2cef984179352db88617073e1bbda6ef80fdd3a89f37a84324c833",
+      "call_index": 3,
+      "source": {
+        "pmid": "35264164",
+        "doi": "10.1186/s12917-022-03200-z",
+        "title": "Detection of chicken DNA in commercial dog foods.",
+        "document_id": "2bcd625d-f8b2-4bdc-9dfd-cb75c5949881",
+        "chunk_id": "10845aee-f230-456a-b280-a23ca2adec72",
+        "chunk_index": 1,
+        "group": "C",
+        "topic_key": "undeclared-ingredients",
+        "topic_rank": 1,
+        "document_similarity": 0.694039,
+        "chunk_similarity": 0.6193,
+        "access_type": "open_access_full_text",
+        "evidence_scope": "canine_direct",
+        "evidence_grade": "D",
+        "grading_inputs_complete": true,
+        "funding_status": "unknown"
+      },
+      "proposal": {
+        "supporting_quote": "The conducted research indicates that both dry and wet analyzed foods should not be recommended as a diagnostic tool in elimination tests, because it may result in false negative results.",
+        "subject_type": "ingredient",
+        "subject_value": "chicken protein",
+        "applies_to_condition": "food hypersensitivity",
+        "applies_to_life_stage": null,
+        "direction": "cautions_against",
+        "effect_summary": "The study found that undeclared chicken DNA contamination in commercial dog foods may compromise their use as a diagnostic tool in elimination diet trials."
+      },
+      "rejection_reasons": [
+        "supporting_quote_is_author_diagnostic_recommendation_not_a_direct_measured_result",
+        "effect_summary_reframes_the_recommendation_as_a_contamination_result_not_substantively_supported_by_the_exact_quote",
+        "automatic_quote_repair_prohibited"
+      ]
+    },
+    {
+      "claim_identity": "0cd83fa96dfd88cc434646d88e7db50d427823598669b1b7195c37ac6816ca4f",
+      "call_index": 4,
+      "source": {
+        "pmid": "36142319",
+        "doi": "10.3390/ijms231810384",
+        "title": "A 2022 Systematic Review and Meta-Analysis of Enriched Therapeutic Diets and Nutraceuticals in Canine and Feline Osteoarthritis.",
+        "document_id": "69706d08-bca0-470e-98e9-edeb881593dc",
+        "chunk_id": "960240fe-133a-420a-b021-e71038c2fe1a",
+        "chunk_index": 21,
+        "group": "D",
+        "topic_key": "osteoarthritis",
+        "topic_rank": 1,
+        "document_similarity": 0.590451,
+        "chunk_similarity": 0.529164,
+        "access_type": "open_access_full_text",
+        "evidence_scope": "canine_direct",
+        "evidence_grade": "A",
+        "grading_inputs_complete": true,
+        "funding_status": "unknown"
+      },
+      "proposal": {
+        "supporting_quote": "This meta-analysis supports the use of omega-3 supplementation for the management of canine and feline OA.",
+        "subject_type": "nutrient",
+        "subject_value": "omega-3 fatty acids",
+        "applies_to_condition": "osteoarthritis",
+        "applies_to_life_stage": null,
+        "direction": "supports",
+        "effect_summary": "The meta-analysis found that omega-3 supplementation was associated with improved management of osteoarthritis symptoms in dogs and cats."
+      },
+      "rejection_reasons": [
+        "supporting_quote_is_author_management_recommendation_not_a_direct_result",
+        "effect_summary_adds_improved_symptoms_not_stated_in_the_exact_quote",
+        "automatic_quote_repair_prohibited"
+      ]
+    },
+    {
+      "claim_identity": "94029fe3f158590cd9cdc9d6f8e31463fcb5f314db7851fd3f17fe95b5fa25dc",
+      "call_index": 6,
+      "source": {
+        "pmid": "40624095",
+        "doi": "10.1038/s41598-025-06178-4",
+        "title": "Gut microbiota composition is related to anxiety and aggression scores in companion dogs.",
+        "document_id": "ed05cfea-1e50-4b03-be95-4f46ec24af85",
+        "chunk_id": "01d18f15-36a3-4de2-b843-df5a38ade90a",
+        "chunk_index": 0,
+        "group": "F",
+        "topic_key": "gut-brain-anxiety",
+        "topic_rank": 1,
+        "document_similarity": 0.623904,
+        "chunk_similarity": 0.623904,
+        "access_type": "open_access_full_text",
+        "evidence_scope": "canine_direct",
+        "evidence_grade": "D",
+        "grading_inputs_complete": true,
+        "funding_status": "unknown"
+      },
+      "proposal": {
+        "supporting_quote": "The genus Blautia was identified consistently across analyses, suggesting a link between this genus and anxiety in pet dogs.",
+        "subject_type": "biome_marker",
+        "subject_value": "Blautia",
+        "applies_to_condition": "anxiety",
+        "applies_to_life_stage": null,
+        "direction": "supports",
+        "effect_summary": "The study found that the genus Blautia was consistently associated with higher anxiety scores in companion dogs."
+      },
+      "rejection_reasons": [
+        "exact_quote_supports_a_link_but_not_the_stronger_higher_anxiety_score_direction_in_the_effect_summary",
+        "automatic_quote_or_summary_repair_prohibited"
+      ]
+    },
+    {
+      "call_index": 7,
+      "pmid": "33653538",
+      "doi": "10.1016/j.cvsm.2021.01.002",
+      "title": "The Gut Microbiome of Dogs and Cats, and the Influence of Diet.",
+      "group": "B",
+      "topic_key": "diet-microbiome",
+      "topic_rank": 1,
+      "document_similarity": 0.648677,
+      "document_id": "7c514f5e-595f-4d47-880e-378244de73ea",
+      "chunk_id": "b09f963d-f52b-4b34-b34d-b684ddd5de43",
+      "chunk_index": 0,
+      "chunk_similarity": 0.648677,
+      "access_type": "abstract_only",
+      "evidence_scope": "canine_direct",
+      "evidence_grade": "D",
+      "grading_inputs_complete": true,
+      "funding_status": "unknown",
+      "proposal": null,
+      "rejection_reasons": [
+        "model_returned_null"
+      ]
+    }
+  ],
+  "review_clusters": [
+    {
+      "cluster_id": "taurine-blood-plasma-no-lowering",
+      "claim_identities": [
+        "bd42395624e9196a728db76260d9e67c977e4192505cc4bfac084c6a2b638fb3",
+        "6f268c891527a149e04d43a0b5a85ffa492a0b8ec0ff4766773564622fa18b70"
+      ],
+      "reason": "Both propositions report no lowering or significant difference in whole-blood and plasma taurine across diet comparisons.",
+      "corroboration": "not_asserted",
+      "corroborating_claim_ids": []
+    }
+  ],
+  "insertion_contract_if_approved": {
+    "status": "queued_for_review",
+    "active_claims": 0,
+    "corroborating_claim_ids": [],
+    "approved_claim_cap": 2,
+    "write_generated_columns": false,
+    "source_metadata": "copied_by_existing_database_trigger_from_the_exact_document_and_chunk",
+    "idempotency_migration_required": {
+      "column": "claim_identity text not null",
+      "check": "claim_identity must be exactly 64 lowercase hexadecimal characters",
+      "uniqueness": "unique constraint on claim_identity",
+      "application_identity": "SHA-256 over document_id, chunk_id, exact supporting_quote, and normalized proposition",
+      "repeat_behavior": "approved manifest dry run reports exact skips and performs no writes"
+    }
+  },
+  "database_writes_performed": 0,
+  "owner_decision_required": "Approve neither, either, or both exact claim identities and separately approve the deterministic claim_identity migration before insertion."
+}

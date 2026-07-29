@@ -5,6 +5,7 @@ import { ResearchClaim, ResearchDocument } from '@/lib/types';
 
 const CLAIM_FIELDS = [
   'id',
+  'claim_identity',
   'document_id',
   'chunk_id',
   'supporting_quote',

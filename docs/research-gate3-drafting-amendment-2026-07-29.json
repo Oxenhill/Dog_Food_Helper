@@ -1,0 +1,83 @@
+{
+  "schema_version": "research-gate3-drafting-amendment.v1",
+  "status": "proposed_not_approved",
+  "parent_manifest_sha256": "c72731c69f6df31aed10387b005df72990009cf956483d20e7a4227c42fc9c1e",
+  "model": "anthropic/claude-sonnet-5",
+  "route": "Vercel AI Gateway only",
+  "reason": "The approved 320-token output cap included hidden reasoning tokens. Request 2 exhausted the cap in reasoning and produced no JSON, while actual prompt token counts were higher than the character-based pre-run estimate.",
+  "completed_requests": [
+    {
+      "call_index": 1,
+      "pmid": "25313818",
+      "result": "model_returned_null",
+      "input_tokens": 1841,
+      "output_tokens": 267,
+      "reasoning_tokens": 257
+    },
+    {
+      "call_index": 2,
+      "pmid": "34514619",
+      "result": "discarded_no_object_length",
+      "input_tokens": 1616,
+      "output_tokens": 320,
+      "reasoning_tokens": 320
+    }
+  ],
+  "completed_usage": {
+    "requests": 2,
+    "input_tokens": 3457,
+    "output_tokens": 587,
+    "reasoning_tokens": 577,
+    "calculated_base_cost_usd": 0.012784,
+    "calculated_regional_cost_usd": 0.0140624
+  },
+  "remaining_requests": {
+    "call_indices": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "pmids": [
+      "35264164",
+      "36142319",
+      "36482834",
+      "40624095",
+      "33653538",
+      "34747447"
+    ],
+    "count": 6,
+    "retries": 0,
+    "maximum_output_tokens_per_request": 320,
+    "prompt_and_schema_unchanged": true,
+    "provider_options": {
+      "anthropic": {
+        "effort": "low",
+        "structuredOutputMode": "outputFormat"
+      },
+      "gateway": {
+        "tags": [
+          "research-gate3-run1"
+        ]
+      }
+    },
+    "failure_policy": "A schema, length, or no-object failure is recorded as a discarded proposal and is never retried."
+  },
+  "revised_cost": {
+    "remaining_conservative_input_tokens": 10222,
+    "remaining_maximum_output_tokens": 1920,
+    "projected_total_base_ceiling_usd": 0.052428,
+    "projected_total_regional_ceiling_usd": 0.0576708,
+    "requested_total_run_ceiling_usd": 0.06
+  },
+  "unchanged_limits": {
+    "total_gateway_requests": 8,
+    "total_documents": 8,
+    "total_chunks": 8,
+    "maximum_claims": 8,
+    "database_writes_authorized": 0
+  },
+  "approval_required": "Explicit owner approval is required before the remaining six Gateway requests."
+}
