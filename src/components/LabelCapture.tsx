@@ -3,8 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { authHeaders } from '@/lib/clientAuth';
-import { resizeImageForUpload } from '@/lib/clientImageResize';
 import { reportClientError } from '@/lib/clientErrorLog';
+import PackPhotoField from '@/components/PackPhotoField';
 
 /**
  * Owner-facing packet capture: photograph the front and back, check what we
@@ -92,6 +92,7 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
   const [step, setStep] = useState<Step>('capture');
   const [front, setFront] = useState<File | null>(null);
   const [back, setBack] = useState<File | null>(null);
+  const [packConfirmed, setPackConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -107,68 +108,33 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
 
   async function handleRead(e: React.FormEvent) {
     e.preventDefault();
-    if (!front) {
-      setError('A photo of the front of the packet is required.');
+    if (!front || !back) {
+      setError('Prepare both the front and ingredients-panel photos before continuing.');
+      return;
+    }
+    if (!packConfirmed) {
+      setError('Please confirm that these are photos of the physical packet.');
       return;
     }
     setError('');
     setBusy(true);
 
-    // What the phone actually handed us, before anything touches it. iOS in
-    // particular can hand back HEIC, a blank `type`, or a huge byte count
-    // depending on camera settings — logged unconditionally so a report from
-    // a real device tells us which of those we're dealing with.
-    console.log('[LabelCapture] selected photos', {
+    // The locally cropped and checked files that are about to be uploaded.
+    console.log('[LabelCapture] prepared photos', {
       front: front && { name: front.name, type: front.type, size: front.size },
       back: back && { name: back.name, type: back.type, size: back.size },
     });
 
-    // Three distinct failure points that a single catch used to collapse into
-    // one indistinguishable "something went wrong": client-side image
-    // processing, the network request, and parsing the response. Each now has
-    // its own message and its own console.error with the real error object.
-    let resizedFront: File;
-    let resizedBack: File | null;
-    try {
-      [resizedFront, resizedBack] = await Promise.all([
-        resizeImageForUpload(front),
-        back ? resizeImageForUpload(back) : Promise.resolve(null),
-      ]);
-      console.log('[LabelCapture] resized photos', {
-        front: { name: resizedFront.name, type: resizedFront.type, size: resizedFront.size },
-        back: resizedBack
-          ? { name: resizedBack.name, type: resizedBack.type, size: resizedBack.size }
-          : null,
-      });
-    } catch (err) {
-      console.error('[LabelCapture] client-side image processing failed', err);
-      reportClientError('extract_resize_failed', {
-        message: err instanceof Error ? err.message : String(err),
-        context: {
-          front_type: front.type,
-          front_size: front.size,
-          back_type: back?.type ?? null,
-          back_size: back?.size ?? null,
-        },
-      });
-      reportClientError('capture_attempt', {
-        bytes: front.size + (back?.size ?? 0),
-        context: { outcome: 'resize_failed' },
-      });
-      setError('Could not process that photo on this device. Try a different photo, or retake it.');
-      setBusy(false);
-      return;
-    }
-
     const fd = new FormData();
-    fd.append('front', resizedFront);
-    if (resizedBack) fd.append('back', resizedBack);
+    fd.append('front', front);
+    fd.append('back', back);
+    fd.append('source_confirmation', 'physical_pack');
 
     // The exact byte size of the multipart body about to go over the wire —
     // logged unconditionally, before the fetch, so a rejection at the
     // platform edge (which never reaches our route handler, and so leaves no
     // server-side request log of its own) still gets a number attached to it.
-    let payloadBytes = resizedFront.size + (resizedBack?.size ?? 0);
+    let payloadBytes = front.size + back.size;
     try {
       payloadBytes = (await new Response(fd).blob()).size;
     } catch {
@@ -329,6 +295,7 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
               setStep('capture');
               setFront(null);
               setBack(null);
+              setPackConfirmed(false);
               setDraft(null);
               setExisting(null);
               setResult(null);
@@ -496,6 +463,9 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
             disabled={busy}
             onClick={() => {
               setStep('capture');
+              setFront(null);
+              setBack(null);
+              setPackConfirmed(false);
               setDraft(null);
               setExisting(null);
             }}
@@ -511,12 +481,20 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
   return (
     <form onSubmit={(e) => void handleRead(e)} className="flex flex-col gap-5">
       <div className="callout-info">
-        <p className="font-semibold text-ink">Photograph both sides</p>
+        <p className="font-semibold text-ink">Choose or take two clear packet photos</p>
         <p className="mt-1">
           The <strong>front</strong> gives us the brand and product name. The <strong>back</strong>{' '}
           has the ingredients and the percentages panel — the part that actually matters for allergy
-          checks. You&apos;ll get to check and correct everything before it&apos;s saved, and the
-          photos aren&apos;t kept.
+          checks. You can use your camera or choose an existing photo, then crop each one before it
+          is uploaded. You&apos;ll check the result before saving, and the photos aren&apos;t kept.
+        </p>
+      </div>
+
+      <div className="callout-disclaimer">
+        <p className="font-semibold text-ink">Use photos of the physical packet</p>
+        <p className="mt-1">
+          Gallery photos are welcome, but website screenshots are not part of this route. Information
+          copied from a website needs its own source and permissions checks.
         </p>
       </div>
 
@@ -527,41 +505,37 @@ export default function LabelCapture({ dogId, mode = 'confirm' }: LabelCapturePr
       )}
 
       <div className="card card-pad flex flex-col gap-4">
-        <div className="field">
-          <label className="label" htmlFor="front">Front of packet (required)</label>
-          <input
-            id="front"
-            className="input"
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            onChange={(e) => setFront(e.target.files?.[0] ?? null)}
-          />
-          {front && <p className="help-text">{front.name}</p>}
-        </div>
+        <PackPhotoField
+          id="front"
+          label="Front of packet"
+          help="Include the full brand and product name."
+          onReady={setFront}
+        />
+        <PackPhotoField
+          id="back"
+          label="Ingredients and percentages panel"
+          help="Fill the frame with the composition and analytical information. If they are on separate panels, prioritise the complete ingredient list."
+          onReady={setBack}
+        />
 
-        <div className="field">
-          <label className="label" htmlFor="back">Back of packet — ingredients panel</label>
+        <label className="flex items-start gap-3 rounded-xl border border-line p-4 text-[15px]">
           <input
-            id="back"
-            className="input"
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            onChange={(e) => setBack(e.target.files?.[0] ?? null)}
+            className="mt-1"
+            type="checkbox"
+            checked={packConfirmed}
+            onChange={(event) => setPackConfirmed(event.target.checked)}
           />
-          {back ? (
-            <p className="help-text">{back.name}</p>
-          ) : (
-            <p className="help-text">
-              Strongly recommended — without it we can&apos;t record the ingredients or the
-              percentages.
-            </p>
-          )}
-        </div>
+          <span>
+            I confirm these are photos of the physical packet, not screenshots from a website.
+          </span>
+        </label>
       </div>
 
-      <button type="submit" className="btn-primary btn-block" disabled={busy || !front}>
+      <button
+        type="submit"
+        className="btn-primary btn-block"
+        disabled={busy || !front || !back || !packConfirmed}
+      >
         {busy ? 'Reading the packet…' : 'Read the packet'}
       </button>
     </form>

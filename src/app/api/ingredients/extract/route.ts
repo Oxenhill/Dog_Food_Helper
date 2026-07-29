@@ -24,9 +24,9 @@ const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'
  *
  * multipart/form-data:
  *   - front: File (required)
- *   - back:  File (optional but strongly recommended — the ingredient list and
- *            analytical constituents are printed there)
+ *   - back:  File (required — the ingredient list and analytical constituents)
  *   - extra: File (optional — feeding guide / energy panel)
+ *   - source_confirmation: "physical_pack" (required)
  *
  * Returns the extracted draft for the OWNER to check and correct. Nothing is
  * persisted by this route: no database row, and **no photo is stored** — the
@@ -61,6 +61,16 @@ export async function POST(request: NextRequest) {
     } catch {
       return NextResponse.json(
         { error: 'Expected multipart/form-data with a "front" file field' },
+        { status: 400 }
+      );
+    }
+
+    if (formData.get('source_confirmation') !== 'physical_pack') {
+      return NextResponse.json(
+        {
+          error:
+            'This upload route is only for photos of a physical packet. Website information needs a source-aware review route.',
+        },
         { status: 400 }
       );
     }
@@ -108,8 +118,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (images.length === 0) {
+    if (!images.some((image) => image.face === 'front')) {
       return NextResponse.json({ error: 'A "front" photo is required' }, { status: 400 });
+    }
+    if (!images.some((image) => image.face === 'back')) {
+      return NextResponse.json(
+        { error: 'An ingredients-panel "back" photo is required' },
+        { status: 400 }
+      );
     }
     if (images.length > MAX_IMAGES) {
       return NextResponse.json({ error: `At most ${MAX_IMAGES} photos` }, { status: 400 });
