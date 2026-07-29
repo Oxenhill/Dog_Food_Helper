@@ -24,9 +24,9 @@ import {
  * src/lib/switchAnalysis.ts for the full model and the multi-switch narrowing
  * rule.
  *
- * **'single_food_period' (weak, retained).** The original method: for each log
- * with an active food, credit every ingredient in that food with the logged
- * trend. A 30-item list yields 30 identically-weighted signals, so this says
+ * **'single_food_period' (weak, retained enum name).** For each log with a
+ * confirmable diet period, credit every ingredient in the component union.
+ * A large union yields many identically-weighted signals, so this says
  * very little on its own. It is kept rather than deleted because it is the
  * only thing available to a dog that has never switched food, and because a
  * long stable period genuinely is weak evidence that the food is tolerated.
@@ -108,10 +108,14 @@ async function persistSwitchAnalyses(dogId: string, analyses: SwitchAnalysis[]):
 
   const rows = analyses.map((a) => ({
     dog_id: dogId,
-    from_event_id: a.fromEvent?.id ?? null,
-    to_event_id: a.toEvent.id,
-    from_food_id: a.fromFoodId,
-    to_food_id: a.toFoodId,
+    from_event_id: a.fromPeriod?.legacy_food_event_id ?? null,
+    to_event_id: a.toPeriod.legacy_food_event_id ?? null,
+    from_food_id: null,
+    to_food_id: null,
+    from_diet_period_id: a.fromPeriod?.id ?? null,
+    to_diet_period_id: a.toPeriod.id,
+    analysis_status: a.analysisStatus,
+    unanalysable_reason: a.unanalysableReason,
     switched_at: a.switchedAt,
     added_ingredients: a.added,
     removed_ingredients: a.removed,
@@ -123,10 +127,10 @@ async function persistSwitchAnalyses(dogId: string, analyses: SwitchAnalysis[]):
     computed_at: new Date().toISOString(),
   }));
 
-  // Keyed on to_event_id, so a re-run replaces rather than accumulates.
+  // Keyed on the whole destination diet set.
   const { error } = await supabaseAdmin
     .from('dog_food_switch_analyses')
-    .upsert(rows, { onConflict: 'to_event_id' });
+    .upsert(rows, { onConflict: 'to_diet_period_id' });
   if (error) throw error;
 }
 
@@ -193,7 +197,7 @@ function accumulateSwitchSignals(
   };
 
   for (const analysis of analyses) {
-    if (!analysis.ingredientSetsKnown) continue;
+    if (!analysis.ingredientSetsKnown || analysis.analysisStatus === 'unanalysable') continue;
 
     for (const [metricKey, outcome] of Object.entries(analysis.metricOutcomes)) {
       const metric = metricKey as OutcomeMetric;
@@ -235,7 +239,7 @@ function accumulateSwitchSignals(
   return acc;
 }
 
-/** The original, weak method: every ingredient in the active food, equally credited. */
+/** Weak period method: every ingredient in the confirmed diet union, equally credited. */
 async function accumulateSingleFoodPeriodSignals(
   dogId: string,
   lagByMetric: Map<string, number>
@@ -248,7 +252,7 @@ async function accumulateSingleFoodPeriodSignals(
       .select('*')
       .eq('dog_id', dogId)
       .eq('within_expected_variability_window', false)
-      .not('food_id_active', 'is', null),
+      .not('diet_period_id', 'is', null),
     loadDailyStoolObservationLogs(dogId),
   ]);
 
@@ -258,20 +262,34 @@ async function accumulateSingleFoodPeriodSignals(
       (log) => log.metric !== 'stool_score' && log.metric !== 'stool_frequency'
     ),
     ...stoolLogs.filter(
-      (log) => !log.within_expected_variability_window && log.food_id_active != null
+      (log) => !log.within_expected_variability_window && log.diet_period_id != null
     ),
   ];
   if (logs.length === 0) return acc;
 
-  const activeFoodIds = Array.from(
-    new Set(logs.map((l) => l.food_id_active).filter(Boolean))
+  const periodIds = Array.from(
+    new Set(logs.map((log) => log.diet_period_id).filter(Boolean))
   ) as string[];
 
-  const { data: ingredientRows, error: ingredientsError } = await supabaseAdmin
-    .from('food_ingredients')
-    .select('food_id, ingredient_name')
-    .in('food_id', activeFoodIds);
+  const { data: componentRows, error: componentError } = await supabaseAdmin
+    .from('dog_diet_components')
+    .select('diet_period_id, food_id, food_freetext')
+    .in('diet_period_id', periodIds);
+  if (componentError) throw componentError;
 
+  const foodIds = Array.from(
+    new Set((componentRows ?? []).map((row) => row.food_id).filter(Boolean))
+  ) as string[];
+  const [{ data: foodRows, error: foodError }, { data: ingredientRows, error: ingredientsError }] =
+    await Promise.all([
+      foodIds.length
+        ? supabaseAdmin.from('foods').select('id, ingredient_data_status').in('id', foodIds)
+        : Promise.resolve({ data: [], error: null }),
+      foodIds.length
+        ? supabaseAdmin.from('food_ingredients').select('food_id, ingredient_name').in('food_id', foodIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+  if (foodError) throw foodError;
   if (ingredientsError) throw ingredientsError;
 
   const ingredientsByFood = new Map<string, string[]>();
@@ -282,12 +300,40 @@ async function accumulateSingleFoodPeriodSignals(
     list.push(name);
     ingredientsByFood.set(row.food_id, list);
   }
+  const statusByFood = new Map(
+    (foodRows ?? []).map((row) => [row.id as string, row.ingredient_data_status as string])
+  );
+  const componentsByPeriod = new Map<string, typeof componentRows>();
+  for (const component of componentRows ?? []) {
+    const list = componentsByPeriod.get(component.diet_period_id) ?? [];
+    list.push(component);
+    componentsByPeriod.set(component.diet_period_id, list);
+  }
+  const ingredientsByPeriod = new Map<string, string[]>();
+  for (const periodId of periodIds) {
+    const components = componentsByPeriod.get(periodId) ?? [];
+    const confirmable =
+      components.length > 0 &&
+      components.every(
+        (component) =>
+          component.food_id != null &&
+          statusByFood.get(component.food_id) === 'complete' &&
+          (ingredientsByFood.get(component.food_id)?.length ?? 0) > 0
+      );
+    if (!confirmable) continue;
+    ingredientsByPeriod.set(
+      periodId,
+      Array.from(
+        new Set(components.flatMap((component) => ingredientsByFood.get(component.food_id!) ?? []))
+      )
+    );
+  }
 
   // Group logs by (ingredient, metric), then reduce to a net improvement rate.
   const groups = new Map<string, { ingredientName: string; metric: OutcomeMetric; logs: DogLogEntry[] }>();
   for (const log of logs) {
-    if (!log.food_id_active || log.trend == null) continue;
-    for (const ingredientName of ingredientsByFood.get(log.food_id_active) ?? []) {
+    if (!log.diet_period_id || log.trend == null) continue;
+    for (const ingredientName of ingredientsByPeriod.get(log.diet_period_id) ?? []) {
       const key = `${ingredientName}::${log.metric}`;
       const group = groups.get(key) ?? {
         ingredientName,
@@ -423,31 +469,31 @@ export async function runCorrelationEngine(): Promise<{
   total_signals_written: number;
   per_dog: CorrelationRunResult[];
 }> {
-  // Any dog with a food event is now in scope, not only those with an
+  // Any dog with a diet period is in scope, not only those with an
   // attributed log — a dog with events but no eligible logs yet still needs
   // its (empty) analysis computed so stale rows from a previous run clear.
   const [
-    { data: eventDogs, error: eventError },
+    { data: dietDogs, error: dietError },
     { data: logDogs, error: logError },
     { data: stoolDogs, error: stoolError },
   ] =
     await Promise.all([
-      supabaseAdmin.from('dog_food_events').select('dog_id'),
+      supabaseAdmin.from('dog_diet_periods').select('dog_id'),
       supabaseAdmin
         .from('dog_log_entries')
         .select('dog_id')
         .eq('within_expected_variability_window', false)
-        .not('food_id_active', 'is', null),
+        .not('diet_period_id', 'is', null),
       supabaseAdmin.from('dog_stool_events').select('dog_id'),
     ]);
 
-  if (eventError) throw eventError;
+  if (dietError) throw dietError;
   if (logError) throw logError;
   if (stoolError) throw stoolError;
 
   const dogIds = Array.from(
     new Set([
-      ...(eventDogs ?? []).map((r) => r.dog_id as string),
+      ...(dietDogs ?? []).map((r) => r.dog_id as string),
       ...(logDogs ?? []).map((r) => r.dog_id as string),
       ...(stoolDogs ?? []).map((r) => r.dog_id as string),
     ])

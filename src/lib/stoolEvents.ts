@@ -12,7 +12,6 @@ export interface DogStoolEvent extends StoolEventForAggregation {
   legacy_trend?: 'better' | 'worse' | 'no_change' | null;
   monitoring_window_id?: string | null;
 }
-
 export async function loadStoolEventsForDog(
   dogId: string,
   monitoringWindowId?: string | null
@@ -106,7 +105,8 @@ export async function loadDailyStoolObservationLogs(
             ? null
             : deriveTrend('stool_score', String(baselineWorst), String(summary.worst_score)),
         within_expected_variability_window: scoreWindow.withinExpectedVariabilityWindow,
-        food_id_active: scoreWindow.foodIdActive,
+        diet_period_id: scoreWindow.dietPeriodId,
+        food_id_active: null,
         notes: null,
         created_at: `${summary.date}T23:59:59.999Z`,
       });
@@ -120,7 +120,8 @@ export async function loadDailyStoolObservationLogs(
       raw_value: String(summary.count),
       trend: baseline ? frequencyTrend(summary.count, baseline) : null,
       within_expected_variability_window: frequencyWindow.withinExpectedVariabilityWindow,
-      food_id_active: frequencyWindow.foodIdActive,
+      diet_period_id: frequencyWindow.dietPeriodId,
+      food_id_active: null,
       notes: null,
       created_at: `${summary.date}T23:59:59.999Z`,
     });
@@ -145,69 +146,4 @@ export async function getMonitoringWindowAt(
 
   if (error) throw error;
   return (data as DogStoolMonitoringWindow | null) ?? null;
-}
-
-export async function openStoolMonitoringWindow(
-  dogId: string,
-  foodEventId: string,
-  openedAt: string
-): Promise<DogStoolMonitoringWindow> {
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from('dog_stool_monitoring_windows')
-    .select('*')
-    .eq('food_event_id', foodEventId)
-    .maybeSingle();
-  if (existingError) throw existingError;
-  if (existing) return existing as DogStoolMonitoringWindow;
-
-  const [{ data: openWindow, error: openError }, { data: baseline, error: baselineError }] =
-    await Promise.all([
-      supabaseAdmin
-        .from('dog_stool_monitoring_windows')
-        .select('*')
-        .eq('dog_id', dogId)
-        .is('closed_at', null)
-        .maybeSingle(),
-      supabaseAdmin
-        .from('dog_stool_baselines')
-        .select('*')
-        .eq('dog_id', dogId)
-        .lte('established_at', openedAt)
-        .order('established_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
-  if (openError) throw openError;
-  if (baselineError) throw baselineError;
-
-  if (openWindow) {
-    const { error: closeError } = await supabaseAdmin
-      .from('dog_stool_monitoring_windows')
-      .update({ closed_at: openedAt })
-      .eq('id', openWindow.id);
-    if (closeError) throw closeError;
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from('dog_stool_monitoring_windows')
-    .insert({
-      dog_id: dogId,
-      baseline_id: baseline?.id ?? null,
-      food_event_id: foodEventId,
-      opened_at: openedAt,
-    })
-    .select()
-    .single();
-
-  if (error || !data) {
-    if (openWindow) {
-      await supabaseAdmin
-        .from('dog_stool_monitoring_windows')
-        .update({ closed_at: null })
-        .eq('id', openWindow.id);
-    }
-    throw error ?? new Error('Failed to open stool monitoring window');
-  }
-
-  return data as DogStoolMonitoringWindow;
 }

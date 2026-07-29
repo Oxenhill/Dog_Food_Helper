@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
 import { useEffect } from 'react';
-import FoodPicker, { PickableFood } from '@/components/FoodPicker';
+import DietComponentEditor, { DietComponentDraft } from '@/components/DietComponentEditor';
 
 const SIZE_CATEGORIES = ['toy', 'small', 'medium', 'large', 'giant'] as const;
 const LIFESTYLE_ROLES = ['pet', 'working', 'sporting', 'breeding'] as const;
@@ -28,8 +28,7 @@ export default function NewDogPage() {
   const [lifestyleRole, setLifestyleRole] = useState<string>('pet');
   const [workType, setWorkType] = useState<string>('none');
   const [dailyExerciseHours, setDailyExerciseHours] = useState('');
-  const [currentFoodFreetext, setCurrentFoodFreetext] = useState('');
-  const [selectedFood, setSelectedFood] = useState<PickableFood | null>(null);
+  const [dietComponents, setDietComponents] = useState<DietComponentDraft[]>([]);
   const [monthlyFoodBudget, setMonthlyFoodBudget] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -56,8 +55,9 @@ export default function NewDogPage() {
           lifestyle_role: lifestyleRole,
           work_type: workType,
           daily_exercise_hours: dailyExerciseHours ? Number(dailyExerciseHours) : undefined,
-          current_food_id: selectedFood?.id,
-          current_food_freetext: selectedFood ? undefined : currentFoodFreetext || undefined,
+          diet_components: dietComponents.map(
+            ({ client_id: _clientId, food: _food, ...component }) => component
+          ),
           monthly_food_budget: monthlyFoodBudget ? Number(monthlyFoodBudget) : undefined,
         }),
       });
@@ -236,46 +236,11 @@ export default function NewDogPage() {
                 className="input metric"
               />
             </div>
-            {/* Picking the real catalogue row (rather than typing a name) is
-                what lets everything downstream work: free text can't be joined
-                to an ingredient list, so a free-text food contributes nothing
-                to working out what agrees with your dog. Free text stays
-                available so an unlisted food isn't a dead end. */}
             <div className="field">
-              <span className="label">Current food</span>
-              {selectedFood ? (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[14px] font-semibold text-ink">
-                    {selectedFood.brand} {selectedFood.name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFood(null)}
-                    className="btn-ghost btn-sm shrink-0"
-                  >
-                    Change
-                  </button>
-                </div>
-              ) : currentFoodFreetext ? (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[14px] text-ink">{currentFoodFreetext}</span>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentFoodFreetext('')}
-                    className="btn-ghost btn-sm shrink-0"
-                  >
-                    Change
-                  </button>
-                </div>
-              ) : (
-                <FoodPicker
-                  type="meal"
-                  onSelect={(food) => setSelectedFood(food)}
-                  onSelectFreetext={(text) => setCurrentFoodFreetext(text)}
-                />
-              )}
+              <span className="label">Current diet</span>
+              <DietComponentEditor value={dietComponents} onChange={setDietComponents} />
               <p className="help-text">
-                Optional — you can set this later from your dog&apos;s page.
+                Optional — add every food currently eaten, or set the diet later.
               </p>
             </div>
             <div className="field">

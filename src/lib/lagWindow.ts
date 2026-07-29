@@ -1,44 +1,19 @@
+import { getDietPeriodAt } from './dietPeriods';
 import { supabaseAdmin } from './supabase';
-import { DogFoodEvent, OutcomeMetric } from './types';
+import { DogDietPeriod, OutcomeMetric } from './types';
 
 /**
- * Lag-window logic (Phase 2)
+ * Lag-window logic for a whole diet set.
  *
- * Finds the dog_food_events row that was active on a given log_date, and
- * uses metric_minimum_lag_days to decide whether a reading for a given
- * metric falls inside that metric's expected settling window post-switch.
- *
- * Per architecture doc §4: this is metric-specific, not one flat number —
- * digestive metrics (stool_score/stool_odor/gas_frequency/gas_odor) settle
- * ~10 days, weight/behaviour ~21 days, coat/BCS ~56 days. Values live in
- * metric_minimum_lag_days rather than being hardcoded here.
+ * Attribution uses the diet period active on log_date. Metric lag remains
+ * reference-data driven. A legacy period with no captured start can identify
+ * exposure, but cannot create an invented settling interval.
  */
-
-export async function getActiveFoodEvent(
+export async function getActiveDietPeriod(
   dogId: string,
   logDate: string
-): Promise<DogFoodEvent | null> {
-  // `logDate` is a calendar date ('2026-07-26') but `started_at` is a
-  // timestamptz. Comparing them directly makes the date mean midnight, so an
-  // event started at 14:00 today would NOT be found by a log written today —
-  // i.e. setting your dog's food and then logging the same day attributed
-  // nothing. The comparison is against the END of the log date instead, so any
-  // event that had started by the close of that day counts.
-  const endOfLogDate = `${logDate}T23:59:59.999Z`;
-
-  const { data, error } = await supabaseAdmin
-    .from('dog_food_events')
-    .select('*')
-    .eq('dog_id', dogId)
-    .eq('event_type', 'main_food')
-    .lte('started_at', endOfLogDate)
-    .or(`ended_at.is.null,ended_at.gte.${logDate}`)
-    .order('started_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data as DogFoodEvent | null;
+): Promise<DogDietPeriod | null> {
+  return getDietPeriodAt(dogId, logDate);
 }
 
 export async function getMinimumLagDays(metric: OutcomeMetric): Promise<number> {
@@ -49,42 +24,40 @@ export async function getMinimumLagDays(metric: OutcomeMetric): Promise<number> 
     .maybeSingle();
 
   if (error) throw error;
-  // Fall back to 0 (i.e. "never in-window") only if the reference row is somehow
-  // missing — this should always be seeded, see supabase/seed_phase2.sql
   return data?.minimum_lag_days ?? 0;
 }
 
 export interface VariabilityWindowResult {
   withinExpectedVariabilityWindow: boolean;
-  foodIdActive: string | null;
-  activeFoodEvent: DogFoodEvent | null;
+  dietPeriodId: string | null;
+  activeDietPeriod: DogDietPeriod | null;
 }
 
-/**
- * Computes within_expected_variability_window + food_id_active for a single
- * (dog_id, metric, log_date) reading, per §4 / metric_minimum_lag_days.
- *
- * If there's no active main_food event on record for that date, the reading
- * can't be "in a settling window" from a switch we don't know about, so this
- * returns false (not in-window) with a null active food.
- */
 export async function computeVariabilityWindow(
   dogId: string,
   metric: OutcomeMetric,
   logDate: string
 ): Promise<VariabilityWindowResult> {
-  const activeFoodEvent = await getActiveFoodEvent(dogId, logDate);
+  const activeDietPeriod = await getActiveDietPeriod(dogId, logDate);
 
-  if (!activeFoodEvent) {
+  if (!activeDietPeriod) {
     return {
       withinExpectedVariabilityWindow: false,
-      foodIdActive: null,
-      activeFoodEvent: null,
+      dietPeriodId: null,
+      activeDietPeriod: null,
+    };
+  }
+
+  if (!activeDietPeriod.started_at) {
+    return {
+      withinExpectedVariabilityWindow: false,
+      dietPeriodId: activeDietPeriod.id,
+      activeDietPeriod,
     };
   }
 
   const lagDays = await getMinimumLagDays(metric);
-  const startedAt = new Date(activeFoodEvent.started_at);
+  const startedAt = new Date(activeDietPeriod.started_at);
   const log = new Date(logDate);
   const daysSince = Math.floor(
     (log.getTime() - startedAt.getTime()) / (1000 * 60 * 60 * 24)
@@ -92,7 +65,7 @@ export async function computeVariabilityWindow(
 
   return {
     withinExpectedVariabilityWindow: daysSince < lagDays,
-    foodIdActive: activeFoodEvent.food_or_treat_id ?? null,
-    activeFoodEvent,
+    dietPeriodId: activeDietPeriod.id,
+    activeDietPeriod,
   };
 }

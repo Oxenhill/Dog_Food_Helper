@@ -1,8 +1,11 @@
 import { supabaseAdmin } from './supabase';
 import { STOOL_SCORE_IDEAL, BCS_IDEAL } from './chartReference';
 import { loadDailyStoolObservationLogs } from './stoolEvents';
+import { isRotatingDiet, listDietPeriods } from './dietPeriods';
 import {
   BeforeState,
+  DietPeriodAnalysisStatus,
+  DogDietPeriod,
   DogFoodEvent,
   DogLogEntry,
   OutcomeMetric,
@@ -215,11 +218,11 @@ async function loadIngredientsByFood(foodIds: string[]): Promise<Map<string, Set
 
 export interface SwitchAnalysis {
   dogId: string;
-  fromEvent: DogFoodEvent | null;
-  toEvent: DogFoodEvent;
-  fromFoodId: string | null;
-  toFoodId: string | null;
-  switchedAt: string;
+  fromPeriod: DogDietPeriod | null;
+  toPeriod: DogDietPeriod;
+  switchedAt: string | null;
+  analysisStatus: DietPeriodAnalysisStatus;
+  unanalysableReason: string | null;
   added: string[];
   removed: string[];
   retained: string[];
@@ -260,8 +263,8 @@ function beforeStateForMetric(
 }
 
 /**
- * Builds one analysis per main_food event, comparing it against its
- * predecessor.
+ * Builds one analysis per immutable diet period, comparing whole component
+ * unions. A rotating/intermittent period is recorded as unanalysable.
  *
  * Nothing is written here — this is the pure computation, so it can be
  * reasoned about and tested without touching the database.
@@ -270,18 +273,21 @@ export async function analyseSwitchesForDog(
   dogId: string,
   treatLoggingEnabled: boolean
 ): Promise<SwitchAnalysis[]> {
-  const { data: eventRows, error: eventsError } = await supabaseAdmin
+  const periods = (await listDietPeriods(dogId)).sort((a, b) => {
+    const aKey = a.started_at ?? a.created_at;
+    const bKey = b.started_at ?? b.created_at;
+    return aKey.localeCompare(bKey);
+  });
+  if (periods.length === 0) return [];
+
+  const { data: treatRows, error: treatError } = await supabaseAdmin
     .from('dog_food_events')
     .select('*')
     .eq('dog_id', dogId)
+    .eq('event_type', 'treat')
     .order('started_at', { ascending: true });
-
-  if (eventsError) throw eventsError;
-  const allEvents = (eventRows ?? []) as DogFoodEvent[];
-  const mainFoodEvents = allEvents.filter((e) => e.event_type === 'main_food');
-  const treatEvents = allEvents.filter((e) => e.event_type === 'treat');
-
-  if (mainFoodEvents.length === 0) return [];
+  if (treatError) throw treatError;
+  const treatEvents = (treatRows ?? []) as DogFoodEvent[];
 
   const { data: logRows, error: logsError } = await supabaseAdmin
     .from('dog_log_entries')
@@ -300,11 +306,13 @@ export async function analyseSwitchesForDog(
 
   const { data: monitoringRows, error: monitoringError } = await supabaseAdmin
     .from('dog_stool_monitoring_windows')
-    .select('id, food_event_id')
+    .select('id, diet_period_id')
     .eq('dog_id', dogId);
   if (monitoringError) throw monitoringError;
-  const monitoringByFoodEvent = new Map<string, string>(
-    (monitoringRows ?? []).map((row) => [row.food_event_id as string, row.id as string])
+  const monitoringByDietPeriod = new Map<string, string>(
+    (monitoringRows ?? [])
+      .filter((row) => row.diet_period_id)
+      .map((row) => [row.diet_period_id as string, row.id as string])
   );
 
   const { data: lagRows, error: lagError } = await supabaseAdmin
@@ -317,95 +325,137 @@ export async function analyseSwitchesForDog(
 
   const foodIds = Array.from(
     new Set(
-      [...mainFoodEvents, ...treatEvents]
-        .map((e) => e.food_or_treat_id)
+      [
+        ...periods.flatMap((period) => period.components.map((component) => component.food_id)),
+        ...treatEvents.map((event) => event.food_or_treat_id),
+      ]
         .filter((id): id is string => Boolean(id))
     )
   );
   const ingredientsByFood = await loadIngredientsByFood(foodIds);
+  const { data: foodStatusRows, error: foodStatusError } = foodIds.length
+    ? await supabaseAdmin.from('foods').select('id, ingredient_data_status').in('id', foodIds)
+    : { data: [], error: null };
+  if (foodStatusError) throw foodStatusError;
+  const statusByFood = new Map(
+    (foodStatusRows ?? []).map((row) => [row.id as string, row.ingredient_data_status as string])
+  );
+
+  const ingredientsForPeriod = (period: DogDietPeriod): Set<string> => {
+    const union = new Set<string>();
+    for (const component of period.components) {
+      if (!component.food_id) continue;
+      for (const ingredient of ingredientsByFood.get(component.food_id) ?? []) union.add(ingredient);
+    }
+    return union;
+  };
+
+  const compositionKnown = (period: DogDietPeriod): boolean =>
+    period.components.length > 0 &&
+    period.components.every(
+      (component) =>
+        component.food_id != null &&
+        statusByFood.get(component.food_id) === 'complete' &&
+        (ingredientsByFood.get(component.food_id)?.size ?? 0) > 0
+    );
 
   const analyses: SwitchAnalysis[] = [];
 
-  for (let i = 0; i < mainFoodEvents.length; i++) {
-    const toEvent = mainFoodEvents[i];
-    const fromEvent = i > 0 ? mainFoodEvents[i - 1] : null;
-
-    const switchedAt = new Date(toEvent.started_at);
-    const periodEnd = toEvent.ended_at ? new Date(toEvent.ended_at) : new Date();
+  for (let i = 0; i < periods.length; i++) {
+    const toPeriod = periods[i];
+    const fromPeriod = i > 0 ? periods[i - 1] : null;
+    const switchedAt = toPeriod.started_at ? new Date(toPeriod.started_at) : null;
+    const periodEnd = toPeriod.ended_at ? new Date(toPeriod.ended_at) : new Date();
+    const rotation =
+      isRotatingDiet(toPeriod.components) ||
+      (fromPeriod != null && isRotatingDiet(fromPeriod.components));
+    const setsKnown =
+      compositionKnown(toPeriod) && (fromPeriod == null || compositionKnown(fromPeriod));
+    const unanalysableReason = rotation
+      ? 'Rotating or intermittent component schedule has no stable exposure baseline.'
+      : !setsKnown
+        ? 'At least one diet component has no confirmable composition data.'
+        : switchedAt == null
+          ? 'Diet start time was not captured.'
+          : null;
+    const analysisStatus: DietPeriodAnalysisStatus = unanalysableReason
+      ? 'unanalysable'
+      : fromPeriod
+        ? 'analysable'
+        : 'initial_period';
 
     // Logs inside the transition are confounded by BOTH foods — a phased
     // switch means the dog is literally eating a mixture — so they are not
     // clean evidence for the new food.
-    const transitionEnd = toEvent.in_transition_until
-      ? new Date(toEvent.in_transition_until)
+    const transitionEnd = toPeriod.in_transition_until
+      ? new Date(toPeriod.in_transition_until)
       : switchedAt;
 
     const metricOutcomes: Record<string, SwitchMetricOutcome> = {};
-    const monitoringWindowId = monitoringByFoodEvent.get(toEvent.id);
+    const monitoringWindowId = monitoringByDietPeriod.get(toPeriod.id);
     const windowStoolLogs = monitoringWindowId
       ? await loadDailyStoolObservationLogs(dogId, monitoringWindowId)
       : [];
-    const analysisLogs = [...nonStoolLogs, ...windowStoolLogs];
+    const analysisLogs = [
+      ...nonStoolLogs.filter((log) => log.diet_period_id === toPeriod.id),
+      ...windowStoolLogs,
+    ];
     const metricsPresent = Array.from(new Set(analysisLogs.map((log) => log.metric)));
 
-    for (const metric of metricsPresent) {
-      const lagDays = lagByMetric.get(metric) ?? 0;
-      // The metric's own settling window: digestive ~10d, energy/weight ~21d,
-      // coat/skin ~56d. A coat reading taken 12 days after a switch says
-      // nothing about the new food.
-      const eligibleFrom = new Date(
-        Math.max(
-          transitionEnd.getTime(),
-          switchedAt.getTime() + lagDays * 24 * 60 * 60 * 1000
-        )
-      );
+    if (analysisStatus !== 'unanalysable' && switchedAt && transitionEnd) {
+      for (const metric of metricsPresent) {
+        const lagDays = lagByMetric.get(metric) ?? 0;
+        // The metric's own settling window: digestive ~10d, energy/weight ~21d,
+        // coat/skin ~56d. A coat reading taken 12 days after a switch says
+        // nothing about the new food.
+        const eligibleFrom = new Date(
+          Math.max(
+            transitionEnd.getTime(),
+            switchedAt.getTime() + lagDays * 24 * 60 * 60 * 1000
+          )
+        );
 
-      const eligible = analysisLogs.filter((l) => {
-        if (l.metric !== metric) return false;
-        if (l.trend == null) return false; // baseline rows carry no trend
-        if (l.within_expected_variability_window) return false;
-        const d = new Date(l.log_date);
-        return d >= eligibleFrom && d <= periodEnd;
-      });
+        const eligible = analysisLogs.filter((l) => {
+          if (l.metric !== metric) return false;
+          if (l.trend == null) return false; // baseline rows carry no trend
+          if (l.within_expected_variability_window) return false;
+          const d = new Date(l.log_date);
+          return d >= eligibleFrom && d <= periodEnd;
+        });
 
-      const sampleSize = eligible.length;
-      const better = eligible.filter((l) => l.trend === 'better').length;
-      const worse = eligible.filter((l) => l.trend === 'worse').length;
-      const net = sampleSize > 0 ? (better - worse) / sampleSize : 0;
+        const sampleSize = eligible.length;
+        const better = eligible.filter((l) => l.trend === 'better').length;
+        const worse = eligible.filter((l) => l.trend === 'worse').length;
+        const net = sampleSize > 0 ? (better - worse) / sampleSize : 0;
 
-      metricOutcomes[metric] = {
-        outcome: classifyOutcome(net, sampleSize),
-        before_state: beforeStateForMetric(
-          logsForBeforeState,
-          metric as OutcomeMetric,
-          switchedAt
-        ),
-        sample_size: sampleSize,
-        net: Number(net.toFixed(4)),
-        lag_days: lagDays,
-      };
+        metricOutcomes[metric] = {
+          outcome: classifyOutcome(net, sampleSize),
+          before_state: beforeStateForMetric(
+            logsForBeforeState,
+            metric as OutcomeMetric,
+            switchedAt
+          ),
+          sample_size: sampleSize,
+          net: Number(net.toFixed(4)),
+          lag_days: lagDays,
+        };
+      }
     }
 
-    // Ingredient sets — only meaningful when BOTH sides are known.
-    const fromFoodId = fromEvent?.food_or_treat_id ?? null;
-    const toFoodId = toEvent.food_or_treat_id ?? null;
-    const fromIngredients = fromFoodId ? ingredientsByFood.get(fromFoodId) : undefined;
-    const toIngredients = toFoodId ? ingredientsByFood.get(toFoodId) : undefined;
+    const fromIngredients = fromPeriod ? ingredientsForPeriod(fromPeriod) : undefined;
+    const toIngredients = ingredientsForPeriod(toPeriod);
 
     let added: string[] = [];
     let removed: string[] = [];
     let retained: string[] = [];
     let ingredientSetsKnown = false;
 
-    if (fromIngredients && toIngredients) {
+    if (setsKnown && fromIngredients) {
       added = [...toIngredients].filter((n) => !fromIngredients.has(n)).sort();
       removed = [...fromIngredients].filter((n) => !toIngredients.has(n)).sort();
       retained = [...toIngredients].filter((n) => fromIngredients.has(n)).sort();
       ingredientSetsKnown = true;
-    } else if (!fromEvent && toIngredients) {
-      // The dog's first recorded food has no predecessor, so there is no
-      // switch and no differing set — but its ingredient list is known, and
-      // the period still counts as a tolerated/not-tolerated observation.
+    } else if (setsKnown && !fromPeriod) {
       retained = [...toIngredients].sort();
       ingredientSetsKnown = true;
     }
@@ -419,7 +469,7 @@ export async function analyseSwitchesForDog(
             treatEvents
               .filter((t) => {
                 const at = new Date(t.started_at);
-                return at >= switchedAt && at <= periodEnd;
+                return switchedAt != null && at >= switchedAt && at <= periodEnd;
               })
               .flatMap((t) =>
                 t.food_or_treat_id ? [...(ingredientsByFood.get(t.food_or_treat_id) ?? [])] : []
@@ -430,11 +480,11 @@ export async function analyseSwitchesForDog(
 
     analyses.push({
       dogId,
-      fromEvent,
-      toEvent,
-      fromFoodId,
-      toFoodId,
-      switchedAt: toEvent.started_at,
+      fromPeriod,
+      toPeriod,
+      switchedAt: toPeriod.started_at ?? null,
+      analysisStatus,
+      unanalysableReason,
       added,
       removed,
       retained,
@@ -522,7 +572,9 @@ export interface SuspectSetResult {
  * because the outcome actually moved.
  */
 export function deriveSuspectSet(analyses: SwitchAnalysis[]): SuspectSetResult {
-  const usable = analyses.filter((a) => a.ingredientSetsKnown);
+  const usable = analyses.filter(
+    (analysis) => analysis.ingredientSetsKnown && analysis.analysisStatus !== 'unanalysable'
+  );
 
   const poorPeriods: SwitchAnalysis[] = [];
   const goodPeriods: SwitchAnalysis[] = [];
@@ -599,7 +651,7 @@ export function deriveSuspectSet(analyses: SwitchAnalysis[]): SuspectSetResult {
     set.length > 0 && set.length <= SWITCH_ANALYSIS_THRESHOLDS.maxUsefulSuspectSetSize;
 
   for (const analysis of usable) {
-    if (!analysis.fromEvent) continue; // no predecessor, so nothing differs
+    if (!analysis.fromPeriod) continue; // no predecessor, so nothing differs
 
     for (const metric of DIGESTIVE_METRICS) {
       const outcome = analysis.metricOutcomes[metric];

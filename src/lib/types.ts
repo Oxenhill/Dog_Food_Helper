@@ -22,8 +22,6 @@ export interface Dog {
   daily_exercise_hours?: number;
   work_type: WorkType;
   life_stage?: LifeStage;
-  current_food_id?: string;
-  current_food_freetext?: string;
   monthly_food_budget?: number;
   // Treat logging is opt-in per dog and defaults to false — a half-kept treat
   // log is worse than none, because partial data still produces
@@ -123,6 +121,7 @@ export interface HardFilterResult {
   excluded_foods: string[];
   excluded_reasons: { food_id: string; reason: string }[];
   suitable_food_ids: string[];
+  current_diet_exposure: DietExposureAudit;
 }
 
 export interface RecommendationResult {
@@ -179,6 +178,7 @@ export interface DogBaseline {
   id: string;
   dog_id: string;
   established_at: string;
+  diet_period_id?: string | null;
   food_at_baseline_id?: string | null;
   created_at: string;
 }
@@ -199,6 +199,9 @@ export interface DogLogEntry {
   raw_value?: string | null;
   trend?: TrendDirection | null;
   within_expected_variability_window: boolean;
+  /** Whole diet set active for this reading. Replaces singular food_id_active. */
+  diet_period_id?: string | null;
+  /** DEPRECATED historical provenance only. Never derived from a mixed diet. */
   food_id_active?: string | null;
   notes?: string | null;
   created_at: string;
@@ -238,7 +241,8 @@ export interface DogStoolMonitoringWindow {
   id: string;
   dog_id: string;
   baseline_id?: string | null;
-  food_event_id: string;
+  food_event_id?: string | null;
+  diet_period_id?: string | null;
   opened_at: string;
   closed_at?: string | null;
   created_at: string;
@@ -267,6 +271,64 @@ export interface DogFoodEvent {
   ended_at?: string | null;
   in_transition_until?: string | null;
   created_at: string;
+}
+
+export type DietComponentRole = 'topper' | 'mixer' | 'supplement' | 'treat';
+export type DietComponentShare = 'most' | 'about_half' | 'small_amount' | 'spoonful';
+export type DietComponentSchedule =
+  | 'every_meal'
+  | 'daily'
+  | 'specific_days'
+  | 'rotating'
+  | 'occasional';
+export type DietMealSlot = 'morning' | 'evening' | 'any';
+export type DietPeriodSource = 'owner_recorded' | 'legacy_food_event' | 'legacy_pointer';
+export type DietPeriodAnalysisStatus = 'initial_period' | 'analysable' | 'unanalysable';
+
+export interface DietComponentInput {
+  food_id?: string | null;
+  food_freetext?: string | null;
+  role?: DietComponentRole | null;
+  share?: DietComponentShare | null;
+  schedule?: DietComponentSchedule | null;
+  days_of_week?: number[] | null;
+  meal_slot?: DietMealSlot | null;
+}
+
+export interface DogDietComponent extends DietComponentInput {
+  id: string;
+  dog_id: string;
+  diet_period_id: string;
+  created_at: string;
+  food?: {
+    id: string;
+    brand: string;
+    name: string;
+    food_type: string;
+    ingredient_data_status: string;
+  } | null;
+}
+
+export interface DogDietPeriod {
+  id: string;
+  dog_id: string;
+  started_at?: string | null;
+  start_time_captured: boolean;
+  ended_at?: string | null;
+  in_transition_until?: string | null;
+  source: DietPeriodSource;
+  legacy_food_event_id?: string | null;
+  created_at: string;
+  components: DogDietComponent[];
+}
+
+export interface DietExposureAudit {
+  status: 'confirmed' | 'unconfirmable' | 'not_recorded';
+  diet_period_id: string | null;
+  component_count: number;
+  opaque_component_count: number;
+  ingredient_union: string[];
+  restricted_ingredients_present: string[];
 }
 
 export interface DogRedFlagEvent {
@@ -521,10 +583,14 @@ export interface DogFoodSwitchAnalysis {
   id: string;
   dog_id: string;
   from_event_id?: string | null;
-  to_event_id: string;
+  to_event_id?: string | null;
   from_food_id?: string | null;
   to_food_id?: string | null;
-  switched_at: string;
+  from_diet_period_id?: string | null;
+  to_diet_period_id?: string | null;
+  analysis_status?: DietPeriodAnalysisStatus | null;
+  unanalysable_reason?: string | null;
+  switched_at?: string | null;
   added_ingredients: string[];
   removed_ingredients: string[];
   retained_ingredients: string[];

@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
-import { getOpenMainFoodEvent, listFoodEvents } from '@/lib/foodEvents';
+import { listTreatEvents } from '@/lib/foodEvents';
 import { evaluateTreatLoggingSuggestion } from '@/lib/treatLoggingPrompt';
 
 /**
  * GET /api/food-events?dog_id=… — a dog's feeding history.
  *
- * Returns the currently open main food, the full main-food history (so the UI
- * can show what has been tried and for how long), and recent treat occasions.
+ * Diet state moved to /api/diets. This legacy-named route returns discrete
+ * treat occasions and the treat-logging preference only.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -33,9 +33,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Dog not found' }, { status: 404 });
     }
 
-    const [{ mainFood, treats }, current, treatSuggestion] = await Promise.all([
-      listFoodEvents(dogId),
-      getOpenMainFoodEvent(dogId),
+    const [treats, treatSuggestion] = await Promise.all([
+      listTreatEvents(dogId),
       evaluateTreatLoggingSuggestion(
         dogId,
         dog.treat_logging_enabled,
@@ -43,16 +42,8 @@ export async function GET(request: NextRequest) {
       ),
     ]);
 
-    // The open event carries `in_transition_until`; the UI uses it to say
-    // "still settling" rather than presenting early logs as clean evidence.
-    const inTransition =
-      current?.in_transition_until != null && new Date(current.in_transition_until) > new Date();
-
     return NextResponse.json(
       {
-        current_main_food: mainFood.find((e) => e.id === current?.id) ?? null,
-        in_transition: inTransition,
-        main_food_history: mainFood,
         treats,
         treat_logging_enabled: dog.treat_logging_enabled,
         treat_logging_prompt_dismissed: dog.treat_logging_prompt_dismissed_at != null,

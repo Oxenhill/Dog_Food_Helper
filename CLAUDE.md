@@ -55,6 +55,8 @@ Follow the sequence in the architecture doc §8 and technical build spec Part E.
 
 2. **Baseline-relative tracking** (§4 of architecture doc): body condition and general wellness log *shift from baseline* (better/worse/no change) + optional chart recalibration. Stool is the explicit event-level exception added 2026-07-29: baseline stores the representative score set and usual count range; monitoring stores one exact score per actual stool; daily worst/median/count/spread are derived at read time and compared with baseline.
 
+   Diet attribution is always the complete flat component set for one versioned period. No component is primary; role and ordinal share are descriptive only. Allergen exposure is the union across every component, and one opaque component makes the whole diet unconfirmable. Rotating/intermittent periods are not switches and never enter switch-derived reasoning.
+
 3. **Metric-specific lag windows** (architecture doc §4, technical build spec Part A): digestive metrics settle ~10 days post-food-switch, energy/weight ~21 days, coat/skin ~56 days. Use `metric_minimum_lag_days` reference table—don't hardcode one lag value for everything.
 
 4. **Never auto-merge unreviewed OCR** (§7 of architecture doc): owner-submitted photos go through `ingredient_review_queue` *always*, never directly into `foods`/`food_ingredients`. Tier 1 (brand-page scrapes) can auto-merge after duplicate/field checks only.

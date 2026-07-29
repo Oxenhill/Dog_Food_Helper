@@ -164,6 +164,7 @@ export async function POST(request: NextRequest) {
           recommendations: [],
           excluded_count: hardFilterResult.excluded_foods.length,
           total_candidates: 0,
+          current_diet_exposure: hardFilterResult.current_diet_exposure,
           message:
             'No foods remain after applying your dog\'s restrictions. Try broadening the dataset or reviewing logged restrictions.',
           disclaimer: DISCLAIMER,
@@ -325,6 +326,7 @@ export async function POST(request: NextRequest) {
       recommendations,
       excluded_count: hardFilterResult.excluded_foods.length,
       excluded_reasons: hardFilterResult.excluded_reasons,
+      current_diet_exposure: hardFilterResult.current_diet_exposure,
       total_candidates: candidateFoods?.length ?? 0,
       weights_used: weights,
       life_stage_used: der.lifeStage,

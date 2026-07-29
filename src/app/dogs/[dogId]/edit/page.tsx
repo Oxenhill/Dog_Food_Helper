@@ -34,7 +34,6 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
   const [lifestyleRole, setLifestyleRole] = useState<string>('pet');
   const [workType, setWorkType] = useState<string>('none');
   const [dailyExerciseHours, setDailyExerciseHours] = useState('');
-  const [currentFoodFreetext, setCurrentFoodFreetext] = useState('');
   const [monthlyFoodBudget, setMonthlyFoodBudget] = useState('');
 
   const [error, setError] = useState('');
@@ -68,7 +67,6 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
         setDailyExerciseHours(
           dog.daily_exercise_hours != null ? String(dog.daily_exercise_hours) : ''
         );
-        setCurrentFoodFreetext(dog.current_food_freetext ?? '');
         setMonthlyFoodBudget(
           dog.monthly_food_budget != null ? String(dog.monthly_food_budget) : ''
         );
@@ -98,7 +96,6 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
           lifestyle_role: lifestyleRole,
           work_type: workType,
           daily_exercise_hours: dailyExerciseHours ? Number(dailyExerciseHours) : undefined,
-          // current_food is intentionally not submitted — see the field below.
           monthly_food_budget: monthlyFoodBudget ? Number(monthlyFoodBudget) : undefined,
         }),
       });
@@ -288,20 +285,12 @@ export default function EditDogPage({ params }: { params: { dogId: string } }) {
                   className="input metric"
                 />
               </div>
-              {/* Current food is deliberately NOT editable here any more.
-                  Changing it is a dated event, not a profile field: the switch
-                  has to close the previous food's period and open the new
-                  one, or `dogs.current_food_id` drifts out of step with
-                  `dog_food_events` and every log attributed from it becomes
-                  wrong. The dog's page owns that action. */}
+              {/* Diet is an atomic dated component set, not a profile field. */}
               <div className="field">
-                <span className="label">Current food</span>
-                <p className="text-[14px] text-ink">
-                  {currentFoodFreetext || 'Not recorded'}
-                </p>
+                <span className="label">Current diet</span>
                 <p className="help-text">
-                  Changed foods? Record it on your dog&apos;s page so we know when the change
-                  happened — that&apos;s what lets us compare before and after.
+                  Add or change the complete food set on your dog&apos;s page so the change is
+                  recorded as one dated diet period.
                 </p>
                 <Link
                   href={`/dogs/${params.dogId}`}

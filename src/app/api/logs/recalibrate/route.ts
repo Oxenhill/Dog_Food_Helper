@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
             trend = e.trend as 'better' | 'worse' | 'no_change';
           }
 
-          const { withinExpectedVariabilityWindow, foodIdActive } = await computeVariabilityWindow(
+          const { withinExpectedVariabilityWindow, dietPeriodId } = await computeVariabilityWindow(
             dog_id,
             e.metric,
             logDateStr
@@ -122,9 +122,9 @@ export async function POST(request: NextRequest) {
             raw_value: e.raw_value,
             trend,
             within_expected_variability_window: withinExpectedVariabilityWindow,
-            // The food event open ON THE LOG DATE only — see the same note in
-            // /api/logs/quick. `dogs.current_food_id` describes now, not then.
-            food_id_active: foodIdActive,
+            diet_period_id: dietPeriodId,
+            // DEPRECATED singular provenance. Never select one component.
+            food_id_active: null,
             notes: e.notes ?? null,
           };
         }

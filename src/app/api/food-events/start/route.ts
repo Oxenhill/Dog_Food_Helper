@@ -2,23 +2,12 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { FoodEventType } from '@/lib/types';
-import { DEFAULT_TRANSITION_DAYS, logTreatEvent, startMainFoodEvent } from '@/lib/foodEvents';
+import { logTreatEvent } from '@/lib/foodEvents';
 
 /**
  * POST /api/food-events/start (Part B)
  *
- * Two distinct jobs behind one documented endpoint, keyed on event_type:
- *
- *   main_food — "what is your dog eating now?" and "I've changed foods" are
- *     the same operation. Starting a main food CLOSES whatever was open, in
- *     one call, so the client cannot half-complete a switch by making the two
- *     calls separately and having the second fail.
- *
- *   treat — a discrete occasion on a date, not a period. No transition, no
- *     end, and it does not change what the dog is being fed.
- *
- * `in_transition_until` is always computed server-side from `transition_days`;
- * the client never sets the timestamp directly.
+ * Treat occasions only. Whole diets are replaced atomically through /api/diets.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -35,21 +24,22 @@ export async function POST(request: NextRequest) {
       food_or_treat_freetext,
       event_type,
       started_at,
-      transition_days,
     }: {
       dog_id: string;
       food_or_treat_id?: string;
       food_or_treat_freetext?: string;
       event_type: FoodEventType;
       started_at?: string;
-      transition_days?: number;
     } = body;
 
     if (!dog_id || !event_type) {
       return NextResponse.json({ error: 'dog_id and event_type are required' }, { status: 400 });
     }
-    if (!['main_food', 'treat'].includes(event_type)) {
-      return NextResponse.json({ error: `Invalid event_type: ${event_type}` }, { status: 400 });
+    if (event_type !== 'treat') {
+      return NextResponse.json(
+        { error: 'Main diet changes require the complete component set at /api/diets' },
+        { status: 410 }
+      );
     }
     if (!food_or_treat_id && !food_or_treat_freetext) {
       return NextResponse.json(
@@ -85,48 +75,19 @@ export async function POST(request: NextRequest) {
       if (!food) {
         return NextResponse.json({ error: 'Food not found' }, { status: 404 });
       }
-      // A chew must never be recorded as dinner — the same separation
-      // hardFilter.ts applies when building the recommendation candidate set.
-      if (event_type === 'main_food' && food.is_treat) {
-        return NextResponse.json(
-          {
-            error: `${food.brand} ${food.name} is recorded as a treat, so it can't be set as a main food. Log it as a treat instead.`,
-          },
-          { status: 400 }
-        );
-      }
     }
 
-    if (event_type === 'treat') {
-      const event = await logTreatEvent({
-        dogId: dog_id,
-        foodId: food_or_treat_id ?? null,
-        freetext: food_or_treat_freetext ?? null,
-        occurredAt: started_at ?? null,
-      });
-      return NextResponse.json(
-        { message: 'Treat recorded', event_id: event.id, food_event: event },
-        { status: 201 }
-      );
-    }
-
-    const { event, previousEvent, monitoringWindow } = await startMainFoodEvent({
+    const event = await logTreatEvent({
       dogId: dog_id,
       foodId: food_or_treat_id ?? null,
       freetext: food_or_treat_freetext ?? null,
-      startedAt: started_at ?? null,
-      transitionDays: transition_days ?? DEFAULT_TRANSITION_DAYS,
+      occurredAt: started_at ?? null,
     });
-
     return NextResponse.json(
       {
-        message: previousEvent ? 'Food change recorded' : 'Current food recorded',
+        message: 'Treat recorded',
         event_id: event.id,
         food_event: event,
-        // Non-null means this was a switch, and the analysis engine now has a
-        // switch point to work with.
-        previous_event: previousEvent,
-        stool_monitoring_window: monitoringWindow,
       },
       { status: 201 }
     );

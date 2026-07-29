@@ -15,6 +15,8 @@ interface Insights {
   narrowed_enough: boolean;
   failed_switch_count: number;
   switches_analysed: number;
+  unanalysable_periods: number;
+  unanalysable_reasons: string[];
   min_failed_switches_needed: number;
   suspects: Suspect[];
   treat_confounder_unmeasured: boolean;
@@ -67,7 +69,13 @@ export default function FoodInsightsCard({ dogId }: { dogId: string }) {
   if (loading || !insights) return null;
 
   // Nothing analysed yet at all: stay quiet rather than show an empty shell.
-  if (insights.switches_analysed === 0 && insights.suspect_set_size === 0) return null;
+  if (
+    insights.switches_analysed === 0 &&
+    insights.suspect_set_size === 0 &&
+    insights.unanalysable_periods === 0
+  ) {
+    return null;
+  }
 
   const switchesNeeded = Math.max(
     0,
@@ -77,6 +85,16 @@ export default function FoodInsightsCard({ dogId }: { dogId: string }) {
   return (
     <div className="card card-pad mt-6">
       <h2 className="section-title">Patterns across food changes</h2>
+
+      {insights.unanalysable_periods > 0 && (
+        <div className="callout-disclaimer mt-3">
+          {insights.unanalysable_periods} diet period
+          {insights.unanalysable_periods === 1 ? ' is' : 's are'} excluded from switch analysis.
+          {insights.unanalysable_reasons.length > 0 && (
+            <> {insights.unanalysable_reasons.join(' ')}</>
+          )}
+        </div>
+      )}
 
       {insights.narrowed_enough ? (
         <>

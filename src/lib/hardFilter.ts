@@ -1,6 +1,7 @@
 import { supabaseAdmin } from './supabase';
 import { HardFilterResult } from './types';
 import { estimateCarbohydrate } from './carbohydrate';
+import { loadDietExposureAudit } from './dietPeriods';
 
 /**
  * Virtual nutrient: carbohydrate is never printed on a guaranteed-analysis
@@ -150,6 +151,12 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     const applicable = ((contraRows ?? []) as Contraindication[]).filter((row) =>
       dogConditions.has(row.condition.toLowerCase().trim())
     );
+    const currentDietExposure = await loadDietExposureAudit(dogId, [
+      ...(restrictions ?? []).map((row) => row.substance),
+      ...applicable
+        .map((row) => row.contraindicated_ingredient)
+        .filter((value): value is string => Boolean(value)),
+    ]);
 
     const hasIngredientRestrictions = !!restrictions && restrictions.length > 0;
     // DECISION 1: any recorded health condition triggers the gate, whether or
@@ -173,7 +180,14 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
       .eq('is_treat', false);
 
     if (foodError) throw foodError;
-    if (!foods) return { excluded_foods: [], excluded_reasons: [], suitable_food_ids: [] };
+    if (!foods) {
+      return {
+        excluded_foods: [],
+        excluded_reasons: [],
+        suitable_food_ids: [],
+        current_diet_exposure: currentDietExposure,
+      };
+    }
 
     // Only fetched when actually needed — a dog with no ingredient-based
     // exclusion criterion never pays this extra query.
@@ -317,6 +331,7 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
       excluded_foods: Array.from(excluded_foods),
       excluded_reasons,
       suitable_food_ids,
+      current_diet_exposure: currentDietExposure,
     };
   } catch (error) {
     console.error('Hard filter error:', error);

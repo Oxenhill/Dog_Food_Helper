@@ -39,23 +39,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Food event not found' }, { status: 404 });
     }
 
-    // Ending the open main food means the dog is no longer on a recorded food.
-    // The pointer must follow, or `dogs.current_food_id` keeps naming a food
-    // the owner has explicitly stopped.
-    if (event.event_type === 'main_food') {
-      const { error: pointerError } = await supabaseAdmin
-        .from('dogs')
-        .update({
-          current_food_id: null,
-          current_food_freetext: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', dog_id);
-      if (pointerError) {
-        console.error(`endFoodEvent: dog ${dog_id} pointer clear failed`, pointerError);
-      }
-    }
-
     return NextResponse.json(
       {
         message: 'Food event ended',

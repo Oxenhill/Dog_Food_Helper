@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { OutcomeMetric } from '@/lib/types';
+import { getDietPeriodAt } from '@/lib/dietPeriods';
 
 /**
  * establishBaseline (Part B)
@@ -70,10 +71,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify dog belongs to user, and grab current_food_id as the baseline anchor
+    // Verify dog belongs to user. Diet attribution is loaded from the period
+    // active on the baseline date, never from the deprecated singular pointer.
     const { data: dog, error: dogError } = await supabaseAdmin
       .from('dogs')
-      .select('id, current_food_id, current_food_freetext')
+      .select('id')
       .eq('id', dog_id)
       .eq('owner_id', userId)
       .single();
@@ -101,23 +103,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!dog.current_food_id && !dog.current_food_freetext) {
-      // Not a hard failure — the dog may genuinely not have a food on record yet
-      // — but the baseline's food anchor will be null. Logged, not silently guessed.
-      console.warn(
-        `establishBaseline: dog ${dog_id} has no current_food_id/freetext to anchor baseline to`
-      );
-    }
-
     const establishedAt = log_date ? new Date(log_date).toISOString() : new Date().toISOString();
     const logDateStr = establishedAt.split('T')[0];
+    const activeDietPeriod = await getDietPeriodAt(dog_id, logDateStr);
+    if (!activeDietPeriod) {
+      console.warn(`establishBaseline: dog ${dog_id} has no diet period to anchor baseline to`);
+    }
 
     const { data: baseline, error: baselineError } = await supabaseAdmin
       .from('dog_baselines')
       .insert({
         dog_id,
         established_at: establishedAt,
-        food_at_baseline_id: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        // DEPRECATED singular provenance. Never choose a component.
+        food_at_baseline_id: null,
       })
       .select()
       .single();
@@ -158,6 +158,7 @@ export async function POST(request: NextRequest) {
       raw_value: string | null;
       trend: null;
       within_expected_variability_window: boolean;
+      diet_period_id: string | null;
       food_id_active: string | null;
       notes: null;
     }[] = [
@@ -168,7 +169,8 @@ export async function POST(request: NextRequest) {
         raw_value: String(body_condition_score),
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       },
       {
@@ -178,7 +180,8 @@ export async function POST(request: NextRequest) {
         raw_value: coat_condition,
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       },
       {
@@ -188,7 +191,8 @@ export async function POST(request: NextRequest) {
         raw_value: stool_odor,
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       },
       {
@@ -198,7 +202,8 @@ export async function POST(request: NextRequest) {
         raw_value: gas_frequency,
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       },
       {
@@ -208,7 +213,8 @@ export async function POST(request: NextRequest) {
         raw_value: gas_odor,
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       },
     ];
@@ -221,7 +227,8 @@ export async function POST(request: NextRequest) {
         raw_value: behaviourTagValue,
         trend: null,
         within_expected_variability_window: false,
-        food_id_active: dog.current_food_id ?? null,
+        diet_period_id: activeDietPeriod?.id ?? null,
+        food_id_active: null,
         notes: null,
       });
     }

@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
 
     const rowsToInsert = await Promise.all(
       entries.map(async (e: { metric: OutcomeMetric; trend: TrendDirection; notes?: string }) => {
-        const { withinExpectedVariabilityWindow, foodIdActive } = await computeVariabilityWindow(
+        const { withinExpectedVariabilityWindow, dietPeriodId } = await computeVariabilityWindow(
           dog_id,
           e.metric,
           logDateStr
@@ -77,12 +77,9 @@ export async function POST(request: NextRequest) {
           raw_value: null,
           trend: e.trend,
           within_expected_variability_window: withinExpectedVariabilityWindow,
-          // Strictly the food event that was open ON THE LOG DATE — never a
-          // fallback to `dogs.current_food_id`, which describes what the dog
-          // is eating NOW. Backfilling "now" onto a past log would attribute
-          // that log's outcome to a food the dog may not have been eating,
-          // which is worse than leaving it unattributed.
-          food_id_active: foodIdActive,
+          diet_period_id: dietPeriodId,
+          // DEPRECATED singular provenance. Never select one component.
+          food_id_active: null,
           notes: e.notes ?? null,
         };
       })

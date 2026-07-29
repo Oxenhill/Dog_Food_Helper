@@ -68,7 +68,11 @@ export async function GET(request: NextRequest, { params }: { params: { dogId: s
     // A switch analysis with no predecessor is a first food period, not a
     // change. Counting it as a "switch" would overstate how much evidence
     // there is.
-    const switchCount = analyses.filter((a) => a.from_event_id != null).length;
+    const switchCount = analyses.filter(
+      (analysis) =>
+        analysis.from_diet_period_id != null && analysis.analysis_status === 'analysable'
+    ).length;
+    const unanalysable = analyses.filter((analysis) => analysis.analysis_status === 'unanalysable');
     const failedSwitchCount = suspects.length > 0
       ? Math.max(...suspects.map((s) => s.poor_food_count))
       : 0;
@@ -81,6 +85,10 @@ export async function GET(request: NextRequest, { params }: { params: { dogId: s
         narrowed_enough: narrowedEnough,
         failed_switch_count: failedSwitchCount,
         switches_analysed: switchCount,
+        unanalysable_periods: unanalysable.length,
+        unanalysable_reasons: Array.from(
+          new Set(unanalysable.map((analysis) => analysis.unanalysable_reason).filter(Boolean))
+        ),
         min_failed_switches_needed: SWITCH_ANALYSIS_THRESHOLDS.minFailedSwitchesToSurface,
 
         // Withheld until the set is genuinely small and backed by more than
@@ -96,9 +104,11 @@ export async function GET(request: NextRequest, { params }: { params: { dogId: s
 
         switches: analyses.map((a) => ({
           switched_at: a.switched_at,
-          from_food_id: a.from_food_id,
-          to_food_id: a.to_food_id,
-          is_switch: a.from_event_id != null,
+          from_diet_period_id: a.from_diet_period_id,
+          to_diet_period_id: a.to_diet_period_id,
+          is_switch: a.from_diet_period_id != null,
+          analysis_status: a.analysis_status,
+          unanalysable_reason: a.unanalysable_reason,
           ingredient_sets_known: a.ingredient_sets_known,
           added_count: a.added_ingredients.length,
           removed_count: a.removed_ingredients.length,

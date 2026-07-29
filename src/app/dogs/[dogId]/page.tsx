@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { authHeaders, getUserId } from '@/lib/clientAuth';
-import { Dog } from '@/lib/types';
+import { DietExposureAudit, Dog } from '@/lib/types';
 import type { FoodFullIngredient } from '@/lib/foodFull';
 import CurrentFoodCard from '@/components/CurrentFoodCard';
 import FoodInsightsCard from '@/components/FoodInsightsCard';
@@ -44,6 +44,7 @@ interface RecommendationsResponse {
   total_candidates: number;
   /** Present on a saved set and on a fresh generate. */
   generated_at?: string;
+  current_diet_exposure?: DietExposureAudit;
 }
 
 /** How many ingredients to preview inline before deferring to the detail page. */
@@ -235,10 +236,9 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
           </Link>
         </div>
 
-        {/* Food attribution — every log entry is tied to the food event open
-            on its date, so this is what makes the correlation engine possible
-            at all. Placed above recommendations because it is the input to
-            them, not a detail. */}
+        {/* Diet attribution — every log entry is tied to the complete component
+            set active on its date. Placed above recommendations because it is
+            an input to both safety and outcome reasoning, not a detail. */}
         <CurrentFoodCard dogId={params.dogId} />
 
         <FoodInsightsCard dogId={params.dogId} />
@@ -281,6 +281,22 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
           {recs && (
             <div className="mt-4 flex flex-col gap-4">
               <p className="help-text italic">{recs.disclaimer}</p>
+              {recs.current_diet_exposure?.status === 'unconfirmable' && (
+                <div className="callout-disclaimer">
+                  Your dog&apos;s recorded diet has{' '}
+                  <span className="metric">{recs.current_diet_exposure.opaque_component_count}</span>{' '}
+                  component
+                  {recs.current_diet_exposure.opaque_component_count === 1 ? '' : 's'} without
+                  confirmable composition data. Bowl cannot confirm the diet is clear of recorded
+                  sensitivities from a partial ingredient picture.
+                </div>
+              )}
+              {(recs.current_diet_exposure?.restricted_ingredients_present.length ?? 0) > 0 && (
+                <div className="callout-alarm">
+                  Recorded diet exposure includes:{' '}
+                  {recs.current_diet_exposure?.restricted_ingredients_present.join(', ')}.
+                </div>
+              )}
               {recs.message && <p className="muted text-[14px]">{recs.message}</p>}
               {recs.recommendations.map((r, i) => {
                 const ingredients = r.ingredients ?? [];
