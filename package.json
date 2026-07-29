@@ -11,7 +11,8 @@
     "seed:phase4": "tsx --env-file=.env scripts/seedPhase4Research.ts",
     "research:discover": "tsx scripts/researchDiscoveryDryRun.ts",
     "research:gate2": "tsx --env-file=.env scripts/researchGate2Run.ts",
-    "research:gate3:insert": "tsx --env-file=.env scripts/researchGate3Insert.ts"
+    "research:gate3:insert": "tsx --env-file=.env scripts/researchGate3Insert.ts",
+    "research:brain:populate": "tsx --env-file=.env scripts/researchBrainPopulate.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.4",

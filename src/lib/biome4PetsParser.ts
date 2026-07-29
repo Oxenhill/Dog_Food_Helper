@@ -1,6 +1,6 @@
 import type { ExtractedPdfPage, ExtractedPdfText } from './pdfText';
 
-export type DogDocumentProcessingStatus = 'extracted' | 'needs_review';
+export type DogDocumentProcessingStatus = 'extracted' | 'partial';
 
 export interface DogDocumentFindingDraft {
   finding_type: 'biome_marker' | 'classification';
@@ -564,7 +564,7 @@ export function parseBiome4Pets(extracted: ExtractedPdfText): Biome4PetsParseRes
       unmatchedTaxa.size === 0 &&
       !findings.some((finding) => finding.review_status === 'needs_review')
         ? 'extracted'
-        : 'needs_review',
+        : 'partial',
     findings,
     unavailable_fields: [...unavailable],
     discarded_findings: discarded,

@@ -1,0 +1,322 @@
+import { createHash } from 'node:crypto';
+import { embedMany } from 'ai';
+import { chunkText } from './embeddingPipeline';
+import type { ResearchCandidate } from './researchEvidence';
+import type { Gate1ManifestCandidate } from './researchGate2';
+import { prepareSelectedSources } from './researchGate2Sources';
+import { supabaseAdmin } from './supabase';
+import type { ResearchTopic } from './types';
+
+export const RESEARCH_BRAIN_EMBEDDING_MODEL = 'voyage/voyage-4' as const;
+export const RESEARCH_BRAIN_EMBEDDING_DIMENSIONS = 1024;
+export const RESEARCH_BRAIN_CHUNK_CHARACTERS = 1800;
+const VOYAGE_INPUT_USD_PER_MILLION_TOKENS = 0.06;
+
+export interface ResearchEmbeddingRun {
+  vectors: number[][];
+  inputTokens: number;
+  estimatedCostUsd: number;
+}
+
+export interface ResearchIngestionResult {
+  documentId: string;
+  chunkCount: number;
+  duplicate: boolean;
+  embedding: Omit<ResearchEmbeddingRun, 'vectors'>;
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function assertGatewayConfigured(): void {
+  if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
+    throw new Error(
+      'Vercel AI Gateway is not configured. Research processing was not started.'
+    );
+  }
+}
+
+/**
+ * Gateway-only semantic embedding. No direct Voyage credential is read and no
+ * local pseudo-vector fallback exists for the research brain.
+ */
+export async function embedResearchTexts(texts: string[]): Promise<ResearchEmbeddingRun> {
+  assertGatewayConfigured();
+  const vectors: number[][] = [];
+  let inputTokens = 0;
+
+  for (let offset = 0; offset < texts.length; offset += 64) {
+    const values = texts.slice(offset, offset + 64);
+    const result = await embedMany({
+      model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+      values,
+    });
+    if (
+      result.embeddings.length !== values.length ||
+      result.embeddings.some(
+        (embedding) => embedding.length !== RESEARCH_BRAIN_EMBEDDING_DIMENSIONS
+      )
+    ) {
+      throw new Error(
+        `Voyage returned an unexpected embedding shape; expected ${RESEARCH_BRAIN_EMBEDDING_DIMENSIONS} dimensions.`
+      );
+    }
+    vectors.push(...result.embeddings);
+    const usage = result.usage as { tokens?: number; inputTokens?: number } | undefined;
+    inputTokens += usage?.tokens ?? usage?.inputTokens ?? Math.ceil(
+      values.reduce((sum, value) => sum + value.length, 0) / 4
+    );
+  }
+
+  return {
+    vectors,
+    inputTokens,
+    estimatedCostUsd: Number(
+      ((inputTokens / 1_000_000) * VOYAGE_INPUT_USD_PER_MILLION_TOKENS).toFixed(6)
+    ),
+  };
+}
+
+function toManifestCandidate(candidate: ResearchCandidate): Gate1ManifestCandidate {
+  return {
+    source_id: candidate.source_id,
+    title: candidate.title,
+    doi: candidate.doi,
+    pmid: candidate.pmid,
+    pmcid: candidate.pmcid,
+    journal: candidate.journal,
+    publication_year: candidate.publication_year,
+    source_url: candidate.source_url,
+    full_text_url: candidate.full_text_url,
+    open_access: candidate.open_access,
+    abstract_only: candidate.abstract_only,
+    evidence_grade: candidate.evidence_grade,
+    evidence_scope: candidate.evidence_scope,
+    study_design: candidate.study_design,
+    species: candidate.species,
+    species_terms: candidate.species_terms,
+    mesh_headings: candidate.mesh_headings,
+    sample_size: candidate.sample_size,
+    funding_declaration: candidate.funding_declaration,
+    competing_interests_declaration: candidate.competing_interests_declaration,
+    funding_independent: candidate.funding_independent,
+    is_preprint: candidate.is_preprint,
+    retracted: candidate.retracted,
+    grading_inputs_complete: candidate.grading_inputs_complete,
+    missing_grading_inputs: candidate.missing_grading_inputs,
+    topic_memberships: [
+      {
+        key: candidate.discovery_topic,
+        group: candidate.topic_group,
+        label: candidate.discovery_topic_label,
+        query: candidate.query,
+      },
+    ],
+  };
+}
+
+async function existingDocument(
+  sourceId: string | null,
+  doi: string | null
+): Promise<{ id: string } | null> {
+  if (sourceId) {
+    const { data, error } = await supabaseAdmin
+      .from('research_documents')
+      .select('id')
+      .eq('source_name', 'pubmed')
+      .eq('source_id', sourceId)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+  if (doi) {
+    const { data, error } = await supabaseAdmin
+      .from('research_documents')
+      .select('id')
+      .ilike('doi', doi)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+  return null;
+}
+
+async function storeDocumentWithVoyage(input: {
+  jobId: string;
+  topic: ResearchTopic;
+  documentRow: Record<string, unknown>;
+  text: string;
+}): Promise<ResearchIngestionResult> {
+  const chunks = chunkText(input.text, RESEARCH_BRAIN_CHUNK_CHARACTERS);
+  const embedding = await embedResearchTexts(chunks);
+
+  const { data: document, error: documentError } = await supabaseAdmin
+    .from('research_documents')
+    .insert({
+      ...input.documentRow,
+      topic: input.topic,
+      review_status: 'pending',
+      ingestion_job_id: input.jobId,
+      retrieved_at: new Date().toISOString(),
+    })
+    .select('id')
+    .single();
+  if (documentError || !document) {
+    throw documentError ?? new Error('Could not store the research document');
+  }
+
+  const { data: chunkRows, error: chunkError } = await supabaseAdmin
+    .from('research_chunks')
+    .insert(
+      chunks.map((content, chunk_index) => ({
+        document_id: document.id,
+        content,
+        chunk_index,
+        embedding: null,
+      }))
+    )
+    .select('id, content');
+  if (chunkError || !chunkRows || chunkRows.length !== chunks.length) {
+    throw chunkError ?? new Error('Could not store all research chunks');
+  }
+
+  const semanticRows = chunkRows.map((chunk, index) => ({
+    entity_type: 'research_chunk',
+    entity_id: chunk.id,
+    content_sha256: sha256(chunk.content),
+    embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+    embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
+    embedding: embedding.vectors[index],
+  }));
+  for (let offset = 0; offset < semanticRows.length; offset += 50) {
+    const { error } = await supabaseAdmin
+      .from('research_semantic_embeddings')
+      .insert(semanticRows.slice(offset, offset + 50));
+    if (error) throw error;
+  }
+
+  return {
+    documentId: document.id,
+    chunkCount: chunks.length,
+    duplicate: false,
+    embedding: {
+      inputTokens: embedding.inputTokens,
+      estimatedCostUsd: embedding.estimatedCostUsd,
+    },
+  };
+}
+
+export async function ingestDiscoveryCandidate(input: {
+  jobId: string;
+  candidateId: string;
+  candidate: ResearchCandidate;
+}): Promise<ResearchIngestionResult> {
+  if (input.candidate.retracted) {
+    throw new Error('Retracted research cannot be imported');
+  }
+  const duplicate = await existingDocument(
+    input.candidate.source_id,
+    input.candidate.doi
+  );
+  if (duplicate) {
+    await supabaseAdmin
+      .from('research_discovery_candidates')
+      .update({ selected: true, imported_document_id: duplicate.id })
+      .eq('id', input.candidateId);
+    return {
+      documentId: duplicate.id,
+      chunkCount: 0,
+      duplicate: true,
+      embedding: { inputTokens: 0, estimatedCostUsd: 0 },
+    };
+  }
+
+  const [source] = await prepareSelectedSources([
+    toManifestCandidate(input.candidate),
+  ]);
+  const result = await storeDocumentWithVoyage({
+    jobId: input.jobId,
+    topic: input.candidate.topic,
+    text: source.plain_text,
+    documentRow: {
+      topic_group: input.candidate.topic_group,
+      discovery_topic: input.candidate.discovery_topic,
+      source_name: 'pubmed',
+      source_id: input.candidate.source_id,
+      source_url: input.candidate.source_url,
+      title: input.candidate.title,
+      doi: input.candidate.doi?.toLowerCase() ?? null,
+      pmid: input.candidate.pmid,
+      pmcid: input.candidate.pmcid,
+      journal: input.candidate.journal,
+      publication_year: input.candidate.publication_year,
+      study_design: input.candidate.study_design,
+      species: input.candidate.species,
+      sample_size: input.candidate.sample_size,
+      funding_declaration: source.funding_declaration,
+      competing_interests_declaration: source.competing_interests_declaration,
+      funding_independent: input.candidate.funding_independent,
+      grading_input_sources: input.candidate.grading_input_sources,
+      is_preprint: input.candidate.is_preprint,
+      open_access: source.content_source === 'europe_pmc_jats',
+      abstract_only: source.content_source === 'pubmed_abstract',
+      access_type:
+        source.content_source === 'europe_pmc_jats'
+          ? 'open_access_full_text'
+          : 'abstract_only',
+      license: source.license,
+      retracted: false,
+      retraction_checked_at: source.content_retrieved_at,
+      evidence_scope: input.candidate.evidence_scope,
+      source_metadata: {
+        ...input.candidate.source_metadata,
+        in_app_ingestion: {
+          job_id: input.jobId,
+          content_source: source.content_source,
+          content_endpoint: source.content_endpoint,
+          source_payload_sha256: source.source_payload_sha256,
+          plain_text_sha256: sha256(source.plain_text),
+          embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+          embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
+        },
+      },
+    },
+  });
+  await supabaseAdmin
+    .from('research_discovery_candidates')
+    .update({ selected: true, imported_document_id: result.documentId })
+    .eq('id', input.candidateId);
+  return result;
+}
+
+export async function ingestUploadedResearchPdf(input: {
+  jobId: string;
+  topic: ResearchTopic;
+  title: string;
+  sourceUrl: string | null;
+  originalFilename: string;
+  text: string;
+}): Promise<ResearchIngestionResult> {
+  return storeDocumentWithVoyage({
+    jobId: input.jobId,
+    topic: input.topic,
+    text: input.text,
+    documentRow: {
+      title: input.title,
+      source_url: input.sourceUrl,
+      abstract_only: false,
+      open_access: false,
+      access_type: 'uploaded_full_text_private',
+      evidence_scope: 'canine_direct',
+      source_metadata: {
+        in_app_upload: {
+          original_filename: input.originalFilename,
+          plain_text_sha256: sha256(input.text),
+          embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+          embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
+        },
+      },
+    },
+  });
+}

@@ -2,6 +2,8 @@ import { supabaseAdmin } from './supabase';
 import { HardFilterResult } from './types';
 import { estimateCarbohydrate } from './carbohydrate';
 import { loadDietExposureAudit } from './dietPeriods';
+import { ageInMonths } from './lifeStage';
+import type { LifeStage } from './types';
 
 /**
  * Virtual nutrient: carbohydrate is never printed on a guaranteed-analysis
@@ -51,8 +53,85 @@ const UNAVAILABLE_STATUSES = new Set(['unavailable', 'discontinued']);
 
 export interface CandidateFoodRow {
   id: string;
+  name: string;
   ingredient_data_status: string;
   product_availability_status: string;
+  suitable_age_min_months: number | null;
+  suitable_age_max_months: number | null;
+}
+
+export interface DogLifeStageContext {
+  lifeStage: LifeStage | null;
+  ageMonths: number | null;
+}
+
+const SENIOR_PRODUCT_PATTERN = /\bsenior\b/i;
+const GROWTH_PRODUCT_PATTERN = /\b(?:puppy|junior)\b/i;
+
+/**
+ * A food explicitly recorded for a different life stage is not a valid meal
+ * candidate. Product-name matching is deliberately limited to exact
+ * whole-word stage labels; "juniper" must never be treated as "junior".
+ */
+export function foodLifeStageEligibility(
+  food: Pick<
+    CandidateFoodRow,
+    'name' | 'suitable_age_min_months' | 'suitable_age_max_months'
+  >,
+  dog: DogLifeStageContext
+): { eligible: boolean; reason: string | null } {
+  const explicitlySenior = SENIOR_PRODUCT_PATTERN.test(food.name);
+  const explicitlyGrowth = GROWTH_PRODUCT_PATTERN.test(food.name);
+
+  if (explicitlySenior && dog.lifeStage !== 'senior') {
+    return {
+      eligible: false,
+      reason:
+        dog.lifeStage === null
+          ? 'Senior life-stage food cannot be confirmed suitable because the dog’s life stage is unknown.'
+          : 'Senior life-stage food is not suitable for this dog’s recorded life stage.',
+    };
+  }
+  if (explicitlyGrowth && dog.lifeStage !== 'puppy') {
+    return {
+      eligible: false,
+      reason:
+        dog.lifeStage === null
+          ? 'Puppy/junior food cannot be confirmed suitable because the dog’s life stage is unknown.'
+          : 'Puppy/junior food is not suitable for this dog’s recorded life stage.',
+    };
+  }
+
+  const hasRecordedRange =
+    food.suitable_age_min_months !== null || food.suitable_age_max_months !== null;
+  if (!hasRecordedRange) return { eligible: true, reason: null };
+  if (dog.ageMonths === null) {
+    return {
+      eligible: false,
+      reason: 'Age-restricted food cannot be confirmed suitable because the dog’s age is unknown.',
+    };
+  }
+
+  if (
+    food.suitable_age_min_months !== null &&
+    dog.ageMonths < food.suitable_age_min_months
+  ) {
+    return {
+      eligible: false,
+      reason: `Food is recorded for dogs aged ${food.suitable_age_min_months} months or older.`,
+    };
+  }
+  if (
+    food.suitable_age_max_months !== null &&
+    dog.ageMonths > food.suitable_age_max_months
+  ) {
+    return {
+      eligible: false,
+      reason: `Food is recorded for dogs aged ${food.suitable_age_max_months} months or younger.`,
+    };
+  }
+
+  return { eligible: true, reason: null };
 }
 
 /**
@@ -97,10 +176,20 @@ export function dogNeedsIngredientGate(
  */
 export function filterCandidateFoods(
   foods: CandidateFoodRow[],
-  opts: { needsIngredientGate: boolean; foodIdsWithIngredients: ReadonlySet<string> }
+  opts: {
+    needsIngredientGate: boolean;
+    foodIdsWithIngredients: ReadonlySet<string>;
+    dogLifeStage?: DogLifeStageContext;
+  }
 ): CandidateFoodRow[] {
   return foods.filter((food) => {
     if (UNAVAILABLE_STATUSES.has(food.product_availability_status)) return false;
+    if (
+      opts.dogLifeStage &&
+      !foodLifeStageEligibility(food, opts.dogLifeStage).eligible
+    ) {
+      return false;
+    }
     if (opts.needsIngredientGate) {
       if (food.ingredient_data_status !== 'complete') return false;
       if (!opts.foodIdsWithIngredients.has(food.id)) return false;
@@ -122,14 +211,30 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
 
   try {
     // Fetch the dog's ingredient restrictions and diagnosed health conditions.
-    const [{ data: restrictions, error: restrictionError }, { data: conditions, error: conditionError }] =
+    const [
+      { data: restrictions, error: restrictionError },
+      { data: conditions, error: conditionError },
+      { data: dogRow, error: dogError },
+    ] =
       await Promise.all([
         supabaseAdmin.from('dog_restrictions').select('substance').eq('dog_id', dogId),
         supabaseAdmin.from('dog_health_conditions').select('condition').eq('dog_id', dogId),
+        supabaseAdmin
+          .from('dogs')
+          .select('date_of_birth, life_stage')
+          .eq('id', dogId)
+          .maybeSingle(),
       ]);
 
     if (restrictionError) throw restrictionError;
     if (conditionError) throw conditionError;
+    if (dogError) throw dogError;
+    if (!dogRow) throw new Error('Dog not found');
+
+    const dogLifeStage: DogLifeStageContext = {
+      lifeStage: dogRow.life_stage as LifeStage | null,
+      ageMonths: dogRow.date_of_birth ? ageInMonths(dogRow.date_of_birth) : null,
+    };
 
     // Pull only approved contraindication rules; match to this dog's
     // conditions in memory (case-insensitive). Approved-only is enforced here
@@ -176,7 +281,9 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     // candidates for "what should I feed my dog".
     const { data: foods, error: foodError } = await supabaseAdmin
       .from('foods')
-      .select('id, brand, name, ingredient_data_status, product_availability_status')
+      .select(
+        'id, brand, name, ingredient_data_status, product_availability_status, suitable_age_min_months, suitable_age_max_months'
+      )
       .eq('is_treat', false);
 
     if (foodError) throw foodError;
@@ -203,7 +310,7 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
 
     const candidateFoods = filterCandidateFoods(
       foods as unknown as CandidateFoodRow[],
-      { needsIngredientGate, foodIdsWithIngredients }
+      { needsIngredientGate, foodIdsWithIngredients, dogLifeStage }
     );
     const candidateFoodIds = new Set(candidateFoods.map((f) => f.id));
 
@@ -221,6 +328,14 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
         if (failsGate) {
           addExcluded(food.id, 'No ingredient list on record, cannot confirm absence.');
         }
+      }
+    }
+
+    for (const food of foods as unknown as CandidateFoodRow[]) {
+      if (UNAVAILABLE_STATUSES.has(food.product_availability_status)) continue;
+      const eligibility = foodLifeStageEligibility(food, dogLifeStage);
+      if (!eligibility.eligible && eligibility.reason) {
+        addExcluded(food.id, eligibility.reason);
       }
     }
 

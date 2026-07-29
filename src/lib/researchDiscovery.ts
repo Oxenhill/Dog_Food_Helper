@@ -566,3 +566,140 @@ export function uniqueCandidates(run: DiscoveryRunResult): ResearchCandidate[] {
     .flatMap((result) => result.candidates)
     .filter((candidate) => !candidate.duplicate_of);
 }
+
+function identifierFromInput(value: string): { pmid: string | null; doi: string | null } {
+  const trimmed = value.trim();
+  if (/^\d{5,10}$/.test(trimmed)) return { pmid: trimmed, doi: null };
+
+  try {
+    const url = new URL(trimmed);
+    const pubmedMatch = url.pathname.match(/\/(\d{5,10})\/?$/);
+    if (
+      pubmedMatch &&
+      ['pubmed.ncbi.nlm.nih.gov', 'www.ncbi.nlm.nih.gov'].includes(
+        url.hostname.toLowerCase()
+      )
+    ) {
+      return { pmid: pubmedMatch[1], doi: null };
+    }
+    if (url.hostname.toLowerCase() === 'doi.org') {
+      const doi = decodeURIComponent(url.pathname.replace(/^\/+/, '')).toLowerCase();
+      return { pmid: null, doi: doi || null };
+    }
+    const doiInPath = decodeURIComponent(url.pathname).match(/10\.\d{4,9}\/[^\s/?#]+/i);
+    if (doiInPath) return { pmid: null, doi: doiInPath[0].toLowerCase() };
+  } catch {
+    // DOI text is handled below.
+  }
+
+  const doi = trimmed.replace(/^doi:\s*/i, '').match(/10\.\d{4,9}\/\S+/i)?.[0];
+  return { pmid: null, doi: doi?.replace(/[.,;]+$/, '').toLowerCase() ?? null };
+}
+
+async function findPmidForDoi(
+  doi: string,
+  fetchImpl: typeof fetch,
+  beforeNcbiRequest: () => Promise<void>
+): Promise<string | null> {
+  const params = new URLSearchParams({
+    db: 'pubmed',
+    term: `"${doi}"[AID]`,
+    retmode: 'json',
+    retmax: '2',
+    tool: EUTILS_TOOL,
+    email: EUTILS_EMAIL,
+  });
+  await beforeNcbiRequest();
+  const response = await fetchWithRetry(
+    `${PUBMED_SEARCH_URL}?${params}`,
+    fetchImpl,
+    'application/json'
+  );
+  if (!response.ok) return null;
+  const body = (await response.json()) as PubMedSearchResponse;
+  const ids = body.esearchresult?.idlist ?? [];
+  return ids.length === 1 ? ids[0] : null;
+}
+
+/**
+ * Resolve a pasted PMID/PubMed URL/DOI to the same structured candidate shape
+ * used by discovery. No arbitrary journal HTML is scraped.
+ */
+export async function resolveResearchCandidate(
+  identifierOrUrl: string,
+  topicKey: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<ResearchCandidate> {
+  const topic = RESEARCH_DISCOVERY_TOPICS.find((candidate) => candidate.key === topicKey);
+  if (!topic) throw new Error('Unknown research topic');
+
+  const identifier = identifierFromInput(identifierOrUrl);
+  if (!identifier.pmid && !identifier.doi) {
+    throw new Error('Paste a PubMed URL, PMID, or DOI');
+  }
+
+  const beforeNcbiRequest = createRateGate(fetchImpl === fetch ? 500 : 0);
+  const pmid =
+    identifier.pmid ??
+    (identifier.doi
+      ? await findPmidForDoi(identifier.doi, fetchImpl, beforeNcbiRequest)
+      : null);
+  if (!pmid) throw new Error('That DOI did not resolve to one PubMed record');
+
+  const records = await fetchPubMedRecords([pmid], fetchImpl, beforeNcbiRequest);
+  const record = records.get(pmid);
+  if (!record) throw new Error('PubMed did not return that record');
+
+  const checkedAt = new Date().toISOString();
+  const query = `manual in-app import: PMID ${pmid}`;
+  let candidate = mapPubMedRecord(record, topic, query, checkedAt);
+  if (
+    candidate.evidence_scope === 'canine_direct' &&
+    (!candidate.mesh_headings.includes('Dogs') || candidate.species !== 'dog')
+  ) {
+    throw new Error('The structured PubMed record is not direct canine evidence');
+  }
+
+  const europe = (await resolveEuropePmcMetadata([pmid], fetchImpl)).get(pmid);
+  const openAccess =
+    europe?.isOpenAccess === 'Y' && europe?.inPMC === 'Y' && Boolean(europe.pmcid);
+  candidate = {
+    ...candidate,
+    pmcid: europe?.pmcid ?? candidate.pmcid,
+    full_text_url: openAccess
+      ? `https://europepmc.org/articles/${europe!.pmcid}`
+      : null,
+    open_access: openAccess,
+    abstract_only: !openAccess,
+    license: europe?.license?.trim() || null,
+    retracted:
+      candidate.retracted ||
+      europe?.isRetracted === true ||
+      europe?.isRetracted === 'Y',
+    source_metadata: {
+      ...candidate.source_metadata,
+      europe_pmc: europe ?? null,
+      manual_import_identifier: identifierOrUrl,
+    },
+  };
+
+  if (candidate.open_access && candidate.pmcid) {
+    const jats = await fetchJatsFunding(candidate.pmcid, fetchImpl);
+    if (jats.metadata) {
+      candidate = applyJatsFundingMetadata(candidate, jats.metadata, jats.endpoint);
+    } else {
+      candidate = {
+        ...candidate,
+        full_text_url: null,
+        open_access: false,
+        abstract_only: true,
+        grading_input_sources: {
+          ...candidate.grading_input_sources,
+          funding_independent: `Europe PMC fullTextXML unavailable: ${jats.error}`,
+        },
+      };
+    }
+  }
+  if (candidate.retracted) throw new Error('Retracted research cannot be imported');
+  return candidate;
+}

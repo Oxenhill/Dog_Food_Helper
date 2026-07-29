@@ -77,14 +77,25 @@ export async function GET(request: NextRequest) {
     query = query.eq('status', requestedStatus);
   }
 
-  const claimsRes = await query;
+  const [claimsRes, clusteredRes] = await Promise.all([
+    query,
+    supabaseAdmin.from('research_evidence_cluster_members').select('claim_id'),
+  ]);
   if (claimsRes.error) {
     return NextResponse.json({ error: claimsRes.error.message }, { status: 500 });
+  }
+  if (clusteredRes.error) {
+    return NextResponse.json({ error: clusteredRes.error.message }, { status: 500 });
   }
 
   // The project does not have generated Supabase Database types, so dynamic
   // column lists otherwise resolve to GenericStringError at build time.
-  const claims = (claimsRes.data ?? []) as unknown as ResearchClaim[];
+  const clusteredClaimIds = new Set(
+    (clusteredRes.data ?? []).map((member) => member.claim_id)
+  );
+  const claims = ((claimsRes.data ?? []) as unknown as ResearchClaim[]).filter(
+    (claim) => !clusteredClaimIds.has(claim.id)
+  );
   if (claims.length === 0) return NextResponse.json({ claims: [] });
 
   const documentIds = [...new Set(claims.map((claim) => claim.document_id))];

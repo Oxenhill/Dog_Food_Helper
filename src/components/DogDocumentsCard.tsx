@@ -4,6 +4,21 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { authHeaders } from '@/lib/clientAuth';
 
+interface DogDocumentFinding {
+  id: string;
+  document_id: string;
+  finding_type: string;
+  marker_name: string;
+  value: string | number | null;
+  unit: string | null;
+  reference_range: string | null;
+  interpretation_flag: string | null;
+  source_kind: string;
+  review_status: 'accepted' | 'needs_review';
+  verbatim_source_text: string;
+  created_at: string;
+}
+
 interface DogDocument {
   id: string;
   dog_id: string;
@@ -20,13 +35,14 @@ interface DogDocument {
     | 'unsupported_lab'
     | 'failed';
   created_at: string;
+  findings: DogDocumentFinding[];
 }
 
 const STATUS_LABELS: Record<DogDocument['processing_status'], string> = {
-  pending: 'Text extracted - findings pending review',
-  extracted: 'Extracted',
-  partial: 'Partially extracted',
-  needs_review: 'Needs review',
+  pending: 'Reading report',
+  extracted: 'Findings extracted',
+  partial: 'Usable findings extracted; uncertain items excluded',
+  needs_review: 'Storage problem',
   unsupported_lab: 'Lab format not supported',
   failed: 'Text extraction failed',
 };
@@ -154,9 +170,9 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
       );
       if (body.warning) {
         setWarning(body.warning);
-      } else if (body.document.processing_status === 'needs_review') {
+      } else if (body.document.processing_status === 'partial') {
         setWarning(
-          'Some findings need review. Unattributable chart values were left empty and canonical name suggestions were not auto-accepted.'
+          'Exact findings are already available to Bowl. Uncertain or misspelled items were excluded rather than guessed.'
         );
       }
       if (fileInput.current) fileInput.current.value = '';
@@ -173,8 +189,9 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
         Lab reports &amp; documents
       </h2>
       <p className="lead mt-1">
-        PDFs are uploaded privately and deleted after successful extraction. Check the extracted
-        text to see exactly what Bowl could read.
+        PDFs are uploaded privately and deleted after successful extraction. Exact findings become
+        part of your dog&apos;s profile automatically; uncertain items are excluded rather than sent
+        to an admin queue.
       </p>
 
       <form className="mt-5 grid gap-4 sm:grid-cols-[1fr_auto]" onSubmit={upload}>
@@ -245,7 +262,6 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
                   </p>
                 </div>
                 {document.processing_status === 'needs_review' ||
-                document.processing_status === 'partial' ||
                 document.processing_status === 'unsupported_lab' ||
                 document.processing_status === 'failed' ? (
                   <span className="callout-alarm px-2 py-1 text-[12px] font-semibold">
@@ -257,6 +273,46 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
                   </span>
                 )}
               </div>
+
+              {document.findings?.length > 0 && (
+                <div className="mt-4 grid gap-3">
+                  <p className="eyebrow">Profile findings</p>
+                  {document.findings.map((finding) => {
+                    const isUsed = finding.review_status === 'accepted';
+                    const renderedValue = [finding.value, finding.unit]
+                      .filter((value) => value !== null && value !== '')
+                      .join(' ');
+                    return (
+                      <div
+                        key={finding.id}
+                        className={`rounded border p-3 ${
+                          isUsed
+                            ? 'border-pine/30 bg-pine-tint/30'
+                            : 'border-line bg-surface'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-semibold text-ink">{finding.marker_name}</p>
+                            <p className="mt-1 text-[13px] text-ink-soft">
+                              {renderedValue || 'Recorded without a numeric value'}
+                              {finding.interpretation_flag
+                                ? ` · ${finding.interpretation_flag.replace(/_/g, ' ')}`
+                                : ''}
+                            </p>
+                          </div>
+                          <span className={isUsed ? 'signal-better' : 'badge-neutral'}>
+                            {isUsed ? 'Used in profile' : 'Excluded — uncertain'}
+                          </span>
+                        </div>
+                        <p className="help-text mt-2">
+                          Source: “{finding.verbatim_source_text}”
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               <details className="mt-3">
                 <summary className="cursor-pointer text-[13px] font-semibold text-pine">

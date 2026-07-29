@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildEligibleActiveClaims,
   claimMatchesDog,
+  clusterMatchesDogContext,
   createActiveClaimEvidenceRetriever,
   matchClaimSubject,
   researchRankingResult,
@@ -16,6 +17,7 @@ import type {
   ResearchClaim,
   ResearchChunk,
   ResearchDocument,
+  ResearchClusterApplicability,
 } from '../types';
 
 const QUOTE = 'the inclusion of 45% green lentil in extruded diets does not lower taurine';
@@ -31,7 +33,7 @@ function claim(overrides: Partial<ResearchClaim> = {}): ResearchClaim {
     subject_value: 'green lentil',
     applies_to_condition: null,
     applies_to_life_stage: null,
-    direction: 'neutral',
+    direction: 'supports',
     effect_summary: 'A cautious effect summary.',
     study_design: 'controlled_trial',
     species: 'dog',
@@ -234,6 +236,135 @@ test('condition and life-stage mismatches suppress otherwise eligible claims', (
       []
     ),
     true
+  );
+});
+
+test('neutral evidence without a dog-specific condition is not shown for an ingredient match alone', () => {
+  assert.equal(
+    claimMatchesDog(
+      claim({
+        direction: 'neutral',
+        applies_to_condition: null,
+        applies_to_life_stage: 'all_life_stages',
+      }),
+      { life_stage: 'adult' },
+      []
+    ),
+    false
+  );
+});
+
+test('neutral evidence can answer an explicitly reviewed clinical context', () => {
+  assert.equal(
+    claimMatchesDog(
+      claim({
+        direction: 'neutral',
+        applies_to_condition: 'taurine deficiency',
+      }),
+      { life_stage: 'adult' },
+      conditions(['Taurine Deficiency'])
+    ),
+    true
+  );
+});
+
+function applicability(
+  overrides: Partial<ResearchClusterApplicability> = {}
+): ResearchClusterApplicability {
+  return {
+    id: 'context-1',
+    cluster_id: 'cluster-1',
+    context_type: 'document_finding',
+    context_key: 'Dysbiosis Pattern Score',
+    context_value: 'high',
+    match_operator: 'exact',
+    required: true,
+    created_at: '2026-07-29T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('accepted report findings can satisfy exact structured applicability', () => {
+  const result = clusterMatchesDogContext(
+    [applicability()],
+    {
+      dog: { life_stage: 'adult' },
+      conditions: [],
+      restrictions: [],
+      outcomeMetrics: [],
+      findings: [
+        {
+          marker_name: 'Dysbiosis Pattern Score',
+          value: 'high',
+          interpretation_flag: null,
+          review_status: 'accepted',
+        },
+      ],
+    }
+  );
+  assert.equal(result.matches, true);
+  assert.deepEqual(result.matched, [
+    'document finding: Dysbiosis Pattern Score = high',
+  ]);
+});
+
+test('uncertain report findings are never used as dog context', () => {
+  assert.equal(
+    clusterMatchesDogContext(
+      [applicability()],
+      {
+        dog: { life_stage: 'adult' },
+        conditions: [],
+        restrictions: [],
+        outcomeMetrics: [],
+        findings: [
+          {
+            marker_name: 'Dysbiosis Pattern Score',
+            value: 'high',
+            interpretation_flag: null,
+            review_status: 'needs_review',
+          },
+        ],
+      }
+    ).matches,
+    false
+  );
+});
+
+test('every required cluster context must match the dog', () => {
+  assert.equal(
+    clusterMatchesDogContext(
+      [
+        applicability({ context_type: 'life_stage', context_key: 'adult', context_value: null }),
+        applicability({
+          id: 'context-2',
+          context_type: 'health_condition',
+          context_key: 'IBD',
+          context_value: null,
+        }),
+      ],
+      {
+        dog: { life_stage: 'adult' },
+        conditions: [],
+        restrictions: [],
+        outcomeMetrics: [],
+        findings: [],
+      }
+    ).matches,
+    false
+  );
+});
+
+test('a clustered proposition with no reviewed dog context is not runtime evidence', () => {
+  assert.equal(
+    clusterMatchesDogContext([], {
+      dog: { life_stage: 'adult' },
+      conditions: [],
+      restrictions: [],
+      outcomeMetrics: [],
+      findings: [],
+    }).matches,
+    false
   );
 });
 

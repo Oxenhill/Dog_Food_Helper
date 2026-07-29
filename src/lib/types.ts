@@ -377,6 +377,11 @@ export interface ResearchDocument {
   is_preprint?: boolean;
   open_access?: boolean;
   abstract_only?: boolean;
+  access_type?:
+    | 'open_access_full_text'
+    | 'abstract_only'
+    | 'uploaded_full_text_private'
+    | 'metadata_pending';
   license?: string | null;
   retracted?: boolean;
   retraction_checked_at?: string | null;
@@ -478,10 +483,73 @@ export interface ResearchEvidence {
   supporting_quote: string;
   evidence_grade: EvidenceGrade;
   grading_inputs_complete: boolean;
-  access_type: 'open_access_full_text' | 'abstract_only';
+  access_type:
+    | 'open_access_full_text'
+    | 'abstract_only'
+    | 'uploaded_full_text_private';
   title: string;
   doi: string | null;
   source_url: string | null;
+  cluster_id?: string | null;
+  outcome_type?: string | null;
+  outcome_value?: string | null;
+  matched_dog_context?: string[];
+}
+
+export interface ResearchEvidenceCluster {
+  id: string;
+  cluster_identity: string;
+  label: string;
+  subject_type: ResearchClaimSubjectType;
+  subject_value: string;
+  outcome_type:
+    | 'condition'
+    | 'biome_marker'
+    | 'clinical_marker'
+    | 'outcome_metric'
+    | 'general_health';
+  outcome_value: string;
+  direction: ResearchClaimDirection;
+  cautious_summary: string;
+  status: ResearchClaimStatus;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResearchClusterApplicability {
+  id: string;
+  cluster_id: string;
+  context_type:
+    | 'health_condition'
+    | 'document_finding'
+    | 'life_stage'
+    | 'restriction'
+    | 'outcome_metric';
+  context_key: string;
+  context_value: string | null;
+  match_operator: 'exact' | 'enum';
+  required: boolean;
+  created_at: string;
+}
+
+export interface DogDocumentFinding {
+  id: string;
+  document_id: string;
+  dog_id: string;
+  owner_id: string;
+  finding_type: string;
+  marker_name: string;
+  value: string | number | null;
+  unit: string | null;
+  reference_range: string | null;
+  interpretation_flag: string | null;
+  source_kind: string;
+  review_status: 'accepted' | 'needs_review';
+  verbatim_source_text: string;
+  created_at: string;
 }
 
 // ============================================

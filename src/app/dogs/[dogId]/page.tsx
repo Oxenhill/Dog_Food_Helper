@@ -367,11 +367,27 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
                                 {evidence.access_type === 'abstract_only' && (
                                   <span className="badge-neutral normal-case">Abstract only</span>
                                 )}
+                                {evidence.access_type === 'uploaded_full_text_private' && (
+                                  <span className="badge-neutral normal-case">
+                                    Admin-supplied full text
+                                  </span>
+                                )}
                               </div>
 
                               <p className="mt-2 text-[14px] leading-6 text-ink">
                                 {evidence.effect_summary}
                               </p>
+                              {evidence.outcome_value && (
+                                <p className="help-text mt-2">
+                                  Studied outcome: {evidence.outcome_value}
+                                </p>
+                              )}
+                              {(evidence.matched_dog_context?.length ?? 0) > 0 && (
+                                <p className="help-text mt-1">
+                                  Relevant to this dog because:{' '}
+                                  {evidence.matched_dog_context?.join(' · ')}
+                                </p>
+                              )}
                               <blockquote className="mt-2 border-l-2 border-pine/30 pl-3 text-[13px] italic leading-5 text-ink-soft">
                                 “{evidence.supporting_quote}”
                               </blockquote>

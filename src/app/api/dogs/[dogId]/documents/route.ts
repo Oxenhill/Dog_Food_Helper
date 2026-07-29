@@ -66,7 +66,38 @@ export async function GET(
     return NextResponse.json({ error: 'Could not load documents' }, { status: 500 });
   }
 
-  return NextResponse.json({ documents: data ?? [] });
+  const documentIds = (data ?? []).map((document) => document.id);
+  const { data: findings, error: findingsError } =
+    documentIds.length === 0
+      ? { data: [], error: null }
+      : await supabaseAdmin
+          .from('dog_document_findings')
+          .select(
+            'id, document_id, finding_type, marker_name, value, unit, reference_range, interpretation_flag, source_kind, review_status, verbatim_source_text, created_at'
+          )
+          .eq('dog_id', params.dogId)
+          .eq('owner_id', user.id)
+          .in('document_id', documentIds)
+          .order('created_at', { ascending: true });
+
+  if (findingsError) {
+    console.error('dog documents: findings list failed', findingsError);
+    return NextResponse.json({ error: 'Could not load document findings' }, { status: 500 });
+  }
+
+  const findingsByDocument = new Map<string, Array<Record<string, unknown>>>();
+  for (const finding of findings ?? []) {
+    const rows = findingsByDocument.get(finding.document_id) ?? [];
+    rows.push(finding);
+    findingsByDocument.set(finding.document_id, rows);
+  }
+
+  return NextResponse.json({
+    documents: (data ?? []).map((document) => ({
+      ...document,
+      findings: findingsByDocument.get(document.id) ?? [],
+    })),
+  });
 }
 
 export async function POST(
@@ -187,6 +218,7 @@ export async function POST(
   let processingStatus:
     | 'pending'
     | 'extracted'
+    | 'partial'
     | 'needs_review'
     | 'unsupported_lab'
     | 'failed' = 'pending';
@@ -288,6 +320,13 @@ export async function POST(
   return NextResponse.json(
     {
       document: data,
+      findings:
+        parseResult?.findings.map((finding, index) => ({
+          id: `${documentId}:${index}`,
+          document_id: documentId,
+          ...finding,
+          created_at: new Date().toISOString(),
+        })) ?? [],
       finding_count: parseResult?.findings.length ?? 0,
       unavailable_fields: parseResult?.unavailable_fields ?? [],
       taxonomy_suggestions: parseResult?.taxonomy_suggestions ?? [],

@@ -1,0 +1,203 @@
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  draftDocumentIntoKnowledge,
+  RESEARCH_BRAIN_DRAFT_MODEL,
+} from '@/lib/researchBrainDrafting';
+import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '@/lib/researchBrainPipeline';
+import { requireAdmin } from '@/lib/serverAuth';
+import { supabaseAdmin } from '@/lib/supabase';
+
+export const runtime = 'nodejs';
+export const maxDuration = 300;
+
+async function listProcessingState() {
+  const [
+    { data: documents, error: documentsError },
+    { data: claims, error: claimsError },
+    { data: clusters, error: clustersError },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from('research_documents')
+      .select(
+        'id, title, source_url, pmid, topic, evidence_grade, grading_inputs_complete, access_type, review_status, retracted, superseded_by, retrieved_at'
+      )
+      .order('retrieved_at', { ascending: false })
+      .limit(100),
+    supabaseAdmin.from('research_claims').select(
+      'id, document_id, status, supporting_quote, subject_type, subject_value, direction, effect_summary, evidence_grade, grading_inputs_complete'
+    ),
+    supabaseAdmin
+      .from('research_evidence_clusters')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100),
+  ]);
+  if (documentsError) throw documentsError;
+  if (claimsError) throw claimsError;
+  if (clustersError) throw clustersError;
+
+  const clusterIds = (clusters ?? []).map((cluster) => cluster.id);
+  const [{ data: members, error: membersError }, { data: applicability, error: applicabilityError }] =
+    clusterIds.length === 0
+      ? [{ data: [], error: null }, { data: [], error: null }]
+      : await Promise.all([
+          supabaseAdmin
+            .from('research_evidence_cluster_members')
+            .select('*')
+            .in('cluster_id', clusterIds),
+          supabaseAdmin
+            .from('research_cluster_applicability')
+            .select('*')
+            .in('cluster_id', clusterIds),
+        ]);
+  if (membersError) throw membersError;
+  if (applicabilityError) throw applicabilityError;
+
+  const claimById = new Map((claims ?? []).map((claim) => [claim.id, claim]));
+  const claimsByDocument = new Map<string, Array<Record<string, unknown>>>();
+  for (const claim of claims ?? []) {
+    const rows = claimsByDocument.get(claim.document_id) ?? [];
+    rows.push(claim);
+    claimsByDocument.set(claim.document_id, rows);
+  }
+  const membersByCluster = new Map<string, Array<Record<string, unknown>>>();
+  for (const member of members ?? []) {
+    const rows = membersByCluster.get(member.cluster_id) ?? [];
+    rows.push({ ...member, claim: claimById.get(member.claim_id) ?? null });
+    membersByCluster.set(member.cluster_id, rows);
+  }
+  const applicabilityByCluster = new Map<string, Array<Record<string, unknown>>>();
+  for (const context of applicability ?? []) {
+    const rows = applicabilityByCluster.get(context.cluster_id) ?? [];
+    rows.push(context);
+    applicabilityByCluster.set(context.cluster_id, rows);
+  }
+
+  return {
+    documents: (documents ?? []).map((document) => ({
+      ...document,
+      claims: claimsByDocument.get(document.id) ?? [],
+    })),
+    clusters: (clusters ?? []).map((cluster) => ({
+      ...cluster,
+      members: membersByCluster.get(cluster.id) ?? [],
+      applicability: applicabilityByCluster.get(cluster.id) ?? [],
+    })),
+  };
+}
+
+export async function GET(request: NextRequest) {
+  const admin = await requireAdmin(request);
+  if (!admin) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  try {
+    return NextResponse.json(await listProcessingState());
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Could not load processing state' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const admin = await requireAdmin(request);
+  if (!admin) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const action = typeof body.action === 'string' ? body.action : '';
+
+  if (action === 'draft_document') {
+    const documentId = typeof body.document_id === 'string' ? body.document_id : '';
+    if (!documentId) {
+      return NextResponse.json({ error: 'document_id is required' }, { status: 400 });
+    }
+    const { data: job, error: jobError } = await supabaseAdmin
+      .from('research_ingestion_jobs')
+      .insert({
+        job_type: 'draft_claims',
+        status: 'running',
+        requested_by: admin.id,
+        input: { document_id: documentId },
+        gateway_model: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
+        started_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
+    if (jobError || !job) {
+      return NextResponse.json(
+        { error: jobError?.message ?? 'Could not start processing' },
+        { status: 500 }
+      );
+    }
+    try {
+      const result = await draftDocumentIntoKnowledge(documentId, job.id);
+      const completedAt = new Date().toISOString();
+      const { data: completed, error: completeError } = await supabaseAdmin
+        .from('research_ingestion_jobs')
+        .update({
+          status: 'succeeded',
+          result_summary: result,
+          gateway_input_tokens:
+            result.usage.inputTokens + result.embedding.inputTokens,
+          gateway_output_tokens: result.usage.outputTokens,
+          gateway_cost_usd: null,
+          completed_at: completedAt,
+          updated_at: completedAt,
+        })
+        .eq('id', job.id)
+        .select('*')
+        .single();
+      if (completeError) throw completeError;
+      return NextResponse.json({ job: completed, result });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'object' && error && 'message' in error
+            ? String(error.message)
+            : 'Claim drafting failed';
+      const completedAt = new Date().toISOString();
+      await supabaseAdmin
+        .from('research_ingestion_jobs')
+        .update({
+          status: 'failed',
+          error_message: message,
+          completed_at: completedAt,
+          updated_at: completedAt,
+        })
+        .eq('id', job.id);
+      return NextResponse.json({ error: message, job_id: job.id }, { status: 500 });
+    }
+  }
+
+  if (action === 'approve_cluster' || action === 'reject_cluster') {
+    const clusterId = typeof body.cluster_id === 'string' ? body.cluster_id : '';
+    const reviewNote =
+      typeof body.review_note === 'string' && body.review_note.trim()
+        ? body.review_note.trim()
+        : null;
+    if (!clusterId) {
+      return NextResponse.json({ error: 'cluster_id is required' }, { status: 400 });
+    }
+    if (action === 'reject_cluster' && !reviewNote) {
+      return NextResponse.json({ error: 'A rejection note is required' }, { status: 400 });
+    }
+    const { data, error } = await supabaseAdmin.rpc(
+      'review_research_evidence_cluster',
+      {
+        p_cluster_id: clusterId,
+        p_action: action === 'approve_cluster' ? 'approve' : 'reject',
+        p_reviewer_id: admin.id,
+        p_review_note: reviewNote,
+      }
+    );
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ cluster: data });
+  }
+
+  return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
+}

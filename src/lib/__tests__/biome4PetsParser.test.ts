@@ -58,7 +58,7 @@ Microbiome`,
   ]);
 
   const result = parseBiome4Pets(extracted);
-  assert.equal(result.processing_status, 'needs_review');
+  assert.equal(result.processing_status, 'partial');
   assert.deepEqual(result.unavailable_fields, []);
   assert.deepEqual(result.discarded_findings, []);
   assert.deepEqual(result.taxonomy_suggestions, [
@@ -161,7 +161,7 @@ Prevotella`,
   ]);
 
   const result = parseBiome4Pets(extracted);
-  assert.equal(result.processing_status, 'needs_review');
+  assert.equal(result.processing_status, 'partial');
   assert.deepEqual(result.unavailable_fields, ['Bacteroidales', 'Prevotella']);
   assert.deepEqual(result.discarded_findings, []);
   assert.equal(result.findings.length, 9);
