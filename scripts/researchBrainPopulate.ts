@@ -3,6 +3,10 @@ import {
   RESEARCH_BRAIN_DRAFT_MODEL,
 } from '../src/lib/researchBrainDrafting';
 import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '../src/lib/researchBrainPipeline';
+import {
+  finishResearchMissionJob,
+  startResearchMissionJob,
+} from '../src/lib/researchMissionLifecycle';
 import { supabaseAdmin } from '../src/lib/supabase';
 
 const DEFAULT_TOPICS = [
@@ -76,37 +80,33 @@ async function main() {
       continue;
     }
 
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .insert({
-        job_type: 'draft_claims',
-        status: 'running',
-        requested_by: admin.id,
-        input: {
+    const job = await startResearchMissionJob({
+      missionType: 'claim_drafting',
+      objective: `Draft bounded initial research knowledge from document ${document.id}`,
+      stageKey: 'claim_drafting',
+      jobType: 'draft_claims',
+      requestedBy: admin.id,
+      jobInput: {
           document_id: document.id,
           source: 'bounded_initial_population',
-        },
-        gateway_model: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
-        started_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single();
-    if (jobError || !job) throw jobError ?? new Error('Could not create processing job');
+      },
+      initialStatus: 'running',
+      gatewayModel: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
+    });
 
     try {
       const result = await draftDocumentIntoKnowledge(document.id, job.id);
-      const completedAt = new Date().toISOString();
-      await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .update({
-          status: 'succeeded',
-          result_summary: result,
-          gateway_input_tokens: result.usage.inputTokens + result.embedding.inputTokens,
-          gateway_output_tokens: result.usage.outputTokens,
-          completed_at: completedAt,
-          updated_at: completedAt,
-        })
-        .eq('id', job.id);
+      await finishResearchMissionJob({
+        jobId: job.id,
+        status: 'succeeded',
+        resultSummary: { ...result },
+        gatewayInputTokens: result.usage.inputTokens + result.embedding.inputTokens,
+        gatewayOutputTokens: result.usage.outputTokens,
+        eventPayload: {
+          source: 'bounded_initial_population',
+          document_id: document.id,
+        },
+      });
       process.stdout.write(
         `OK ${document.discovery_topic}: ${result.drafted} claims, ${result.clusterIds.length} clusters\n`
       );
@@ -117,16 +117,20 @@ async function main() {
           : typeof error === 'object' && error && 'message' in error
             ? String(error.message)
             : JSON.stringify(error);
-      const completedAt = new Date().toISOString();
-      await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .update({
+      try {
+        await finishResearchMissionJob({
+          jobId: job.id,
           status: 'failed',
-          error_message: message,
-          completed_at: completedAt,
-          updated_at: completedAt,
-        })
-        .eq('id', job.id);
+          reasonCode: 'claim_drafting_failed',
+          errorMessage: message,
+          eventPayload: {
+            source: 'bounded_initial_population',
+            document_id: document.id,
+          },
+        });
+      } catch {
+        // Keep reporting the drafting failure if lifecycle finalisation also fails.
+      }
       process.stdout.write(`FAIL ${document.discovery_topic}: ${message}\n`);
     }
   }

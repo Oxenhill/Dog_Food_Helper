@@ -19,6 +19,11 @@ import {
 } from '@/lib/researchEvidenceReview';
 import { INGREDIENT_CATEGORIES } from '@/lib/ingredientCategories';
 import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '@/lib/researchBrainPipeline';
+import {
+  finishResearchMissionJob,
+  startResearchMissionJob,
+  type ResearchMissionJob,
+} from '@/lib/researchMissionLifecycle';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 
@@ -184,43 +189,40 @@ export async function POST(request: NextRequest) {
     if (!documentId) {
       return NextResponse.json({ error: 'document_id is required' }, { status: 400 });
     }
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .insert({
-        job_type: 'draft_claims',
-        status: 'running',
-        requested_by: admin.id,
-        input: { document_id: documentId },
-        gateway_model: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
-        started_at: new Date().toISOString(),
-      })
-      .select('*')
-      .single();
-    if (jobError || !job) {
+    let job: ResearchMissionJob;
+    try {
+      job = await startResearchMissionJob({
+        missionType: 'claim_drafting',
+        objective: `Draft source-backed claims from research document ${documentId}`,
+        stageKey: 'claim_drafting',
+        jobType: 'draft_claims',
+        requestedBy: admin.id,
+        jobInput: { document_id: documentId },
+        initialStatus: 'running',
+        gatewayModel: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
+      });
+    } catch (error) {
       return NextResponse.json(
-        { error: jobError?.message ?? 'Could not start processing' },
+        { error: error instanceof Error ? error.message : 'Could not start processing' },
         { status: 500 }
       );
     }
     try {
       const result = await draftDocumentIntoKnowledge(documentId, job.id);
-      const completedAt = new Date().toISOString();
-      const { data: completed, error: completeError } = await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .update({
-          status: 'succeeded',
-          result_summary: result,
-          gateway_input_tokens:
-            result.usage.inputTokens + result.embedding.inputTokens,
-          gateway_output_tokens: result.usage.outputTokens,
-          gateway_cost_usd: null,
-          completed_at: completedAt,
-          updated_at: completedAt,
-        })
-        .eq('id', job.id)
-        .select('*')
-        .single();
-      if (completeError) throw completeError;
+      const completed = await finishResearchMissionJob({
+        jobId: job.id,
+        status: 'succeeded',
+        resultSummary: { ...result },
+        gatewayInputTokens:
+          result.usage.inputTokens + result.embedding.inputTokens,
+        gatewayOutputTokens: result.usage.outputTokens,
+        gatewayCostUsd: null,
+        eventPayload: {
+          document_id: documentId,
+          drafted_claim_count: result.drafted,
+          rejected_draft_count: result.rejected.length,
+        },
+      });
       return NextResponse.json({ job: completed, result });
     } catch (error) {
       const message =
@@ -229,16 +231,17 @@ export async function POST(request: NextRequest) {
           : typeof error === 'object' && error && 'message' in error
             ? String(error.message)
             : 'Claim drafting failed';
-      const completedAt = new Date().toISOString();
-      await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .update({
+      try {
+        await finishResearchMissionJob({
+          jobId: job.id,
           status: 'failed',
-          error_message: message,
-          completed_at: completedAt,
-          updated_at: completedAt,
-        })
-        .eq('id', job.id);
+          reasonCode: 'claim_drafting_failed',
+          errorMessage: message,
+          eventPayload: { document_id: documentId },
+        });
+      } catch {
+        // Preserve the drafting failure as the response if audit finalisation fails.
+      }
       return NextResponse.json({ error: message, job_id: job.id }, { status: 500 });
     }
   }

@@ -1,0 +1,262 @@
+# Bowl Research Layer: Behive-informed architecture review
+
+**Status:** owner-approved P0 release; production migration applied; application deployment in progress
+**Reviewed:** 2026-08-01
+**Behive implementation reviewed:** public commit [`c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd`](https://github.com/qa10devteam/behive/tree/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd)
+**Bowl baseline:** `9ce3be3c46b09709aac4f9561a2b363f2e8c63b3`
+
+## Executive decision
+
+Behive is useful as a pattern library, not as a Bowl dependency or authority. Bowl should adopt the idea of a durable parent mission, stage attempts, persisted progress events, per-stage model routing, a curated structured-source registry, and an evidence graph explorer. Each requires Bowl-specific controls for literal quotes, canine outcome scope, access policy, private-report isolation, human approval, independent study families, deterministic runtime, and zero ranking influence.
+
+Bowl must reject Behive's crawler-evasion stack, numerical quality/confidence as truth, text/domain/graph-degree corroboration, and automatic promotion of generated claims into graph or synthesis paths. Neo4j, Qdrant, recurring missions, general web crawling, and user-facing graph presentation remain deferred.
+
+The approved delivery order is:
+
+1. parent mission lifecycle, stage attempts, and append-only persisted audit events;
+2. immutable model-routing versions and an approved structured-source registry;
+3. polling-based progress and cost UI, with optional SSE replaying the same event log;
+4. active-only deterministic Postgres graph projection;
+5. admin graph explorer with literal-quote drill-down;
+6. retraction and supersession transaction validation;
+7. recurring missions;
+8. user-facing evidence map only after the reviewed graph is stable.
+
+## Fixed Bowl boundary
+
+A research claim is admissible only when a tested food exposure is tied to an outcome measured in dogs: clinical or biological response, digestibility, nutrient status, behaviour, or performance. Product contamination, antimicrobial resistance in products, manufacturing defects, recalls, label accuracy, undeclared species, category composition variability, and incidental ingredient mentions cannot become recommendation evidence.
+
+Every retained claim must resolve to a literal source quote. Source access, document provenance, retraction state, and review metadata remain traceable. Draft or queued material cannot enter production evidence. Only active human-reviewed claims and clusters may be projected. Private dog reports never become global literature, uncertain report findings remain excluded, and accepted report findings apply only to that dog.
+
+Evidence remains informational. Recommendation ranking stays deterministic, token-free, request-time-model-free, and unchanged by research.
+
+## What the Behive code demonstrates
+
+Behive has a mission row with status/phase fields and phase completion timestamps, but no normalized stage-attempt history ([schema](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/init-db.sql#L8-L38)). Its orchestrator retries the whole pipeline after an unhandled failure and resets timings ([orchestrator](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/orchestrator.py#L1410-L1450)); resume infers checkpoints from accumulated row counts and mission fields rather than explicit successful attempts ([resume](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/orchestrator.py#L1988-L2053)). Synthesis failure can still mark a mission `done` with partial output ([graceful degradation](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/orchestrator.py#L1761-L1795)). Bowl needs explicit `partial`, failed-attempt retention, and idempotent retry identity.
+
+Behive contains two progress mechanisms: the public server stores at most 500 events per mission in process memory ([server event buffer](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/server.py#L131-L141)) and replays that buffer over SSE ([server SSE](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/server.py#L340-L368)), while a separate module persists events and polls them for another SSE endpoint ([persisted events](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/events.py#L35-L57), [replay](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/events.py#L231-L268)). Bowl should have one persisted source of truth, with polling first.
+
+Behive genuinely routes models by stage ([stage definitions](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/config.py#L28-L50), [resolution precedence](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/config.py#L164-L205)). Its model wrapper returns generated text and discards provider usage from the successful response ([completion path](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/llm.py#L132-L201)), so README cost estimates are not demonstrated as actual per-call accounting.
+
+The structured-source idea is concrete: a JSON registry records endpoints, authentication, `use_when`, returned fields, and notes, while routing uses keyword and endpoint-description overlap ([registry contract](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/api_scout.py#L1-L18), [endpoint selection](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/api_scout.py#L128-L183), [acquisition](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/api_scout.py#L354-L420)). Bowl needs a much smaller veterinary registry with explicit licence, Terms, robots, rate, provenance, and admissibility policy versions.
+
+The crawler implementation conflicts directly with Bowl. It advertises TLS impersonation and Jina/archive fallbacks ([drone layers](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/drones.py#L260-L273)); it detects robots restrictions but later escalates CAPTCHA, paywall, login-wall, and authentication failures to Jina or archives ([robots check](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/drones.py#L388-L409), [evasion fallbacks](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/drones.py#L688-L706)). Bowl must fail closed at an acquisition-policy gate.
+
+Behive asks models to emit confidence and then applies writing-pattern quality thresholds before storing claims ([claim extraction and gate](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/process.py#L1015-L1088)). It upgrades confidence when fuzzy-similar claim text appears on two domains ([cross-domain upgrade](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/process.py#L1502-L1596)). That is not independent corroboration: mirrors, press releases, preprints, journal versions, reviews, and repeated study-family publications can inflate it.
+
+Behive's graph paths admit claims using numeric thresholds, then extract entities to Neo4j ([Neo4j ingestion](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/knowledge_graph.py#L231-L308)); another engine embeds eligible claims in Qdrant and synthesizes GraphRAG answers ([Qdrant indexing](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/graph_engine.py#L478-L560), [GraphRAG](https://github.com/qa10devteam/behive/blob/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd/src/behive/engine/graph_engine.py#L679-L755)). No human-reviewed active-only boundary is demonstrated on those paths.
+
+No implemented retraction/supersession workflow, literature approval transaction, or recurring scheduler was found in the reviewed public commit. Tests heavily exercise functions and mocked paths, including event and orchestrator modules, but do not substantiate the README's stronger claims that synthesis cannot hallucinate, that paywall bypass is policy-safe, or that numerical confidence represents truth.
+
+## Adopt / Adapt / Reject matrix
+
+| Feature | What Behive implements | Benefit to Bowl | Conflict or risk | Decision | Recommended Bowl implementation | Priority |
+|---|---|---|---|---|---|---|
+| Mission state machine | Mission status and current phase on one row | One traceable parent for a bounded research intent | Phase history and partial outcomes are lossy | **Adapt** | `research_missions` with explicit queued/running/completed/partial/failed/cancelled states and deterministic terminal reasons | P0 |
+| Stage orchestration | Sequential subprocess phases with mission-level retry | Clear operational decomposition | Whole-pipeline retry can duplicate work; partial synth may be called done | **Adapt** | Child stage attempts; retry creates a new linked attempt; idempotency key per attempt | P0 |
+| Persisted progress events | A DB event implementation exists alongside process-memory SSE | Durable audit and replay | Two authorities can disagree; best-effort event failures lose history | **Adopt pattern** | One append-only Postgres event log; lifecycle transactions append events atomically | P0 |
+| SSE | Public endpoint streams process-memory events | Responsive admin experience | Serverless restarts and multiple instances lose/diverge events | **Defer** | Poll persisted read model first; later SSE uses event sequence replay and polling fallback | P2/P3 |
+| Stage-specific model routing | Config/env resolution by scout/harvest/process/synth | Right-size models and contain spend | Mutable env/config prevents reproducibility | **Adapt** | Immutable model-configuration version, prompt hash, provider/model, parameters and policy version attached to each stage | P1 |
+| Token/cost/timing telemetry | Phase timing exists; README estimates cost; model wrapper returns text only | Budgeting and incident review | Estimates are not provider usage; retries obscure totals | **Adapt** | Persist actual provider usage per call plus separately labelled estimates; aggregate by stage and mission | P2 |
+| Structured-source registry | Curated JSON endpoints with auth, notes, `use_when`, returns | Prefer structured authoritative sources over scraping | Generic registry lacks Bowl legal/access/admissibility controls | **Adapt** | Small versioned veterinary registry with owner approval, licence/ToS/robots/rate policy, provenance mapping and parser version | P1 |
+| Source routing | Keyword/description overlap chooses APIs/endpoints | Deterministic first-pass routing | Relevance does not imply permission or evidence admissibility | **Adapt** | Separate discovery-question routing from acquisition policy and evidence-admissibility rules | P1 |
+| Search-query generation | Model-generated research axes and precise queries | Better coverage of owner-approved questions | Generated premises can become prompt facts; generic breadth is costly | **Adapt** | Store generated queries as untrusted discovery artefacts; validate against mission scope and approved sources | P1 |
+| Crawling/content acquisition | Multi-layer anti-bot, TLS impersonation, Jina, archives | May increase raw access | Directly violates Bowl's robots/ToS/paywall/CAPTCHA/licence boundary | **Reject** | Structured APIs, owner uploads, and explicitly approved fetch adapters only; deterministic fail-closed policy codes | — |
+| Document extraction | Raw content and metadata stored with URLs/methods | Basis for provenance | Generic parsing/truncation may lose literal context and rights metadata | **Adapt** | Immutable source document version, access result, content hash, parser version, page/section offsets and retrieval metadata | P1 |
+| Claim extraction/persistence | Models generate claims/confidence; thresholded rows are stored | Structured drafting assists reviewers | Model text can be prompt-generated and quote linkage is not enforced | **Adapt** | Draft only; exact contiguous quote plus deterministic canine-scope validation before queue; never active without owner transaction | Existing/P1 |
+| Numerical quality scoring | Heuristic/model confidence and quality thresholds | Can flag malformed writing or missing fields | Writing quality is not truth, study strength or canine applicability | **Reject as evidence** | Use deterministic completeness/writing diagnostics only; never approve, rank, corroborate or project from the score | Existing guard |
+| Claim deduplication | Fuzzy/text/entity matching and canonicalization | Reduces review noise | Similar wording can collapse distinct populations/exposures/outcomes | **Adapt** | Exact claim identity for idempotency; similarity only proposes merge; owner reviews proposition and study-family identity | P3/P4 |
+| Corroboration | Similar claims from multiple domains receive confidence boost | Surfaces apparently repeated findings | Domains are not independent studies; mirrors and publication families inflate support | **Reject implementation** | Corroboration only from owner-reviewed independent study families; duplicates and related publications never count twice | P4/P5 |
+| Graph storage | PostgreSQL, NetworkX, Neo4j and Qdrant have overlapping roles | Exploration can expose relationships | Multiple stores drift; numeric thresholds admit unreviewed claims | **Reject Behive stack** | Postgres relational projection from active reviewed rows only | P3 |
+| Graph exploration | Neo4j/network/GraphRAG query paths | Useful admin navigation and quote drill-down | Graph degree and semantic proximity look authoritative | **Adapt/Defer** | Admin-only explorer; every edge displays relationship type, review state, study family and literal quote | P4 |
+| Retraction/correction/deletion | No complete workflow found | Essential to safe evidence maintenance | Stale active projections can survive source correction | **Reject absence** | One transaction updates document/claims/clusters/projection and emits audit events; preserve tombstone/provenance | P5 |
+| Synthesis | LLM drafts report from scored claims and graph context | Admin mission summary can help review | Fluent synthesis may introduce unsupported facts or imply approval | **Adapt** | Synthesis is a draft report over retained artefacts; every statement maps to claim IDs/quotes; never creates or activates evidence | P2/P4 |
+| Human review | No Bowl-equivalent active-only owner approval boundary demonstrated | — | Automated scoring/graph insertion exceeds authority | **Reject implementation** | Preserve atomic owner review; no inferred literature approval; review metadata is mandatory for activation | Existing guard |
+| Scheduled missions | No recurring scheduler demonstrated | Later freshness monitoring | Premature cost, duplication and unattended acquisition risk | **Defer** | Only after idempotency, budget caps, policy versions and retraction propagation are proven | P6 |
+| Tests/advertised behaviour | Broad unit and mocked coverage | Useful implementation examples | Tests do not prove strongest marketing claims or policy compliance | **Adapt** | Acceptance tests assert state transitions, replay, retry idempotency, RLS, quote/scope guards, runtime isolation and projection eligibility | Every phase |
+
+## Revised Bowl target architecture
+
+### Mission lifecycle
+
+`research_missions` is the parent record for one bounded owner-authorized research operation. It records the objective, mission type, requester, input, current stage, status, result summary, deterministic terminal reason, and timestamps. A completed discovery mission means discovery finished; it does not mean any candidate or claim was approved.
+
+`research_ingestion_jobs` remains the executable compatibility unit. Existing rows remain untouched and have null mission links. New operations create the mission, first stage attempt, and job in one transaction. This avoids breaking existing documents and job audit links while establishing the new parent lifecycle.
+
+### Stage lifecycle and retries
+
+`research_mission_stages` stores attempts, not mutable phase slots. States are pending, running, succeeded, partial, failed, skipped, and cancelled. `(mission_id, stage_key, attempt_number)` is unique. A retry points to the earlier attempt and gets a new row; failed history is retained. Optional idempotency keys prevent duplicate mission/job creation from repeated requests.
+
+The first slice maps current operations to one stage each:
+
+| Current operation | Mission type | Initial stage |
+|---|---|---|
+| structured discovery | discovery | discovery |
+| candidate or URL import | source_import | document_ingestion |
+| uploaded PDF | document_processing | document_ingestion |
+| document claim drafting | claim_drafting | claim_drafting |
+
+Future orchestration may split acquisition, ingestion, relevance selection, drafting and clustering into separate attempts without replacing current job history.
+
+### Audit events and transport
+
+`research_mission_events` is append-only and ordered by a mission-local sequence. Lifecycle operations append events inside the same database transaction that changes mission, stage and job state. Events carry identifiers and bounded summaries, not source documents, private dog facts, prompts, secrets, or unrestricted model output.
+
+Polling is canonical. Admin APIs return mission, stage and event read models ordered by the persisted sequence. Optional SSE may be added later only as replay of the same rows using `sequence_number`; it must reconnect through polling and cannot maintain a separate process-memory truth.
+
+### Model-configuration versioning
+
+Phase 2 introduces immutable configuration versions containing stage key, provider, exact model identifier, prompt/template hash, structured-output schema version, parameters, fallback policy and effective dates. Each stage attempt references one version. Environment defaults may choose a version, but cannot rewrite the historical meaning of an attempt.
+
+### Structured-source registry and policy enforcement
+
+Discovery questions and evidence admissibility are separate concepts:
+
+- discovery asks where potentially relevant documents may exist;
+- acquisition policy decides whether Bowl may access a source and by which adapter;
+- evidence admissibility decides whether the acquired study tests a food exposure and measures a dog outcome.
+
+The registry will be owner-reviewed and versioned. A source entry records authoritative identity, endpoint pattern, adapter/parser version, licence/terms/robots policy, authentication method, rate limits, allowed purposes, provenance mapping, and enabled state. Acquisition failures use deterministic codes such as `source_not_approved`, `robots_disallowed`, `terms_disallowed`, `licence_disallowed`, `paywall_or_login_required`, `captcha_or_access_control`, `rate_limited`, `unsupported_content`, and `parser_failed`. There is no bypass fallback.
+
+### Provenance and review
+
+Each document version keeps canonical source identity, literal retrieval URL, access status, content hash, retrieval time, parser version, extraction offsets and retraction/supersession state. Each claim resolves to a document version, chunk and exact quote. Deterministic scope and quote validation runs before a claim can be queued.
+
+Owner review remains the only activation authority. Drafted or queued claims/clusters do not enter the active projection. Review decisions retain reviewer, timestamp, note, edited values and the model/source-policy versions that produced the draft. No owner literature approval is inferred from importing, viewing, selecting, editing, or running a mission.
+
+### Relational graph projection
+
+Postgres remains the system of record and graph store. The projection contains only active, human-reviewed, non-retracted, non-superseded claims and active clusters. Nodes/edges are relational views or tables with foreign keys back to claims, clusters, documents, literal quotes, applicability and reviewed study-family identities. Similarity, duplicate text and graph degree never create corroboration.
+
+Neo4j and Qdrant are deferred. Bowl's initial graph is small, relationally constrained and quote-centric; another database would add drift and operational cost without improving authority.
+
+### Retraction and supersession
+
+A single transaction will:
+
+1. mark the source document retracted, corrected or superseded;
+2. transition affected active claims and clusters out of active eligibility;
+3. update reviewed study-family/corroboration records;
+4. refresh or invalidate the relational projection;
+5. append audit events with actor, reason and affected identifiers;
+6. leave tombstones and source history traceable.
+
+Deletion is reserved for legally required removal or demonstrably unretained drafts, and it cannot silently erase audit meaning.
+
+### Private-report separation
+
+Research mission inputs, source artefacts, events and global graph rows cannot contain dog-report findings. Runtime may deterministically match active literature applicability to exact accepted findings for one dog. It does not copy those findings into literature, events or global graph nodes. Uncertain findings remain excluded.
+
+### Usage and cost accounting
+
+Each future model/source call records mission/stage IDs, provider request ID where available, model/config version, input/output tokens, billed/estimated cost with currency, elapsed time, retry number, status and bounded error code. Estimates and actual billed values are separate. Stage and mission totals are derived, not manually overwritten. Hard caps stop new calls and produce an explicit partial/failed state.
+
+### Admin read models and runtime isolation
+
+Admin read models expose recent missions, stage attempts, ordered events, usage totals, source-policy results, rejection reasons and provenance drill-down. Runtime recommendation endpoints do not query missions, stage attempts, events, pending documents, model configurations, source queues or embeddings. They continue to read only active reviewed evidence through the existing deterministic path, with zero contribution to ranking.
+
+## Data flow
+
+```mermaid
+flowchart TD
+  M["Research mission"] --> SR["Owner-approved source registry version"]
+  SR --> D["Discovery candidates"]
+  D --> PG{"Acquisition policy gate"}
+  PG -->|"disallowed"| RJ["Rejected candidate + deterministic reason"]
+  PG -->|"rate limit / temporary failure"| PF["Partial or failed stage attempt"]
+  PF --> RT["New retry attempt; prior attempt retained"]
+  RT --> PG
+  PG -->|"allowed"| A["Document acquisition and ingestion"]
+  A -->|"parser/access incomplete"| PD["Partial document; no claim drafting"]
+  A -->|"failed"| FD["Failed document attempt"]
+  A --> RS["Relevance selection"]
+  RS -->|"not relevant"| NR["Deterministic rejection reason"]
+  RS --> CD["Claim drafting"]
+  CD --> V{"Literal quote + canine scope validation"}
+  V -->|"invalid"| CR["Rejected draft + deterministic reasons"]
+  V --> C["Queued source-backed claim"]
+  C --> CL["Proposition clustering"]
+  CL --> OR{"Owner review"}
+  OR -->|"reject"| RC["Rejected claim/cluster with review metadata"]
+  OR -->|"approve"| AP["Active human-reviewed claim and cluster"]
+  AP --> GP["Active relational graph projection"]
+  GP --> RE["Deterministic runtime evidence display"]
+  RE -. "informational only; no rank/weight change" .-> OUT["Recommendation output"]
+  A --> RX{"Retraction / correction / supersession check"}
+  RX -->|"retracted"| TR["Transactional deactivation + audit tombstone"]
+  RX -->|"superseded"| TS["Transactional link to successor + projection refresh"]
+  TR --> GP
+  TS --> GP
+```
+
+## Risk and threat assessment
+
+| Threat | Failure mode | Required control | Acceptance evidence |
+|---|---|---|---|
+| Provenance loss | Claim cannot be traced to the exact accessed document and quote | Immutable document version, content hash, chunk/offset and parser/access metadata | Quote drill-down resolves every projected claim |
+| False corroboration | Similar wording or multiple domains treated as independent support | Owner-reviewed study-family identity; no automated independence | Duplicate/mirror/preprint tests produce one family |
+| Publication-family inflation | One study appears as preprint, abstract, paper, review or press release | Explicit related-publication links and canonical family | Family count, not URL/domain count, drives display |
+| Prompt-generated facts | Model adds an unsupported premise or summary | Draft status, literal-quote validation, structured rejection reasons | Non-contiguous or absent quotes are rejected |
+| Crawler-policy violation | Adapter bypasses robots, terms, paywall, CAPTCHA, licence or rate limit | Approved adapters and fail-closed policy gate; no generic fallback crawler | Policy fixtures assert deterministic rejection codes |
+| Private-report leakage | Dog finding enters global mission/event/claim/graph data | Separate schemas/read paths; event payload allow-list | Tests scan mission payloads/projection for dog identifiers/findings |
+| Draft enters production | Queued claim appears in graph/runtime | Active-only reviewed projection with database constraints | Queued/rejected fixtures never appear |
+| Retraction propagation gap | Retracted evidence remains active or displayed | One deactivation/projection transaction | Rollback and end-to-end propagation tests |
+| Retry duplication | Repeated request creates duplicate documents/claims/cost | Idempotency key, attempt lineage, exact document/claim identities | Same request key returns same job; retry has new attempt only |
+| Model/config drift | Historical output cannot be reproduced or explained | Immutable configuration/prompt/schema version reference | Attempt record resolves exact config |
+| Unbounded cost | Mission loops or retries indefinitely | Per-call/stage/mission caps and limited retry policy | Cap produces explicit partial/failed state with no further calls |
+| Graph authority illusion | Dense/near nodes look more certain than evidence | Typed edges, quotes, review state, study family and warning copy | Explorer never labels degree/similarity as corroboration |
+
+## Delivery plan and acceptance criteria
+
+### P0 — mission lifecycle and audit events
+
+- Add `research_missions`, `research_mission_stages`, and append-only `research_mission_events`.
+- Add nullable mission/stage links to `research_ingestion_jobs`; do not backfill existing jobs.
+- Create mission, stage and job atomically for new discovery, import, PDF and drafting operations.
+- Preserve existing API job shapes and evidence behaviour.
+- Expose authenticated admin polling read model.
+- Prove RLS denies browser roles; retries cannot overwrite history; event sequence is replayable; runtime code has no dependency on mission tables.
+
+### P1 — model routes and source registry
+
+- Add immutable model/prompt/schema configuration versions.
+- Add an owner-approved structured-source registry and versioned acquisition policy.
+- Store generated queries as untrusted discovery artefacts.
+- Acceptance: exact configuration and policy resolve from every attempt; disallowed access fails before acquisition.
+
+### P2 — progress, usage and cost
+
+- Store actual call usage/timing and separately labelled estimates.
+- Build admin mission detail with polling; optional SSE only replays persisted events.
+- Acceptance: reconnect resumes from sequence; totals equal call rows; caps halt calls deterministically.
+
+### P3 — deterministic graph projection
+
+- Create relational nodes/edges/views sourced only from active reviewed rows.
+- Acceptance: queued/rejected/retracted/superseded/private rows are absent; ranking outputs remain byte-for-byte stable for fixtures.
+
+### P4 — admin graph explorer
+
+- Add claim/cluster/document/study-family navigation and literal-quote drill-down.
+- Acceptance: every displayed edge resolves to review metadata and quote; similarity/degree are labelled navigation signals only.
+
+### P5 — retraction and supersession validation
+
+- Implement and test atomic propagation through claims, clusters, corroboration and projection.
+- Acceptance: injected failure rolls back the entire change; successful propagation removes runtime eligibility immediately.
+
+### P6 — recurring missions
+
+- Add schedules only after idempotency, source policy and cost caps are proven.
+- Acceptance: recurrence cannot overlap itself, exceed caps, bypass policy, or activate evidence.
+
+### P7 — user-facing evidence map
+
+- Consider only after the reviewed graph and correction lifecycle are stable.
+- Acceptance: plain-language authority warnings, quote/source access, accessibility, mobile usability, and no ranking implication.
+
+## Approval record and implementation boundary
+
+The owner approved this architecture on 2026-08-01 with “this all looks good to me lets build it.” That approval authorizes the phased target and the tightly scoped P0 slice. It does not authorize applying migrations to production, installing Behive, adding crawlers/source registries/graph stores/recurring missions, changing evidence statuses, approving literature, changing food or dog data, altering ranking, or deploying.
+
+The P0 local migration is `supabase/migrations/20260801204309_research_mission_lifecycle.sql`. It is accompanied by a shared lifecycle service, retry service operation, admin polling read model, and integration with the existing discovery/import/PDF/drafting job paths. The migration has been executed successfully against an isolated Postgres runtime, including terminal transitions, idempotent start/retry, retry lineage, event ordering, event immutability and service-role privileges. Production application remains a separate owner-reviewed release action.

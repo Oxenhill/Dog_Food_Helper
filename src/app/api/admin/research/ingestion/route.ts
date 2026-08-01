@@ -5,6 +5,13 @@ import {
   RESEARCH_BRAIN_EMBEDDING_MODEL,
 } from '@/lib/researchBrainPipeline';
 import { resolveResearchCandidate } from '@/lib/researchDiscovery';
+import {
+  appendResearchMissionJobEvent,
+  finishResearchMissionJob,
+  markResearchMissionJobRunning,
+  startResearchMissionJob,
+  type ResearchMissionJob,
+} from '@/lib/researchMissionLifecycle';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 import type { ResearchCandidate } from '@/lib/researchEvidence';
@@ -22,18 +29,22 @@ const TOPICS = new Set<ResearchTopic>([
   'general',
 ]);
 
-async function failJob(jobId: string, error: unknown): Promise<string> {
+async function failJob(
+  jobId: string,
+  error: unknown,
+  reasonCode = 'document_ingestion_failed'
+): Promise<string> {
   const message = error instanceof Error ? error.message : 'Research processing failed';
-  const completedAt = new Date().toISOString();
-  await supabaseAdmin
-    .from('research_ingestion_jobs')
-    .update({
+  try {
+    await finishResearchMissionJob({
+      jobId,
       status: 'failed',
-      error_message: message,
-      completed_at: completedAt,
-      updated_at: completedAt,
-    })
-    .eq('id', jobId);
+      reasonCode,
+      errorMessage: message,
+    });
+  } catch {
+    // Preserve the processing failure as the response if audit finalisation fails.
+  }
   return message;
 }
 
@@ -46,29 +57,25 @@ async function completeJob(
     embedding: { inputTokens: number; estimatedCostUsd: number };
   }
 ) {
-  const completedAt = new Date().toISOString();
-  const { data, error } = await supabaseAdmin
-    .from('research_ingestion_jobs')
-    .update({
-      status: 'succeeded',
-      result_summary: {
+  return finishResearchMissionJob({
+    jobId,
+    status: 'succeeded',
+    resultSummary: {
         document_id: result.documentId,
         chunk_count: result.chunkCount,
         duplicate: result.duplicate,
         recommendation_runtime_model_calls: 0,
-      },
-      gateway_model: result.duplicate ? null : RESEARCH_BRAIN_EMBEDDING_MODEL,
-      gateway_input_tokens: result.embedding.inputTokens,
-      gateway_output_tokens: 0,
-      gateway_cost_usd: result.embedding.estimatedCostUsd,
-      completed_at: completedAt,
-      updated_at: completedAt,
-    })
-    .eq('id', jobId)
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data;
+    },
+    gatewayModel: result.duplicate ? null : RESEARCH_BRAIN_EMBEDDING_MODEL,
+    gatewayInputTokens: result.embedding.inputTokens,
+    gatewayOutputTokens: 0,
+    gatewayCostUsd: result.embedding.estimatedCostUsd,
+    eventPayload: {
+      document_id: result.documentId,
+      chunk_count: result.chunkCount,
+      duplicate: result.duplicate,
+    },
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -95,7 +102,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
   const action = typeof body.action === 'string' ? body.action : '';
-
   if (action === 'prepare_pdf') {
     const originalFilename =
       typeof body.original_filename === 'string' ? body.original_filename.trim() : '';
@@ -120,19 +126,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .insert({
-        job_type: 'pdf_import',
-        status: 'queued',
-        requested_by: admin.id,
-        input: { original_filename: originalFilename, title, topic, source_url: sourceUrl },
-      })
-      .select('*')
-      .single();
-    if (jobError || !job) {
+    let job: ResearchMissionJob;
+    try {
+      job = await startResearchMissionJob({
+        missionType: 'document_processing',
+        objective: `Ingest owner-uploaded research PDF: ${title}`,
+        stageKey: 'document_ingestion',
+        jobType: 'pdf_import',
+        requestedBy: admin.id,
+        jobInput: { original_filename: originalFilename, title, topic, source_url: sourceUrl },
+        initialStatus: 'queued',
+      });
+    } catch (error) {
       return NextResponse.json(
-        { error: jobError?.message ?? 'Could not prepare upload' },
+        { error: error instanceof Error ? error.message : 'Could not prepare upload' },
         { status: 500 }
       );
     }
@@ -141,16 +148,33 @@ export async function POST(request: NextRequest) {
       .from(BUCKET)
       .createSignedUploadUrl(storagePath, { upsert: false });
     if (uploadError || !upload) {
-      await failJob(job.id, uploadError ?? new Error('Could not sign upload'));
+      await failJob(
+        job.id,
+        uploadError ?? new Error('Could not sign upload'),
+        'pdf_upload_prepare_failed'
+      );
       return NextResponse.json({ error: 'Could not prepare upload' }, { status: 500 });
     }
-    await supabaseAdmin
+    const { error: inputUpdateError } = await supabaseAdmin
       .from('research_ingestion_jobs')
       .update({
         input: { ...job.input, storage_path: storagePath },
         updated_at: new Date().toISOString(),
       })
       .eq('id', job.id);
+    if (inputUpdateError) {
+      await failJob(job.id, inputUpdateError, 'pdf_upload_prepare_failed');
+      return NextResponse.json({ error: 'Could not prepare upload' }, { status: 500 });
+    }
+    try {
+      await appendResearchMissionJobEvent(job.id, 'document.upload_prepared', {
+        storage_path: storagePath,
+        file_size: fileSize,
+      });
+    } catch (error) {
+      await failJob(job.id, error, 'audit_event_append_failed');
+      return NextResponse.json({ error: 'Could not record prepared upload' }, { status: 500 });
+    }
     return NextResponse.json({
       job_id: job.id,
       storage_path: storagePath,
@@ -182,11 +206,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Upload job is incomplete' }, { status: 400 });
     }
 
-    const startedAt = new Date().toISOString();
-    await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .update({ status: 'running', started_at: startedAt, updated_at: startedAt })
-      .eq('id', job.id);
+    try {
+      await markResearchMissionJobRunning(job.id, { source_type: 'owner_uploaded_pdf' });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Could not start PDF ingestion' },
+        { status: 500 }
+      );
+    }
     try {
       const { data: file, error: downloadError } = await supabaseAdmin.storage
         .from(BUCKET)
@@ -244,26 +271,31 @@ export async function POST(request: NextRequest) {
     } else {
       const identifier = typeof body.url === 'string' ? body.url.trim() : '';
       const topicKey = typeof body.topic_key === 'string' ? body.topic_key : '';
+      let candidateRow: ResearchMissionJob;
+      try {
+        candidateRow = await startResearchMissionJob({
+          missionType: 'source_import',
+          objective: `Resolve and ingest approved research source: ${identifier}`,
+          stageKey: 'document_ingestion',
+          jobType: 'url_import',
+          requestedBy: admin.id,
+          jobInput: { identifier, topic_key: topicKey },
+          initialStatus: 'queued',
+        });
+      } catch (error) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : 'Could not create import job' },
+          { status: 500 }
+        );
+      }
       try {
         candidate = await resolveResearchCandidate(identifier, topicKey);
       } catch (error) {
+        await failJob(candidateRow.id, error, 'source_resolution_failed');
         return NextResponse.json(
           { error: error instanceof Error ? error.message : 'Could not resolve source' },
           { status: 400 }
         );
-      }
-      const { data: candidateRow, error: candidateError } = await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .insert({
-          job_type: 'url_import',
-          status: 'queued',
-          requested_by: admin.id,
-          input: { identifier, topic_key: topicKey },
-        })
-        .select('*')
-        .single();
-      if (candidateError || !candidateRow) {
-        return NextResponse.json({ error: 'Could not create import job' }, { status: 500 });
       }
       const { data: stored, error: storedError } = await supabaseAdmin
         .from('research_discovery_candidates')
@@ -280,7 +312,11 @@ export async function POST(request: NextRequest) {
         .select('id')
         .single();
       if (storedError || !stored) {
-        await failJob(candidateRow.id, storedError ?? new Error('Could not store source'));
+        await failJob(
+          candidateRow.id,
+          storedError ?? new Error('Could not store source'),
+          'source_candidate_persist_failed'
+        );
         return NextResponse.json({ error: 'Could not store source' }, { status: 500 });
       }
       candidateId = stored.id;
@@ -290,27 +326,36 @@ export async function POST(request: NextRequest) {
     let processingJobId =
       typeof body.processing_job_id === 'string' ? body.processing_job_id : '';
     if (!processingJobId) {
-      const { data: job, error } = await supabaseAdmin
-        .from('research_ingestion_jobs')
-        .insert({
-          job_type: 'url_import',
-          status: 'queued',
-          requested_by: admin.id,
-          input: { candidate_id: candidateId, pmid: candidate.pmid },
-        })
-        .select('id')
-        .single();
-      if (error || !job) {
-        return NextResponse.json({ error: 'Could not create import job' }, { status: 500 });
+      try {
+        const job = await startResearchMissionJob({
+          missionType: 'source_import',
+          objective: `Ingest selected research candidate: ${candidate.title}`,
+          stageKey: 'document_ingestion',
+          jobType: 'url_import',
+          requestedBy: admin.id,
+          jobInput: { candidate_id: candidateId, pmid: candidate.pmid },
+          initialStatus: 'queued',
+        });
+        processingJobId = job.id;
+      } catch (error) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : 'Could not create import job' },
+          { status: 500 }
+        );
       }
-      processingJobId = job.id;
     }
 
-    const startedAt = new Date().toISOString();
-    await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .update({ status: 'running', started_at: startedAt, updated_at: startedAt })
-      .eq('id', processingJobId);
+    try {
+      await markResearchMissionJobRunning(processingJobId, {
+        candidate_id: candidateId,
+        source_name: candidate.source_name,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Could not start source ingestion' },
+        { status: 500 }
+      );
+    }
     try {
       const result = await ingestDiscoveryCandidate({
         jobId: processingJobId,

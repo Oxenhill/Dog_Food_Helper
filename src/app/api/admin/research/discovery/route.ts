@@ -5,6 +5,11 @@ import {
   uniqueCandidates,
 } from '@/lib/researchDiscovery';
 import { estimateResearchCosts } from '@/lib/researchCost';
+import {
+  finishResearchMissionJob,
+  startResearchMissionJob,
+  type ResearchMissionJob,
+} from '@/lib/researchMissionLifecycle';
 import { supabaseAdmin } from '@/lib/supabase';
 
 export const maxDuration = 300;
@@ -65,25 +70,24 @@ export async function POST(request: NextRequest) {
     : undefined;
   const documentCap =
     typeof body.document_cap === 'number' ? Math.max(1, Math.floor(body.document_cap)) : 30;
-
-  const { data: job, error: jobError } = await supabaseAdmin
-    .from('research_ingestion_jobs')
-    .insert({
-      job_type: 'discovery',
-      status: 'running',
-      requested_by: admin.id,
-      input: {
+  let job: ResearchMissionJob;
+  try {
+    job = await startResearchMissionJob({
+      missionType: 'discovery',
+      objective: 'Discover candidate canine nutrition research for owner selection',
+      stageKey: 'discovery',
+      jobType: 'discovery',
+      requestedBy: admin.id,
+      jobInput: {
         candidates_per_topic: candidatesPerTopic,
         topic_keys: topicKeys ?? null,
         document_cap: documentCap,
       },
-      started_at: new Date().toISOString(),
-    })
-    .select('*')
-    .single();
-  if (jobError || !job) {
+      initialStatus: 'running',
+    });
+  } catch (error) {
     return NextResponse.json(
-      { error: jobError?.message ?? 'Could not start discovery' },
+      { error: error instanceof Error ? error.message : 'Could not start discovery' },
       { status: 500 }
     );
   }
@@ -132,12 +136,10 @@ export async function POST(request: NextRequest) {
       .select('*');
     if (candidateError) throw candidateError;
 
-    const completedAt = new Date().toISOString();
-    const { data: completedJob, error: completionError } = await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .update({
-        status: candidates.length > 0 ? 'awaiting_selection' : 'succeeded',
-        result_summary: {
+    const completedJob = await finishResearchMissionJob({
+      jobId: job.id,
+      status: candidates.length > 0 ? 'awaiting_selection' : 'succeeded',
+      resultSummary: {
           unique_candidate_count: run.unique_candidate_count,
           stored_candidate_count: candidates.length,
           duplicate_candidate_count: run.duplicate_candidate_count,
@@ -147,14 +149,13 @@ export async function POST(request: NextRequest) {
           discovery_model_calls: 0,
           discovery_embedding_calls: 0,
           future_import_cost_estimate: costEstimate,
-        },
-        completed_at: completedAt,
-        updated_at: completedAt,
-      })
-      .eq('id', job.id)
-      .select('*')
-      .single();
-    if (completionError) throw completionError;
+      },
+      eventPayload: {
+        stored_candidate_count: candidates.length,
+        model_calls_performed: false,
+        embedding_calls_performed: false,
+      },
+    });
 
     return NextResponse.json({
       job: completedJob,
@@ -174,16 +175,16 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Discovery failed';
-    const failedAt = new Date().toISOString();
-    await supabaseAdmin
-      .from('research_ingestion_jobs')
-      .update({
+    try {
+      await finishResearchMissionJob({
+        jobId: job.id,
         status: 'failed',
-        error_message: message,
-        completed_at: failedAt,
-        updated_at: failedAt,
-      })
-      .eq('id', job.id);
+        reasonCode: 'discovery_failed',
+        errorMessage: message,
+      });
+    } catch {
+      // Preserve the discovery failure as the response even if audit finalisation fails.
+    }
     return NextResponse.json({ error: message, job_id: job.id }, { status: 500 });
   }
 }
