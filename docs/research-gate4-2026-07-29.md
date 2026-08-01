@@ -610,9 +610,37 @@ The expanded tests now cover:
 - Lenny remains one `partial` Biome4Pets document with 11 findings: 10
   `accepted` and the `Bacteriodetes` typo still `needs_review` and excluded.
 
-### Deployment completion still required
+### Production deployment and owner scope calibration (2026-08-01)
 
-1. Commit only the Research Layer files.
-2. Push to `main`, wait for the Vercel deployment, and perform the requested
-   authenticated desktop/mobile admin, owner-report, recommendation, link, and
-   console checks.
+- Commit `72296c3` was pushed to `main`; Vercel reported success and the
+  production footer served the same commit.
+- The authenticated admin research page loaded the ingestion controls, 21
+  queued proposition cards, edit-before-review controls, exact quotes, honest
+  access labels, source-paper titles, and working PubMed links. Nothing was
+  approved.
+- During that review, the owner identified Salmonella contamination cards as
+  outside Bowl's purpose: they measured a manufacturing/product-sample issue,
+  not how an individual dog responds to chicken or another candidate food.
+- The same rule identified seven out-of-scope queued propositions: four food
+  contamination/pathogen cards, two category-level label-accuracy cards, and
+  one ingredient composition-variability card. The authenticated owner review
+  rejected all seven with explicit scope notes; the records remain auditable.
+- Live state is now 14 queued and 7 rejected clusters; claims are 1 active, 16
+  queued, and 7 rejected. Existing corroboration remains empty.
+- `enforce_research_decision_scope` is live. Its database constraint preserves
+  rejected audit rows but prevents contamination, manufacturing, labelling,
+  recall, and composition-audit outcomes from being draft, queued, or active.
+  A live exception-handled test confirmed a queued contamination update is
+  refused without changing the row.
+- Background drafting now requires a tested food exposure and a clinical,
+  biological, digestibility/nutrient-status, behavioural, or performance
+  outcome measured in dogs. Incidental ingredients and food-product audits are
+  deterministically rejected. The same shared rule also blocks owner edits and
+  approval requests, and the admin UI explains the boundary.
+- Updated verification: 275/275 tests, TypeScript, production build, and
+  `git diff --check` all pass.
+
+The scope correction still needs to be committed, pushed, deployed, and
+rechecked in the authenticated desktop/mobile browser. Lenny's owner report
+and the final matching/nonmatching recommendation checks remain pending for
+that production pass.

@@ -2195,8 +2195,34 @@ was approved.
 - Production build: `npm run build` exited 0.
 - `git diff --check` passed apart from expected line-ending warnings.
 
-**Pending before commit/push/deploy:**
+**Production deployment and owner scope calibration (2026-08-01):**
 
-1. Commit only Research Layer files (excluding the pre-existing
-   handoff edit), push `main`, await Vercel, and complete authenticated
-   desktop/mobile browser verification.
+- Commit `72296c3` reached `main`, Vercel completed successfully, and production
+  served that exact commit.
+- Authenticated admin review verified ingestion controls, edit-before-review,
+  exact quotes, access labels, source titles, and PubMed links. Nothing was
+  approved.
+- The owner identified Salmonella contamination as out of scope because it is
+  a food-product/manufacturing issue rather than evidence of an individual
+  dog's response to chicken. Applying that principle consistently identified
+  four contamination cards, two label-accuracy cards, and one composition-
+  variability card.
+- All seven were rejected through the authenticated review UI with explicit
+  scope notes. They remain auditable. Live state is now 14 queued/7 rejected
+  clusters and 1 active/16 queued/7 rejected claims; corroboration remains
+  empty.
+- Added a shared individual-food-selection rule: background drafting must mark
+  the subject as a tested food exposure and the outcome as a dog clinical,
+  biological, digestibility/nutrient-status, behaviour, or performance
+  response. Product contamination, manufacturing, labelling, recall, and
+  composition audits are rejected during drafting, owner edit, and approval.
+- Applied `enforce_research_decision_scope` once. Its database constraint keeps
+  rejected audits but refuses these outcomes in draft, queued, or active state.
+  A live exception-handled write test passed without changing the tested row.
+- Updated checks: 275/275 tests, TypeScript, production build, and
+  `git diff --check` pass.
+
+**Remaining:** commit and deploy this scope correction, then complete the
+authenticated desktop/mobile admin, Lenny-report, matching/nonmatching
+recommendation, link, and console checks. The pre-existing handoff edit remains
+excluded from the implementation commit.

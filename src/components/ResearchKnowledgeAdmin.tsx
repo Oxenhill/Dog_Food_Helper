@@ -304,6 +304,11 @@ export default function ResearchKnowledgeAdmin() {
           explicit dog-profile requirements. Similar propositions share a cluster. Review activates
           the cluster and its source claims together; it never marks them independently corroborated.
         </p>
+        <p className="help-text mt-2">
+          Bowl retains outcomes measured in dogs: clinical or biological response, digestibility,
+          nutrient status, behaviour, or performance. Product contamination, manufacturing,
+          labelling, recall, and composition audits are outside individualized food selection.
+        </p>
       </div>
 
       {error && <div className="callout-alarm" role="alert">{error}</div>}

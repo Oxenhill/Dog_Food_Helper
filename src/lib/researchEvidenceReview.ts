@@ -90,6 +90,21 @@ const DOCUMENT_FINDING_KEYS = new Set(
 );
 const LIFE_STAGE_CONTEXTS: ReadonlySet<string> = new Set(RESEARCH_LIFE_STAGE_CONTEXTS);
 
+const NON_DOG_RESPONSE_OUTCOME_PATTERNS = [
+  /\bcontaminat(?:e|ed|ion)\b/i,
+  /\b(?:anti(?:microbial|biotic)|drug) resistance\b/i,
+  /\bpathogen (?:detection|prevalence|rate|load)\b/i,
+  /\blabel(?:ling|ing)? accuracy\b/i,
+  /\bmislabel(?:led|ing)?\b/i,
+  /\bundeclared (?:animal species|ingredient|protein)\b/i,
+  /\b(?:nutritional |ingredient |product )?composition variability\b/i,
+  /\bmanufactur(?:e|ed|er|ing) (?:defect|quality|control)\b/i,
+  /\bproduct recall\b/i,
+] as const;
+
+export const RESEARCH_DECISION_SCOPE_MESSAGE =
+  "Measured outcome must describe a clinical, biological, behavioural, digestibility, or nutrient-status response in dogs. Product contamination, manufacturing, labelling, recall, and composition-audit outcomes are outside Bowl's individualized food-selection scope.";
+
 export interface ResearchClusterEditContext {
   context_type: (typeof RESEARCH_CONTEXT_TYPES)[number];
   context_key: string;
@@ -203,6 +218,15 @@ export function validateResearchSubject(
   return reasons;
 }
 
+export function validateResearchDecisionOutcome(outcomeValue: string): string[] {
+  if (
+    NON_DOG_RESPONSE_OUTCOME_PATTERNS.some((pattern) => pattern.test(outcomeValue))
+  ) {
+    return [RESEARCH_DECISION_SCOPE_MESSAGE];
+  }
+  return [];
+}
+
 export function validateResearchContext(
   context: ResearchClusterEditContext
 ): string[] {
@@ -236,6 +260,7 @@ export function validateResearchContext(
 export function validateResearchClusterEdit(edit: ResearchClusterEdit): string[] {
   const reasons = [
     ...validateResearchSubject(edit.subject_type, edit.subject_value),
+    ...validateResearchDecisionOutcome(edit.outcome_value),
     ...validateCautiousResearchSummary(edit.cautious_summary),
   ];
   if (!edit.outcome_value.trim()) reasons.push('Measured outcome is required.');

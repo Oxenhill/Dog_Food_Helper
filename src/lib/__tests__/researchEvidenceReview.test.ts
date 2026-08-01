@@ -7,6 +7,7 @@ import {
   researchClusterIdentity,
   researchClusterLabel,
   validateCautiousResearchSummary,
+  validateResearchDecisionOutcome,
   validateResearchClusterEdit,
   validateResearchContext,
   validateResearchSubject,
@@ -115,6 +116,72 @@ test('owner summary validation rejects advice, certainty, and multi-sentence tex
       'The study found an association. The result proves the food is safe.'
     ).length > 0
   );
+});
+
+test('individual food-selection scope rejects product audits but keeps dog responses', () => {
+  for (const outcome of [
+    'Salmonella contamination',
+    'Salmonella contamination rate',
+    'label accuracy for elimination diets',
+    'undeclared animal species',
+    'nutritional composition variability',
+    'product recall rate',
+  ]) {
+    assert.ok(validateResearchDecisionOutcome(outcome).length > 0, outcome);
+  }
+  for (const outcome of [
+    'dietary nutrient digestibility',
+    'cutaneous adverse food reaction',
+    'calcium oxalate relative supersaturation',
+    'microbiome composition',
+    'canine Salmonella infection incidence',
+  ]) {
+    assert.deepEqual(validateResearchDecisionOutcome(outcome), [], outcome);
+  }
+});
+
+test('owner edits cannot turn a queued cluster into a manufacturing or product-audit claim', () => {
+  assert.ok(
+    validateResearchClusterEdit(
+      edit({
+        outcome_type: 'clinical_marker',
+        outcome_value: 'Salmonella contamination',
+      })
+    ).some((reason) => reason.includes("outside Bowl's individualized food-selection scope"))
+  );
+});
+
+test('background drafting classifies tested exposure and dog-measured outcome before retention', () => {
+  const draftingSource = readFileSync(
+    new URL('../researchBrainDrafting.ts', import.meta.url),
+    'utf8'
+  );
+  for (const required of [
+    'tested_food_exposure',
+    'incidental_food_descriptor',
+    'dog_clinical_response',
+    'dog_biological_response',
+    'food_product_or_manufacturing',
+    'subject_not_tested_food_exposure',
+    'outcome_not_measured_as_dog_response',
+    'outcome_outside_individual_food_selection_scope',
+  ]) {
+    assert.match(draftingSource, new RegExp(required));
+  }
+});
+
+test('database scope constraint preserves rejected audits but blocks actionable product-audit outcomes', () => {
+  const migration = readFileSync(
+    new URL(
+      '../../../supabase/migrations/20260801185000_enforce_research_decision_scope.sql',
+      import.meta.url
+    ),
+    'utf8'
+  );
+  assert.match(migration, /status = 'rejected'/);
+  assert.match(migration, /contaminat/);
+  assert.match(migration, /label accuracy/);
+  assert.match(migration, /composition variability/);
 });
 
 test('cluster edit validation rejects duplicate applicability and allows no-context drafts', () => {

@@ -255,6 +255,49 @@ export async function POST(request: NextRequest) {
     if (action === 'reject_cluster' && !reviewNote) {
       return NextResponse.json({ error: 'A rejection note is required' }, { status: 400 });
     }
+    if (action === 'approve_cluster') {
+      const [
+        { data: cluster, error: clusterError },
+        { data: applicability, error: applicabilityError },
+      ] = await Promise.all([
+        supabaseAdmin
+          .from('research_evidence_clusters')
+          .select('*')
+          .eq('id', clusterId)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('research_cluster_applicability')
+          .select('context_type, context_key, context_value, match_operator')
+          .eq('cluster_id', clusterId),
+      ]);
+      if (clusterError || !cluster) {
+        return NextResponse.json(
+          { error: clusterError?.message ?? 'Evidence cluster not found' },
+          { status: clusterError ? 500 : 404 }
+        );
+      }
+      if (applicabilityError) {
+        return NextResponse.json({ error: applicabilityError.message }, { status: 500 });
+      }
+      const validationErrors = validateResearchClusterEdit({
+        subject_type: cluster.subject_type,
+        subject_value: cluster.subject_value,
+        outcome_type: cluster.outcome_type,
+        outcome_value: cluster.outcome_value,
+        direction: cluster.direction,
+        cautious_summary: cluster.cautious_summary,
+        applicability: (applicability ?? []) as ResearchClusterEdit['applicability'],
+      });
+      if (validationErrors.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Cluster cannot be approved: ${validationErrors.join(' ')}`,
+            details: validationErrors,
+          },
+          { status: 400 }
+        );
+      }
+    }
     const { data, error } = await supabaseAdmin.rpc(
       'review_research_evidence_cluster',
       {

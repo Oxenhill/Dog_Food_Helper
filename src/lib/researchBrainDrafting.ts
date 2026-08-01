@@ -4,7 +4,10 @@ import { z } from 'zod';
 import { embedResearchTexts, RESEARCH_BRAIN_EMBEDDING_MODEL } from './researchBrainPipeline';
 import { NUTRIENT_MATCH_RULES } from './activeClaimRetrieval';
 import { INGREDIENT_CATEGORIES } from './ingredientCategories';
-import { researchClusterIdentity } from './researchEvidenceReview';
+import {
+  researchClusterIdentity,
+  validateResearchDecisionOutcome,
+} from './researchEvidenceReview';
 import { supabaseAdmin } from './supabase';
 import type {
   ResearchClaimDirection,
@@ -47,6 +50,18 @@ const DraftClaimSchema = z.object({
     'general_health',
   ]),
   outcome_value: z.string().min(1),
+  subject_role: z.enum([
+    'tested_food_exposure',
+    'incidental_food_descriptor',
+  ]),
+  outcome_scope: z.enum([
+    'dog_clinical_response',
+    'dog_biological_response',
+    'dog_digestibility_or_nutrient_status',
+    'dog_behavior_or_performance',
+    'food_product_or_manufacturing',
+    'other',
+  ]),
   direction: z.enum([
     'supports',
     'cautions_against',
@@ -98,10 +113,23 @@ substring of that chunk. Every effect_summary must be one cautious sentence usin
 Never give feeding instructions, treatment advice, or veterinary advice. Never write proves, always,
 never, guarantees, cures, prevents, completely safe, or appropriate for use.
 
-The subject is the exposure/intervention that can be matched to a food. The outcome is the measured
-health, clinical, microbiome, or general-health result. A neutral result is still a result, not
-positive additive evidence. applicable_contexts are dog-profile facts required for this result to be
-useful (diagnosed condition, exact report finding, life stage, restriction, or logged outcome).
+The subject is the food exposure/intervention that can be matched to a food. Return a claim only when
+that subject was actually tested as an intervention, exposure, or predictor; set subject_role to
+tested_food_exposure. An ingredient merely listed in a sampled product is an incidental_food_descriptor
+and must not become a claim. The outcome must be a response measured in dogs: clinical health,
+canine biological samples or microbiome, digestibility or nutrient status, behaviour, or performance.
+Classify that honestly in outcome_scope. Food-product assays and audits are not dog outcomes.
+
+Never return food contamination, pathogen prevalence in product samples, antimicrobial resistance of
+food isolates, manufacturing quality, recalls, label accuracy, undeclared-ingredient audits, or
+ingredient/product composition variability. Those may matter to a manufacturer or regulator, but
+they cannot tell Bowl how an individual dog responds to eating a candidate food. A study may still
+support a claim about infection or another clinical outcome when that outcome was measured directly
+in dogs and the food exposure itself was tested.
+
+A neutral result is still a result, not positive additive evidence. applicable_contexts are dog-profile
+facts required for this result to be useful (diagnosed condition, exact report finding, life stage,
+restriction, or logged outcome).
 Add a context only when the source explicitly supports that restriction. Do not invent an individual
 dog recommendation. If a claim has no specific profile requirement, return an empty context array.
 
@@ -145,6 +173,22 @@ function validateDraft(
   else if (!content.includes(claim.supporting_quote)) reasons.push('quote_not_literal');
   if (claim.subject_value !== claim.subject_value.trim()) reasons.push('subject_whitespace');
   if (claim.outcome_value !== claim.outcome_value.trim()) reasons.push('outcome_whitespace');
+  if (claim.subject_role !== 'tested_food_exposure') {
+    reasons.push('subject_not_tested_food_exposure');
+  }
+  if (
+    ![
+      'dog_clinical_response',
+      'dog_biological_response',
+      'dog_digestibility_or_nutrient_status',
+      'dog_behavior_or_performance',
+    ].includes(claim.outcome_scope)
+  ) {
+    reasons.push('outcome_not_measured_as_dog_response');
+  }
+  if (validateResearchDecisionOutcome(claim.outcome_value).length > 0) {
+    reasons.push('outcome_outside_individual_food_selection_scope');
+  }
   if (
     claim.effect_summary !== claim.effect_summary.trim() ||
     sentenceCount(claim.effect_summary) !== 1
