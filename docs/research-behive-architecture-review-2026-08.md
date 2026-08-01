@@ -1,6 +1,6 @@
 # Bowl Research Layer: Behive-informed architecture review
 
-**Status:** owner-approved P0 release; production migration applied; application deployment in progress
+**Status:** owner-approved P0 released to production
 **Reviewed:** 2026-08-01
 **Behive implementation reviewed:** public commit [`c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd`](https://github.com/qa10devteam/behive/tree/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd)
 **Bowl baseline:** `9ce3be3c46b09709aac4f9561a2b363f2e8c63b3`
@@ -260,3 +260,7 @@ flowchart TD
 The owner approved this architecture on 2026-08-01 with “this all looks good to me lets build it.” That approval authorizes the phased target and the tightly scoped P0 slice. It does not authorize applying migrations to production, installing Behive, adding crawlers/source registries/graph stores/recurring missions, changing evidence statuses, approving literature, changing food or dog data, altering ranking, or deploying.
 
 The P0 local migration is `supabase/migrations/20260801204309_research_mission_lifecycle.sql`. It is accompanied by a shared lifecycle service, retry service operation, admin polling read model, and integration with the existing discovery/import/PDF/drafting job paths. The migration has been executed successfully against an isolated Postgres runtime, including terminal transitions, idempotent start/retry, retry lineage, event ordering, event immutability and service-role privileges. Production application remains a separate owner-reviewed release action.
+
+### P0 release record
+
+The owner subsequently approved the production release on 2026-08-01. Migration `20260801211409 research_mission_lifecycle` was applied to Supabase project `ysffyuohwvdifvbopfcm`, and application commit `51c20d8` was deployed to Vercel project `dog-food-helper` as deployment `dpl_7eRN3MwQJQk1Lz8tdDKHgb4WyrdZ`. Post-release checks confirmed the new tables and events were empty, protected research and private-report baselines were unchanged, the admin mission endpoint failed closed without authentication, and live recommendations remained deterministic with research excluded from ranking.
