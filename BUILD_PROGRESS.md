@@ -2221,8 +2221,31 @@ was approved.
   A live exception-handled write test passed without changing the tested row.
 - Updated checks: 275/275 tests, TypeScript, production build, and
   `git diff --check` pass.
+- Scope commit `3d01059` and serverless document-listing fix `7d4388b` both
+  reached production successfully. Moving PDF parser loading to the two PDF-
+  finalisation paths restored read-only research ingestion and dog-document
+  listing; Ron's owner page now loads with no document error.
+- Authenticated production verification found 14 queued cards, the explicit
+  dog-outcome scope message, owner edit controls, literal quotes, honest access
+  labels, source titles, and usable PubMed links. Nothing was approved and
+  browser warning/error logs were empty.
+- A fresh Ron recommendation run excluded `Acana Senior Dog`; all ten results
+  had no matching active reviewed evidence, the neutral legacy lentil claim was
+  absent, and research did not change any score. This verifies the nonmatching
+  production path and adult life-stage guard.
+- The authenticated account owns Ron only. Bowl therefore did not expose
+  Lenny's owner page or a production matching-context dog; those paths were not
+  bypassed. Integrated tests cover the matching path, while live SQL confirms
+  Lenny remains `partial` with 10 accepted findings and one excluded uncertain
+  `Bacteriodetes` finding.
+- Final live state remains 14 queued/7 rejected clusters and 1 active/16
+  queued/7 rejected claims. Legacy reviewer metadata and empty corroboration
+  arrays are unchanged; protected corpus/workflow counts remain 30 documents,
+  695 chunks, 88 centroids, 2,282 relevance rows, 19 jobs, 22 memberships, 12
+  applicability rows, and 368 Voyage embeddings, with empty score cache/queue.
+- A narrow-screen overflow in the recommendation score badge was corrected by
+  stacking the card heading and score on mobile. Desktop and 375px admin/owner
+  checks remain usable, and the final owner page has no horizontal overflow.
 
-**Remaining:** commit and deploy this scope correction, then complete the
-authenticated desktop/mobile admin, Lenny-report, matching/nonmatching
-recommendation, link, and console checks. The pre-existing handoff edit remains
-excluded from the implementation commit.
+The pre-existing `docs/research-brain-handoff-2026-07-29.md` edit remains
+outside these implementation commits.

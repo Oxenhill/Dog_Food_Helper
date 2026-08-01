@@ -639,8 +639,34 @@ The expanded tests now cover:
   approval requests, and the admin UI explains the boundary.
 - Updated verification: 275/275 tests, TypeScript, production build, and
   `git diff --check` all pass.
-
-The scope correction still needs to be committed, pushed, deployed, and
-rechecked in the authenticated desktop/mobile browser. Lenny's owner report
-and the final matching/nonmatching recommendation checks remain pending for
-that production pass.
+- The scope correction was committed as `3d01059` and deployed successfully.
+  A follow-up production fix in `7d4388b` keeps the PDF parser runtime out of
+  read-only document and ingestion requests; this removed the serverless 500
+  and the owner-visible unreadable-JSON error without changing upload privacy
+  or parsing behaviour.
+- Authenticated production recheck showed 14 queued cards, the new scope
+  explanation, edit-before-review controls, literal quotes, access labels,
+  source titles, and usable PubMed links. No evidence was approved. Desktop
+  and 375px mobile layouts remained usable and console warning/error logs were
+  empty.
+- A fresh deterministic recommendation run for adult Ron excluded `Acana
+  Senior Dog`. All ten eligible foods reported no matching active reviewed
+  evidence, so the neutral legacy lentil claim was neither displayed nor used
+  to change ranking. The first seven pre-existing eligible foods retained the
+  same order and score; the senior product was removed by eligibility rather
+  than by a research weight.
+- The authenticated account owns Ron only, so a Lenny owner-page recheck and a
+  production matching-context recommendation could not be performed without
+  crossing household access boundaries or manufacturing a match. The matching
+  case remains covered by the integrated tests. A live private-data invariant
+  check confirms Lenny is still `partial`, with 10 accepted findings and the
+  uncertain `Bacteriodetes` typo excluded.
+- Final live invariants remain: 30 documents, 695 chunks, 88 centroids, 2,282
+  relevance rows, empty score cache/queue, 19 workflow jobs, 22 memberships,
+  12 applicability rows, and 368 Voyage embeddings. The two legacy claim rows
+  retain their status and reviewer metadata, and all corroboration arrays are
+  empty.
+- A five-pixel mobile overflow in Ron's score badge was corrected by stacking
+  the recommendation-card heading and score on narrow viewports; the final
+  production pass confirmed no document error, no senior result, and no page-
+  level horizontal overflow.
