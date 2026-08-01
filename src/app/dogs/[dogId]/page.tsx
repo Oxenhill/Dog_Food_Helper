@@ -307,7 +307,7 @@ export default function DogHubPage({ params }: { params: { dogId: string } }) {
                 const remaining = ingredients.length - preview.length;
                 return (
                   <div key={r.food_id} className="hairline pt-4 first:border-0 first:pt-0">
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                       <h3 className="font-semibold text-ink">
                         <span className="metric text-ink-soft">#{i + 1}</span> {r.brand} {r.name}
                       </h3>
