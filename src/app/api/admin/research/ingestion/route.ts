@@ -5,6 +5,7 @@ import {
   RESEARCH_BRAIN_EMBEDDING_MODEL,
 } from '@/lib/researchBrainPipeline';
 import { resolveResearchCandidate } from '@/lib/researchDiscovery';
+import { loadLiteratureRegistrySnapshot } from '@/lib/researchLiteratureSources';
 import {
   appendResearchMissionJobEvent,
   finishResearchMissionJob,
@@ -49,7 +50,7 @@ async function failJob(
 }
 
 async function completeJob(
-  jobId: string,
+  job: ResearchMissionJob,
   result: {
     documentId: string;
     chunkCount: number;
@@ -57,8 +58,12 @@ async function completeJob(
     embedding: { inputTokens: number; estimatedCostUsd: number };
   }
 ) {
+  const configuredModels = job.control_plane.model_routes
+    .filter((route) => route.execution_kind.endsWith('_model'))
+    .map((route) => route.model_identifier)
+    .join(' + ');
   return finishResearchMissionJob({
-    jobId,
+    jobId: job.id,
     status: 'succeeded',
     resultSummary: {
         document_id: result.documentId,
@@ -66,7 +71,7 @@ async function completeJob(
         duplicate: result.duplicate,
         recommendation_runtime_model_calls: 0,
     },
-    gatewayModel: result.duplicate ? null : RESEARCH_BRAIN_EMBEDDING_MODEL,
+    gatewayModel: result.duplicate ? null : configuredModels || RESEARCH_BRAIN_EMBEDDING_MODEL,
     gatewayInputTokens: result.embedding.inputTokens,
     gatewayOutputTokens: 0,
     gatewayCostUsd: result.embedding.estimatedCostUsd,
@@ -206,8 +211,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Upload job is incomplete' }, { status: 400 });
     }
 
+    let runningJob: ResearchMissionJob;
     try {
-      await markResearchMissionJobRunning(job.id, { source_type: 'owner_uploaded_pdf' });
+      runningJob = await markResearchMissionJobRunning(job.id, {
+        source_type: 'owner_uploaded_pdf',
+      });
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : 'Could not start PDF ingestion' },
@@ -238,8 +246,9 @@ export async function POST(request: NextRequest) {
         sourceUrl: input.source_url ?? null,
         originalFilename: input.original_filename ?? 'research.pdf',
         text: extracted.text,
+        controlPlane: runningJob.control_plane,
       });
-      const completedJob = await completeJob(job.id, result);
+      const completedJob = await completeJob(runningJob, result);
       await supabaseAdmin.storage.from(BUCKET).remove([input.storage_path]);
       return NextResponse.json({ job: completedJob, result });
     } catch (error) {
@@ -289,7 +298,15 @@ export async function POST(request: NextRequest) {
         );
       }
       try {
-        candidate = await resolveResearchCandidate(identifier, topicKey);
+        const literatureRegistry = await loadLiteratureRegistrySnapshot(
+          candidateRow.control_plane.literature_registry_version_id
+        );
+        candidate = await resolveResearchCandidate(
+          identifier,
+          topicKey,
+          fetch,
+          literatureRegistry
+        );
       } catch (error) {
         await failJob(candidateRow.id, error, 'source_resolution_failed');
         return NextResponse.json(
@@ -345,8 +362,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    let runningJob: ResearchMissionJob;
     try {
-      await markResearchMissionJobRunning(processingJobId, {
+      runningJob = await markResearchMissionJobRunning(processingJobId, {
         candidate_id: candidateId,
         source_name: candidate.source_name,
       });
@@ -357,12 +375,17 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
+      const literatureRegistry = await loadLiteratureRegistrySnapshot(
+        runningJob.control_plane.literature_registry_version_id
+      );
       const result = await ingestDiscoveryCandidate({
         jobId: processingJobId,
         candidateId,
         candidate,
+        controlPlane: runningJob.control_plane,
+        literatureRegistry,
       });
-      const completedJob = await completeJob(processingJobId, result);
+      const completedJob = await completeJob(runningJob, result);
       return NextResponse.json({ job: completedJob, result });
     } catch (error) {
       const message = await failJob(processingJobId, error);

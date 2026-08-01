@@ -4,6 +4,15 @@ import { chunkText } from './embeddingPipeline';
 import type { ResearchCandidate } from './researchEvidence';
 import type { Gate1ManifestCandidate } from './researchGate2';
 import { prepareSelectedSources } from './researchGate2Sources';
+import { evaluateResearchEvidenceAdmissibility } from './researchEvidenceAdmissibility';
+import {
+  LOCAL_LITERATURE_REGISTRY_V1,
+  type LiteratureRegistrySnapshot,
+} from './researchLiteratureSources';
+import {
+  requireResearchModelRoute,
+  type ResearchStageControlPlaneSnapshot,
+} from './researchModelRouting';
 import { supabaseAdmin } from './supabase';
 import type { ResearchTopic } from './types';
 
@@ -41,7 +50,10 @@ function assertGatewayConfigured(): void {
  * Gateway-only semantic embedding. No direct Voyage credential is read and no
  * local pseudo-vector fallback exists for the research brain.
  */
-export async function embedResearchTexts(texts: string[]): Promise<ResearchEmbeddingRun> {
+export async function embedResearchTexts(
+  texts: string[],
+  modelIdentifier: string = RESEARCH_BRAIN_EMBEDDING_MODEL
+): Promise<ResearchEmbeddingRun> {
   assertGatewayConfigured();
   const vectors: number[][] = [];
   let inputTokens = 0;
@@ -49,7 +61,7 @@ export async function embedResearchTexts(texts: string[]): Promise<ResearchEmbed
   for (let offset = 0; offset < texts.length; offset += 64) {
     const values = texts.slice(offset, offset + 64);
     const result = await embedMany({
-      model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+      model: modelIdentifier,
       values,
     });
     if (
@@ -147,9 +159,10 @@ async function storeDocumentWithVoyage(input: {
   topic: ResearchTopic;
   documentRow: Record<string, unknown>;
   text: string;
+  embeddingModel: string;
 }): Promise<ResearchIngestionResult> {
   const chunks = chunkText(input.text, RESEARCH_BRAIN_CHUNK_CHARACTERS);
-  const embedding = await embedResearchTexts(chunks);
+  const embedding = await embedResearchTexts(chunks, input.embeddingModel);
 
   const { data: document, error: documentError } = await supabaseAdmin
     .from('research_documents')
@@ -185,7 +198,7 @@ async function storeDocumentWithVoyage(input: {
     entity_type: 'research_chunk',
     entity_id: chunk.id,
     content_sha256: sha256(chunk.content),
-    embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+    embedding_model: input.embeddingModel,
     embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
     embedding: embedding.vectors[index],
   }));
@@ -211,10 +224,25 @@ export async function ingestDiscoveryCandidate(input: {
   jobId: string;
   candidateId: string;
   candidate: ResearchCandidate;
+  controlPlane?: ResearchStageControlPlaneSnapshot;
+  literatureRegistry?: LiteratureRegistrySnapshot;
 }): Promise<ResearchIngestionResult> {
-  if (input.candidate.retracted) {
-    throw new Error('Retracted research cannot be imported');
+  const admissibility = evaluateResearchEvidenceAdmissibility({
+    evidenceScope: input.candidate.evidence_scope,
+    species: input.candidate.species,
+    meshHeadings: input.candidate.mesh_headings,
+    retracted: input.candidate.retracted,
+  });
+  if (!admissibility.admissible) {
+    throw new Error(admissibility.code);
   }
+  const embeddingModel = input.controlPlane
+    ? requireResearchModelRoute(
+        input.controlPlane,
+        'semantic_embedding',
+        'embedding_model'
+      ).model_identifier
+    : RESEARCH_BRAIN_EMBEDDING_MODEL;
   const duplicate = await existingDocument(
     input.candidate.source_id,
     input.candidate.doi
@@ -232,13 +260,16 @@ export async function ingestDiscoveryCandidate(input: {
     };
   }
 
-  const [source] = await prepareSelectedSources([
-    toManifestCandidate(input.candidate),
-  ]);
+  const [source] = await prepareSelectedSources(
+    [toManifestCandidate(input.candidate)],
+    fetch,
+    input.literatureRegistry ?? LOCAL_LITERATURE_REGISTRY_V1
+  );
   const result = await storeDocumentWithVoyage({
     jobId: input.jobId,
     topic: input.candidate.topic,
     text: source.plain_text,
+    embeddingModel,
     documentRow: {
       topic_group: input.candidate.topic_group,
       discovery_topic: input.candidate.discovery_topic,
@@ -277,7 +308,7 @@ export async function ingestDiscoveryCandidate(input: {
           content_endpoint: source.content_endpoint,
           source_payload_sha256: source.source_payload_sha256,
           plain_text_sha256: sha256(source.plain_text),
-          embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+          embedding_model: embeddingModel,
           embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
         },
       },
@@ -297,11 +328,20 @@ export async function ingestUploadedResearchPdf(input: {
   sourceUrl: string | null;
   originalFilename: string;
   text: string;
+  controlPlane?: ResearchStageControlPlaneSnapshot;
 }): Promise<ResearchIngestionResult> {
+  const embeddingModel = input.controlPlane
+    ? requireResearchModelRoute(
+        input.controlPlane,
+        'semantic_embedding',
+        'embedding_model'
+      ).model_identifier
+    : RESEARCH_BRAIN_EMBEDDING_MODEL;
   return storeDocumentWithVoyage({
     jobId: input.jobId,
     topic: input.topic,
     text: input.text,
+    embeddingModel,
     documentRow: {
       title: input.title,
       source_url: input.sourceUrl,
@@ -313,7 +353,7 @@ export async function ingestUploadedResearchPdf(input: {
         in_app_upload: {
           original_filename: input.originalFilename,
           plain_text_sha256: sha256(input.text),
-          embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+          embedding_model: embeddingModel,
           embedding_dimensions: RESEARCH_BRAIN_EMBEDDING_DIMENSIONS,
         },
       },

@@ -1,4 +1,8 @@
 import { supabaseAdmin } from './supabase';
+import {
+  loadResearchStageControlPlane,
+  type ResearchStageControlPlaneSnapshot,
+} from './researchModelRouting';
 
 export type ResearchMissionType =
   | 'discovery'
@@ -31,7 +35,7 @@ export type ResearchMissionTerminalJobStatus =
   | 'succeeded'
   | 'failed';
 
-export interface ResearchMissionJob extends Record<string, unknown> {
+interface ResearchMissionJobRow extends Record<string, unknown> {
   id: string;
   mission_id: string;
   mission_stage_id: string;
@@ -40,7 +44,11 @@ export interface ResearchMissionJob extends Record<string, unknown> {
   input: Record<string, unknown>;
 }
 
-function requireMissionJob(data: unknown): ResearchMissionJob {
+export interface ResearchMissionJob extends ResearchMissionJobRow {
+  control_plane: ResearchStageControlPlaneSnapshot;
+}
+
+function requireMissionJob(data: unknown): ResearchMissionJobRow {
   const row = Array.isArray(data) ? data[0] : data;
   if (
     !row ||
@@ -51,7 +59,15 @@ function requireMissionJob(data: unknown): ResearchMissionJob {
   ) {
     throw new Error('Research mission lifecycle returned an invalid job');
   }
-  return row as ResearchMissionJob;
+  return row as ResearchMissionJobRow;
+}
+
+async function attachControlPlane(data: unknown): Promise<ResearchMissionJob> {
+  const job = requireMissionJob(data);
+  return {
+    ...job,
+    control_plane: await loadResearchStageControlPlane(job.mission_stage_id),
+  };
 }
 
 export async function startResearchMissionJob(input: {
@@ -77,7 +93,7 @@ export async function startResearchMissionJob(input: {
     p_idempotency_key: input.idempotencyKey ?? null,
   });
   if (error) throw error;
-  return requireMissionJob(data);
+  return attachControlPlane(data);
 }
 
 export async function markResearchMissionJobRunning(
@@ -92,7 +108,7 @@ export async function markResearchMissionJobRunning(
     }
   );
   if (error) throw error;
-  return requireMissionJob(data);
+  return attachControlPlane(data);
 }
 
 export async function retryResearchMissionJobStage(input: {
@@ -109,7 +125,7 @@ export async function retryResearchMissionJobStage(input: {
     }
   );
   if (error) throw error;
-  return requireMissionJob(data);
+  return attachControlPlane(data);
 }
 
 export async function finishResearchMissionJob(input: {
@@ -140,7 +156,7 @@ export async function finishResearchMissionJob(input: {
     }
   );
   if (error) throw error;
-  return requireMissionJob(data);
+  return attachControlPlane(data);
 }
 
 export async function appendResearchMissionJobEvent(

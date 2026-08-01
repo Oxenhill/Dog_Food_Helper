@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
   draftDocumentIntoKnowledge,
-  RESEARCH_BRAIN_DRAFT_MODEL,
 } from '@/lib/researchBrainDrafting';
 import {
   RESEARCH_CONTEXT_TYPES,
@@ -18,7 +17,6 @@ import {
   type ResearchClusterEdit,
 } from '@/lib/researchEvidenceReview';
 import { INGREDIENT_CATEGORIES } from '@/lib/ingredientCategories';
-import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '@/lib/researchBrainPipeline';
 import {
   finishResearchMissionJob,
   startResearchMissionJob,
@@ -199,7 +197,6 @@ export async function POST(request: NextRequest) {
         requestedBy: admin.id,
         jobInput: { document_id: documentId },
         initialStatus: 'running',
-        gatewayModel: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
       });
     } catch (error) {
       return NextResponse.json(
@@ -208,7 +205,15 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
-      const result = await draftDocumentIntoKnowledge(documentId, job.id);
+      const result = await draftDocumentIntoKnowledge(
+        documentId,
+        job.id,
+        job.control_plane
+      );
+      const configuredModels = job.control_plane.model_routes
+        .filter((route) => route.execution_kind.endsWith('_model'))
+        .map((route) => route.model_identifier)
+        .join(' + ');
       const completed = await finishResearchMissionJob({
         jobId: job.id,
         status: 'succeeded',
@@ -217,6 +222,7 @@ export async function POST(request: NextRequest) {
           result.usage.inputTokens + result.embedding.inputTokens,
         gatewayOutputTokens: result.usage.outputTokens,
         gatewayCostUsd: null,
+        gatewayModel: configuredModels || null,
         eventPayload: {
           document_id: documentId,
           drafted_claim_count: result.drafted,

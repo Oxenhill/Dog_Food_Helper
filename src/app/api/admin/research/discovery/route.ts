@@ -5,6 +5,7 @@ import {
   uniqueCandidates,
 } from '@/lib/researchDiscovery';
 import { estimateResearchCosts } from '@/lib/researchCost';
+import { loadLiteratureRegistrySnapshot } from '@/lib/researchLiteratureSources';
 import {
   finishResearchMissionJob,
   startResearchMissionJob,
@@ -93,10 +94,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const literatureRegistry = await loadLiteratureRegistrySnapshot(
+      job.control_plane.literature_registry_version_id
+    );
     const run = await discoverResearchCandidates({
       candidatesPerTopic,
       topicKeys,
       concurrency: 3,
+      literatureRegistry,
     });
     const costEstimate = estimateResearchCosts(run, documentCap);
     const candidates = uniqueCandidates(run).slice(0, documentCap);

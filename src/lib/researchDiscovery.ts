@@ -11,14 +11,17 @@ import {
   RESEARCH_DISCOVERY_TOPICS,
   ResearchDiscoveryTopic,
 } from './researchTopics';
+import { evaluateResearchEvidenceAdmissibility } from './researchEvidenceAdmissibility';
+import {
+  LOCAL_LITERATURE_REGISTRY_V1,
+  ResearchLiteratureSourceError,
+  createLiteratureRateGate,
+  literatureEndpoint,
+  resolveLiteratureSourceRoute,
+  type LiteratureRegistrySnapshot,
+  type LiteratureSourceRoute,
+} from './researchLiteratureSources';
 
-const PUBMED_SEARCH_URL =
-  'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi';
-const PUBMED_FETCH_URL =
-  'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi';
-const EUROPE_PMC_FULL_TEXT_ROOT =
-  'https://www.ebi.ac.uk/europepmc/webservices/rest';
-const EUROPE_PMC_SEARCH_URL = `${EUROPE_PMC_FULL_TEXT_ROOT}/search`;
 const EUTILS_TOOL = 'BowlResearchLayer';
 const EUTILS_EMAIL = 'admin@dog-smart.co.uk';
 
@@ -63,6 +66,7 @@ export interface DiscoveryOptions {
   concurrency?: number;
   fullTextDocumentCap?: number;
   fetchImpl?: typeof fetch;
+  literatureRegistry?: LiteratureRegistrySnapshot;
 }
 
 function escapePubMedPhrase(value: string): string {
@@ -120,6 +124,7 @@ async function fetchWithRetry(
   attempts = 5,
 ): Promise<Response> {
   let lastError: unknown;
+  let lastStatus: number | null = null;
   for (let attempt = 0; attempt < attempts; attempt++) {
     let retryAfterHeader: string | null = null;
     try {
@@ -130,6 +135,7 @@ async function fetchWithRetry(
         },
       });
       if (response.ok) return response;
+      lastStatus = response.status;
       if (response.status !== 429 && response.status < 500) return response;
       lastError = new Error(`HTTP ${response.status}`);
       retryAfterHeader = response.headers.get('retry-after');
@@ -145,17 +151,13 @@ async function fetchWithRetry(
       : 1000 * (attempt + 1);
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
   }
+  if (lastStatus === 429) {
+    throw new ResearchLiteratureSourceError(
+      'rate_limited',
+      `${url} remained rate limited after ${attempts} attempts`
+    );
+  }
   throw lastError instanceof Error ? lastError : new Error('Source request failed');
-}
-
-function createRateGate(minimumIntervalMs: number) {
-  let nextAllowedAt = 0;
-  return async () => {
-    const now = Date.now();
-    const waitMs = Math.max(0, nextAllowedAt - now);
-    nextAllowedAt = Math.max(now, nextAllowedAt) + minimumIntervalMs;
-    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
-  };
 }
 
 async function searchPubMedTopic(
@@ -165,6 +167,7 @@ async function searchPubMedTopic(
   toYear: number | undefined,
   fetchImpl: typeof fetch,
   beforeNcbiRequest: () => Promise<void>,
+  route: LiteratureSourceRoute,
 ): Promise<{ topic: ResearchDiscoveryTopic; query: string; pmids: string[]; error: string | null }> {
   const query = buildPubMedQuery(
     topic,
@@ -184,7 +187,7 @@ async function searchPubMedTopic(
   try {
     await beforeNcbiRequest();
     const response = await fetchWithRetry(
-      `${PUBMED_SEARCH_URL}?${params}`,
+      `${literatureEndpoint(route)}?${params}`,
       fetchImpl,
       'application/json',
     );
@@ -221,6 +224,7 @@ async function fetchPubMedRecords(
   pmids: string[],
   fetchImpl: typeof fetch,
   beforeNcbiRequest: () => Promise<void>,
+  route: LiteratureSourceRoute,
 ): Promise<Map<string, PubMedRecord>> {
   const records = new Map<string, PubMedRecord>();
   for (let offset = 0; offset < pmids.length; offset += 150) {
@@ -234,7 +238,7 @@ async function fetchPubMedRecords(
     });
     await beforeNcbiRequest();
     const response = await fetchWithRetry(
-      `${PUBMED_FETCH_URL}?${params}`,
+      `${literatureEndpoint(route)}?${params}`,
       fetchImpl,
       'application/xml',
     );
@@ -248,6 +252,8 @@ async function fetchPubMedRecords(
 async function resolveEuropePmcMetadata(
   pmids: string[],
   fetchImpl: typeof fetch,
+  route: LiteratureSourceRoute,
+  beforeRequest: () => Promise<void>,
 ): Promise<Map<string, EuropePmcResult>> {
   const records = new Map<string, EuropePmcResult>();
   for (let offset = 0; offset < pmids.length; offset += 40) {
@@ -259,8 +265,9 @@ async function resolveEuropePmcMetadata(
       resultType: 'core',
       pageSize: String(batch.length),
     });
+    await beforeRequest();
     const response = await fetchWithRetry(
-      `${EUROPE_PMC_SEARCH_URL}?${params}`,
+      `${literatureEndpoint(route)}?${params}`,
       fetchImpl,
       'application/json',
     );
@@ -304,9 +311,12 @@ interface JatsFetchResult {
 async function fetchJatsFunding(
   pmcid: string,
   fetchImpl: typeof fetch,
+  route: LiteratureSourceRoute,
+  beforeRequest: () => Promise<void>,
 ): Promise<JatsFetchResult> {
-  const endpoint = `${EUROPE_PMC_FULL_TEXT_ROOT}/${encodeURIComponent(pmcid)}/fullTextXML`;
+  const endpoint = literatureEndpoint(route, { pmcid });
   try {
+    await beforeRequest();
     const response = await fetchWithRetry(endpoint, fetchImpl, 'application/xml');
     if (!response.ok) {
       return {
@@ -407,10 +417,28 @@ export async function discoverResearchCandidates(
     (topic) => !topicKeySet || topicKeySet.has(topic.key),
   );
   const fetchImpl = options.fetchImpl ?? fetch;
+  const literatureRegistry = options.literatureRegistry ?? LOCAL_LITERATURE_REGISTRY_V1;
+  const discoveryRoute = resolveLiteratureSourceRoute(
+    literatureRegistry,
+    'discovery_search'
+  );
+  const citationRoute = resolveLiteratureSourceRoute(
+    literatureRegistry,
+    'citation_fetch'
+  );
+  const metadataRoute = resolveLiteratureSourceRoute(
+    literatureRegistry,
+    'metadata_enrichment'
+  );
   const checkedAt = new Date().toISOString();
   // NCBI permits at most three requests/second without a key. Stay well below
   // that ceiling because retries and other project processes may share the IP.
-  const beforeNcbiRequest = createRateGate(options.fetchImpl ? 0 : 500);
+  const beforeNcbiRequest = createLiteratureRateGate(
+    options.fetchImpl ? 0 : discoveryRoute.policy.minimum_interval_ms
+  );
+  const beforeEuropePmcRequest = createLiteratureRateGate(
+    options.fetchImpl ? 0 : metadataRoute.policy.minimum_interval_ms
+  );
 
   // PubMed is intentionally primary. Direct-evidence queries are led by
   // Dogs[Mesh]; the four explicit mechanism streams use non-canine MeSH terms
@@ -424,12 +452,23 @@ export async function discoverResearchCandidates(
       options.toYear,
       fetchImpl,
       beforeNcbiRequest,
+      discoveryRoute,
     ));
   }
 
   const allPmids = [...new Set(searches.flatMap((result) => result.pmids))];
-  const pubMedRecords = await fetchPubMedRecords(allPmids, fetchImpl, beforeNcbiRequest);
-  const europePmcRecords = await resolveEuropePmcMetadata(allPmids, fetchImpl);
+  const pubMedRecords = await fetchPubMedRecords(
+    allPmids,
+    fetchImpl,
+    beforeNcbiRequest,
+    citationRoute
+  );
+  const europePmcRecords = await resolveEuropePmcMetadata(
+    allPmids,
+    fetchImpl,
+    metadataRoute,
+    beforeEuropePmcRequest
+  );
   let results: TopicDiscoveryResult[] = searches.map((search) => ({
     topic: search.topic,
     query: search.query,
@@ -481,11 +520,22 @@ export async function discoverResearchCandidates(
     ),
   ];
   const selectedPmcids = uniquePmcids.slice(0, fullTextDocumentCap);
-  const jatsResults = await mapWithConcurrency(
-    selectedPmcids,
-    Math.max(1, Math.min(options.concurrency ?? 3, 3)),
-    (pmcid) => fetchJatsFunding(pmcid, fetchImpl),
-  );
+  const jatsResults = selectedPmcids.length > 0
+    ? await mapWithConcurrency(
+        selectedPmcids,
+        Math.max(1, Math.min(options.concurrency ?? 3, 3)),
+        (pmcid) => fetchJatsFunding(
+          pmcid,
+          fetchImpl,
+          resolveLiteratureSourceRoute(
+            literatureRegistry,
+            'open_access_full_text',
+            { openAccess: true, inPmc: true }
+          ),
+          beforeEuropePmcRequest
+        ),
+      )
+    : [];
   const jatsByPmcid = new Map(jatsResults.map((result) => [result.pmcid, result]));
   const selectedSet = new Set(selectedPmcids);
 
@@ -599,7 +649,8 @@ function identifierFromInput(value: string): { pmid: string | null; doi: string 
 async function findPmidForDoi(
   doi: string,
   fetchImpl: typeof fetch,
-  beforeNcbiRequest: () => Promise<void>
+  beforeNcbiRequest: () => Promise<void>,
+  route: LiteratureSourceRoute,
 ): Promise<string | null> {
   const params = new URLSearchParams({
     db: 'pubmed',
@@ -611,7 +662,7 @@ async function findPmidForDoi(
   });
   await beforeNcbiRequest();
   const response = await fetchWithRetry(
-    `${PUBMED_SEARCH_URL}?${params}`,
+    `${literatureEndpoint(route)}?${params}`,
     fetchImpl,
     'application/json'
   );
@@ -628,7 +679,8 @@ async function findPmidForDoi(
 export async function resolveResearchCandidate(
   identifierOrUrl: string,
   topicKey: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  literatureRegistry: LiteratureRegistrySnapshot = LOCAL_LITERATURE_REGISTRY_V1,
 ): Promise<ResearchCandidate> {
   const topic = RESEARCH_DISCOVERY_TOPICS.find((candidate) => candidate.key === topicKey);
   if (!topic) throw new Error('Unknown research topic');
@@ -638,29 +690,40 @@ export async function resolveResearchCandidate(
     throw new Error('Paste a PubMed URL, PMID, or DOI');
   }
 
-  const beforeNcbiRequest = createRateGate(fetchImpl === fetch ? 500 : 0);
+  const doiRoute = resolveLiteratureSourceRoute(literatureRegistry, 'doi_resolution');
+  const citationRoute = resolveLiteratureSourceRoute(literatureRegistry, 'citation_fetch');
+  const metadataRoute = resolveLiteratureSourceRoute(literatureRegistry, 'metadata_enrichment');
+  const beforeNcbiRequest = createLiteratureRateGate(
+    fetchImpl === fetch ? doiRoute.policy.minimum_interval_ms : 0
+  );
+  const beforeEuropePmcRequest = createLiteratureRateGate(
+    fetchImpl === fetch ? metadataRoute.policy.minimum_interval_ms : 0
+  );
   const pmid =
     identifier.pmid ??
     (identifier.doi
-      ? await findPmidForDoi(identifier.doi, fetchImpl, beforeNcbiRequest)
+      ? await findPmidForDoi(identifier.doi, fetchImpl, beforeNcbiRequest, doiRoute)
       : null);
   if (!pmid) throw new Error('That DOI did not resolve to one PubMed record');
 
-  const records = await fetchPubMedRecords([pmid], fetchImpl, beforeNcbiRequest);
+  const records = await fetchPubMedRecords(
+    [pmid],
+    fetchImpl,
+    beforeNcbiRequest,
+    citationRoute
+  );
   const record = records.get(pmid);
   if (!record) throw new Error('PubMed did not return that record');
 
   const checkedAt = new Date().toISOString();
   const query = `manual in-app import: PMID ${pmid}`;
   let candidate = mapPubMedRecord(record, topic, query, checkedAt);
-  if (
-    candidate.evidence_scope === 'canine_direct' &&
-    (!candidate.mesh_headings.includes('Dogs') || candidate.species !== 'dog')
-  ) {
-    throw new Error('The structured PubMed record is not direct canine evidence');
-  }
-
-  const europe = (await resolveEuropePmcMetadata([pmid], fetchImpl)).get(pmid);
+  const europe = (await resolveEuropePmcMetadata(
+    [pmid],
+    fetchImpl,
+    metadataRoute,
+    beforeEuropePmcRequest
+  )).get(pmid);
   const openAccess =
     europe?.isOpenAccess === 'Y' && europe?.inPMC === 'Y' && Boolean(europe.pmcid);
   candidate = {
@@ -684,7 +747,17 @@ export async function resolveResearchCandidate(
   };
 
   if (candidate.open_access && candidate.pmcid) {
-    const jats = await fetchJatsFunding(candidate.pmcid, fetchImpl);
+    const fullTextRoute = resolveLiteratureSourceRoute(
+      literatureRegistry,
+      'open_access_full_text',
+      { openAccess: true, inPmc: true }
+    );
+    const jats = await fetchJatsFunding(
+      candidate.pmcid,
+      fetchImpl,
+      fullTextRoute,
+      beforeEuropePmcRequest
+    );
     if (jats.metadata) {
       candidate = applyJatsFundingMetadata(candidate, jats.metadata, jats.endpoint);
     } else {
@@ -700,6 +773,12 @@ export async function resolveResearchCandidate(
       };
     }
   }
-  if (candidate.retracted) throw new Error('Retracted research cannot be imported');
+  const admissibility = evaluateResearchEvidenceAdmissibility({
+    evidenceScope: candidate.evidence_scope,
+    species: candidate.species,
+    meshHeadings: candidate.mesh_headings,
+    retracted: candidate.retracted,
+  });
+  if (!admissibility.admissible) throw new Error(admissibility.code);
   return candidate;
 }

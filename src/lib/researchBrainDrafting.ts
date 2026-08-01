@@ -14,10 +14,15 @@ import type {
   ResearchClaimSubjectType,
   ResearchDocument,
 } from './types';
+import {
+  requireResearchModelRoute,
+  type ResearchStageControlPlaneSnapshot,
+} from './researchModelRouting';
 
 export const RESEARCH_BRAIN_DRAFT_MODEL = 'anthropic/claude-sonnet-5' as const;
 export const MAX_DRAFT_CHUNKS_PER_DOCUMENT = 8;
 export const MAX_DRAFT_CLAIMS_PER_DOCUMENT = 12;
+export const RESEARCH_BRAIN_DRAFT_SCHEMA_VERSION = 'research_draft_claim_v2' as const;
 
 const ContextSchema = z.object({
   context_type: z.enum([
@@ -106,7 +111,7 @@ const SUPPORTED_DOCUMENT_FINDINGS = new Set(
   ].map(normalize)
 );
 
-const SYSTEM = `You extract structured canine-nutrition evidence from supplied research chunks.
+export const RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT = `You extract structured canine-nutrition evidence from supplied research chunks.
 Return only claims literally supported by one chunk. supporting_quote must be an exact, contiguous
 substring of that chunk. Every effect_summary must be one cautious sentence using language such as
 "may", "was associated with", "the study found", "did not find", or "found no significant".
@@ -146,6 +151,25 @@ For document_finding context_key use only a canonical report field: Firmicutes, 
 Fusobacteria, Bacteroidales, Clostridia, Prevotella, Diversity, Species Richness,
 Dysbiosis Pattern Score, or Microbiome Classification. A general phrase such as gut disease is a
 health_condition, not a document_finding.`;
+
+export const RESEARCH_BRAIN_DRAFT_USER_PROMPT_TEMPLATE = [
+  'Source title: {{title}}',
+  'PMID: {{pmid}}',
+  'Evidence scope: {{evidence_scope}}',
+  '',
+  '{{chunks}}',
+].join('\n');
+
+export const RESEARCH_BRAIN_DRAFT_PROMPT_SHA256 = createHash('sha256')
+  .update(
+    JSON.stringify({
+      system: RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT,
+      user_template: RESEARCH_BRAIN_DRAFT_USER_PROMPT_TEMPLATE,
+      structured_output_schema_version: RESEARCH_BRAIN_DRAFT_SCHEMA_VERSION,
+    }),
+    'utf8'
+  )
+  .digest('hex');
 
 function hash(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -272,17 +296,18 @@ function promptForDocument(
   document: Pick<ResearchDocument, 'title' | 'pmid' | 'evidence_scope'>,
   chunks: Array<{ id: string; content: string; chunk_index: number }>
 ): string {
-  return [
-    `Source title: ${document.title ?? 'Untitled'}`,
-    `PMID: ${document.pmid ?? 'not supplied'}`,
-    `Evidence scope: ${document.evidence_scope ?? 'not supplied'}`,
-    '',
-    ...chunks.flatMap((chunk) => [
+  const renderedChunks = chunks
+    .flatMap((chunk) => [
       `--- CHUNK ${chunk.chunk_index} | id=${chunk.id} ---`,
       chunk.content,
       '',
-    ]),
-  ].join('\n');
+    ])
+    .join('\n');
+  return RESEARCH_BRAIN_DRAFT_USER_PROMPT_TEMPLATE
+    .replace('{{title}}', () => document.title ?? 'Untitled')
+    .replace('{{pmid}}', () => document.pmid ?? 'not supplied')
+    .replace('{{evidence_scope}}', () => document.evidence_scope ?? 'not supplied')
+    .replace('{{chunks}}', () => renderedChunks);
 }
 
 function parseVector(value: unknown): number[] | null {
@@ -316,7 +341,8 @@ function cosine(left: number[], right: number[]): number {
 
 async function semanticallySelectChunks(
   document: Pick<ResearchDocument, 'title' | 'topic' | 'discovery_topic'>,
-  chunks: Array<{ id: string; content: string; chunk_index: number }>
+  chunks: Array<{ id: string; content: string; chunk_index: number }>,
+  embeddingModel: string,
 ): Promise<{
   selected: Array<{ id: string; content: string; chunk_index: number }>;
   inputTokens: number;
@@ -327,7 +353,7 @@ async function semanticallySelectChunks(
     .from('research_semantic_embeddings')
     .select('entity_id, embedding')
     .eq('entity_type', 'research_chunk')
-    .eq('embedding_model', RESEARCH_BRAIN_EMBEDDING_MODEL)
+    .eq('embedding_model', embeddingModel)
     .in('entity_id', ids);
   if (error) throw error;
   const vectors = new Map<string, number[]>();
@@ -342,10 +368,10 @@ async function semanticallySelectChunks(
     document.title ?? '',
     'food exposure intervention measured outcome dog profile applicability',
   ].join(' | ');
-  const embedded = await embedResearchTexts([
-    ...missing.map((chunk) => chunk.content),
-    query,
-  ]);
+  const embedded = await embedResearchTexts(
+    [...missing.map((chunk) => chunk.content), query],
+    embeddingModel
+  );
   for (let index = 0; index < missing.length; index++) {
     vectors.set(missing[index].id, embedded.vectors[index]);
   }
@@ -354,7 +380,7 @@ async function semanticallySelectChunks(
       entity_type: 'research_chunk',
       entity_id: chunk.id,
       content_sha256: hash(chunk.content),
-      embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+      embedding_model: embeddingModel,
       embedding_dimensions: 1024,
       embedding: embedded.vectors[index],
     }));
@@ -398,8 +424,23 @@ export interface DraftDocumentResult {
 
 export async function draftDocumentIntoKnowledge(
   documentId: string,
-  jobId: string
+  jobId: string,
+  controlPlane?: ResearchStageControlPlaneSnapshot,
 ): Promise<DraftDocumentResult> {
+  const draftModel = controlPlane
+    ? requireResearchModelRoute(
+        controlPlane,
+        'draft_generation',
+        'language_model'
+      ).model_identifier
+    : RESEARCH_BRAIN_DRAFT_MODEL;
+  const embeddingModel = controlPlane
+    ? requireResearchModelRoute(
+        controlPlane,
+        'semantic_embedding',
+        'embedding_model'
+      ).model_identifier
+    : RESEARCH_BRAIN_EMBEDDING_MODEL;
   if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
     throw new Error('Vercel AI Gateway is not configured');
   }
@@ -426,13 +467,14 @@ export async function draftDocumentIntoKnowledge(
 
   const semanticSelection = await semanticallySelectChunks(
     document as ResearchDocument,
-    allChunks
+    allChunks,
+    embeddingModel
   );
   const chunks = semanticSelection.selected;
   const generated = await generateObject({
-    model: gateway(RESEARCH_BRAIN_DRAFT_MODEL),
+    model: gateway(draftModel),
     schema: DraftResponseSchema,
-    system: SYSTEM,
+    system: RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT,
     prompt: promptForDocument(document as ResearchDocument, chunks),
     maxOutputTokens: 3200,
     maxRetries: 0,
@@ -465,7 +507,7 @@ export async function draftDocumentIntoKnowledge(
   );
   const embedding =
     propositionTexts.length > 0
-      ? await embedResearchTexts(propositionTexts)
+      ? await embedResearchTexts(propositionTexts, embeddingModel)
       : { vectors: [], inputTokens: 0, estimatedCostUsd: 0 };
 
   const queuedClaimIds: string[] = [];
@@ -582,7 +624,7 @@ export async function draftDocumentIntoKnowledge(
           entity_type: 'research_claim',
           entity_id: insertedClaim.id,
           content_sha256: hash(propositionTexts[index]),
-          embedding_model: RESEARCH_BRAIN_EMBEDDING_MODEL,
+          embedding_model: embeddingModel,
           embedding_dimensions: 1024,
           embedding: embedding.vectors[index],
         },

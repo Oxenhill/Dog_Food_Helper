@@ -1,8 +1,4 @@
-import {
-  draftDocumentIntoKnowledge,
-  RESEARCH_BRAIN_DRAFT_MODEL,
-} from '../src/lib/researchBrainDrafting';
-import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '../src/lib/researchBrainPipeline';
+import { draftDocumentIntoKnowledge } from '../src/lib/researchBrainDrafting';
 import {
   finishResearchMissionJob,
   startResearchMissionJob,
@@ -91,17 +87,25 @@ async function main() {
           source: 'bounded_initial_population',
       },
       initialStatus: 'running',
-      gatewayModel: `${RESEARCH_BRAIN_DRAFT_MODEL} + ${RESEARCH_BRAIN_EMBEDDING_MODEL}`,
     });
 
     try {
-      const result = await draftDocumentIntoKnowledge(document.id, job.id);
+      const result = await draftDocumentIntoKnowledge(
+        document.id,
+        job.id,
+        job.control_plane
+      );
+      const configuredModels = job.control_plane.model_routes
+        .filter((route) => route.execution_kind.endsWith('_model'))
+        .map((route) => route.model_identifier)
+        .join(' + ');
       await finishResearchMissionJob({
         jobId: job.id,
         status: 'succeeded',
         resultSummary: { ...result },
         gatewayInputTokens: result.usage.inputTokens + result.embedding.inputTokens,
         gatewayOutputTokens: result.usage.outputTokens,
+        gatewayModel: configuredModels || null,
         eventPayload: {
           source: 'bounded_initial_population',
           document_id: document.id,

@@ -4,11 +4,16 @@ import {
   PubMedRecord,
 } from './researchEvidence';
 import { Gate1ManifestCandidate } from './researchGate2';
+import {
+  LOCAL_LITERATURE_REGISTRY_V1,
+  ResearchLiteratureSourceError,
+  createLiteratureRateGate,
+  literatureEndpoint,
+  resolveLiteratureSourceRoute,
+  type LiteratureRegistrySnapshot,
+  type LiteratureSourceRoute,
+} from './researchLiteratureSources';
 
-const PUBMED_FETCH_URL =
-  'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi';
-const EUROPE_PMC_ROOT =
-  'https://www.ebi.ac.uk/europepmc/webservices/rest';
 const EUTILS_TOOL = 'BowlResearchLayerGate2';
 const EUTILS_EMAIL = 'admin@dog-smart.co.uk';
 
@@ -42,6 +47,7 @@ async function fetchOk(
   attempts = 5,
 ): Promise<Response> {
   let lastError: unknown;
+  let lastStatus: number | null = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const response = await fetchImpl(url, {
@@ -51,6 +57,7 @@ async function fetchOk(
         },
       });
       if (response.ok) return response;
+      lastStatus = response.status;
       if (response.status < 500 && response.status !== 429) {
         throw new SourceHttpError(response.status, url);
       }
@@ -66,6 +73,12 @@ async function fetchOk(
         await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
       }
     }
+  }
+  if (lastStatus === 429) {
+    throw new ResearchLiteratureSourceError(
+      'rate_limited',
+      `${url} remained rate limited after ${attempts} attempts`
+    );
   }
   throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${url}`);
 }
@@ -155,6 +168,8 @@ export function identifierDiff(
 async function fetchPubMedRecords(
   pmids: string[],
   fetchImpl: typeof fetch,
+  route: LiteratureSourceRoute,
+  beforeRequest: () => Promise<void>,
 ): Promise<Map<string, PubMedRecord>> {
   const records = new Map<string, PubMedRecord>();
   for (let offset = 0; offset < pmids.length; offset += 150) {
@@ -166,8 +181,9 @@ async function fetchPubMedRecords(
       tool: EUTILS_TOOL,
       email: EUTILS_EMAIL,
     });
+    await beforeRequest();
     const response = await fetchOk(
-      `${PUBMED_FETCH_URL}?${params}`,
+      `${literatureEndpoint(route)}?${params}`,
       'application/xml',
       fetchImpl,
     );
@@ -181,10 +197,19 @@ async function fetchPubMedRecords(
 export async function prepareSelectedSources(
   selected: Gate1ManifestCandidate[],
   fetchImpl: typeof fetch = fetch,
+  registry: LiteratureRegistrySnapshot = LOCAL_LITERATURE_REGISTRY_V1,
 ): Promise<PreparedSourceDocument[]> {
+  const pubmedRoute = resolveLiteratureSourceRoute(registry, 'citation_fetch');
+  const abstractRoute = resolveLiteratureSourceRoute(registry, 'abstract_content');
+  const beforePubmedRequest = createLiteratureRateGate(
+    fetchImpl === fetch ? pubmedRoute.policy.minimum_interval_ms : 0
+  );
+  let beforeFullTextRequest: (() => Promise<void>) | null = null;
   const records = await fetchPubMedRecords(
     selected.map((candidate) => candidate.pmid),
     fetchImpl,
+    pubmedRoute,
+    beforePubmedRequest,
   );
   const prepared: PreparedSourceDocument[] = [];
   for (const candidate of selected) {
@@ -209,7 +234,7 @@ export async function prepareSelectedSources(
         manifest: candidate,
         pubmed,
         content_source: 'pubmed_abstract',
-        content_endpoint: `${PUBMED_FETCH_URL}?db=pubmed&id=${candidate.pmid}&retmode=xml`,
+        content_endpoint: `${literatureEndpoint(abstractRoute)}?db=pubmed&id=${candidate.pmid}&retmode=xml`,
         content_retrieved_at: retrievedAt,
         source_payload_sha256: createHash('sha256')
           .update(plainText, 'utf8')
@@ -222,9 +247,18 @@ export async function prepareSelectedSources(
       });
       continue;
     }
-    const endpoint = `${EUROPE_PMC_ROOT}/${encodeURIComponent(candidate.pmcid)}/fullTextXML`;
+    const fullTextDecision = resolveLiteratureSourceRoute(
+      registry,
+      'open_access_full_text',
+      { openAccess: candidate.open_access, inPmc: Boolean(candidate.pmcid) }
+    );
+    beforeFullTextRequest ??= createLiteratureRateGate(
+      fetchImpl === fetch ? fullTextDecision.policy.minimum_interval_ms : 0
+    );
+    const endpoint = literatureEndpoint(fullTextDecision, { pmcid: candidate.pmcid });
     let response: Response;
     try {
+      await beforeFullTextRequest();
       response = await fetchOk(endpoint, 'application/xml', fetchImpl);
     } catch (error) {
       if (!(error instanceof SourceHttpError) || error.status !== 404 || !pubmed.abstract_text) {
@@ -235,7 +269,7 @@ export async function prepareSelectedSources(
         manifest: candidate,
         pubmed,
         content_source: 'pubmed_abstract',
-        content_endpoint: `${PUBMED_FETCH_URL}?db=pubmed&id=${candidate.pmid}&retmode=xml`,
+        content_endpoint: `${literatureEndpoint(abstractRoute)}?db=pubmed&id=${candidate.pmid}&retmode=xml`,
         content_retrieved_at: retrievedAt,
         source_payload_sha256: createHash('sha256')
           .update(plainText, 'utf8')
