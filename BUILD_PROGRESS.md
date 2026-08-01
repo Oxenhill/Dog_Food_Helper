@@ -2122,3 +2122,81 @@ Six flagged items from the owner's punch list, addressed in one session. `/docs/
 4. **RLS is disabled on 12 tables** (`user_profiles`, `account_inactivity_policy`, `source_domain_allowlist`, `foods`, `research_documents`, etc. — pre-existing since at least Phase 1, not introduced by this session, confirmed via the Supabase advisor). The app currently works around this by only ever using the service-role client server-side, but the anon key (shipped to every browser) currently has full read/write access to these tables directly against Supabase. This has been flagged in every phase's live-schema check; it has never been fixed. **This should be treated as a pre-launch blocker, not a backlog item** — enabling RLS without correct policies will break the app, so this needs deliberate policy design, not a blind `ENABLE ROW LEVEL SECURITY`.
 5. **Confidence methodology:** `correlation_strength`'s "net improvement rate" heuristic (this phase) and the DER/calorie-density bands (Phase 3) are both designed-not-derived — flagged consistently, not hidden, but neither has had the "concrete methodology review before Phase 3 ships" CLAUDE.md's escalation section calls for.
 6. **No real admin/session auth system exists anywhere in this app**, 5 phases in — every admin-gated route (research ingest, review queue, now 3 cron routes) shares one or two shared-secret tokens. This is the single most-repeated flag across BUILD_PROGRESS.md and should be prioritised before onboarding real users beyond the owner.
+
+---
+
+## Research Layer — owner edit/review continuation (2026-07-30)
+
+**Status:** Local implementation, live edit migrations, rolled-back RPC
+verification, and the explicitly authorised quality-audit cleanup are
+complete. Every ingestion job and its audit trail was preserved. No literature
+was approved.
+
+**Implemented locally:**
+
+- Added a service-role-only transactional cluster-edit migration with
+  queued/unreviewed guards, optimistic concurrency, safe identity collision
+  handling, atomic applicability replacement, and last-editor metadata.
+- Added runtime-aligned validation for food subjects, nutrient/processing
+  allowlists, ingredient taxonomy, report fields, life stages, cautious
+  summaries, and unique contexts.
+- Added owner edit-before-approval controls for subject, measured outcome,
+  direction, cautious summary, and up to eight applicability contexts.
+- Added the paper title, honest access status, working source link, grade
+  metadata, and literal quote to every cluster review card.
+- Kept save and approval as separate actions. Saving never activates a cluster
+  or claim.
+- Expanded integrated retrieval tests for active/inactive cluster state,
+  accepted/uncertain findings, no-context suppression, exact source fields,
+  private-upload access, fixed query count, no request-time AI, and zero
+  ranking effect.
+
+**Read-only live audit completed before the connection limit:**
+
+- 40 queued/unreviewed clusters and 42 queued source claims.
+- Subject types: 17 ingredient, 3 nutrient, 20 processing method.
+- Directions: 22 supports, 11 cautions, 5 neutral, 2 insufficient.
+- Contexts: 16 with none, 22 with one, 2 with two.
+- Membership: 38 single-claim clusters, 2 two-claim clusters.
+- 19 demonstrably invalid fresh drafts were identified by unsupported
+  subject/outcome mappings. Immediately before deletion they were reconfirmed
+  as fresh, queued, unreviewed, and isolated to their population jobs. With
+  explicit owner approval, one guarded transaction removed those 19 clusters,
+  their 20 isolated queued claims, and 20 claim embeddings. All 19 ingestion
+  jobs remain, with 19 deterministic discard entries recorded across the six
+  affected jobs.
+- Existing legacy claim statuses/reviewer metadata and Lenny's report were not
+  changed.
+
+**Live completion now verified:**
+
+- Applied `edit_research_evidence_cluster` and the related
+  `index_research_cluster_last_editor` migration exactly once.
+- Rolled-back live transaction proved valid edit, stale-write, active-state,
+  invalid-report-context, and identity-collision behaviour without persisting
+  any evidence change.
+- Security advisor remains 20 findings (13 info, 5 warning, 2 error), with no
+  new Research Brain security item. The two unrelated RLS-disabled tables are
+  still `manufacturer_entities` and `terms_clause_patterns`.
+- Performance advisor returned 66 items (53 info, 13 warning). The refreshed
+  advisor now recognises the new editor covering index: the foreign key no
+  longer appears as unindexed, and the new index appears only as not-yet-used.
+- Exact post-cleanup live invariants: claims 1 active/23 queued; clusters 21
+  queued; 22 memberships; 12 applicability rows; 368 Voyage embeddings (346
+  chunks and 22 claims); 0
+  non-empty corroboration arrays; legacy reviewer metadata unchanged; 30
+  documents; 695 chunks; 88 centroids; 2,282 relevance rows; cache/queue empty;
+  Lenny 10 accepted plus 1 excluded `needs_review` typo, document `partial`.
+
+**Final local checks:**
+
+- Full tests: 271/271 passed.
+- TypeScript: `npx tsc --noEmit` passed.
+- Production build: `npm run build` exited 0.
+- `git diff --check` passed apart from expected line-ending warnings.
+
+**Pending before commit/push/deploy:**
+
+1. Commit only Research Layer files (excluding the pre-existing
+   handoff edit), push `main`, await Vercel, and complete authenticated
+   desktop/mobile browser verification.

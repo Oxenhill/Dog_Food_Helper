@@ -9,6 +9,10 @@
 
 import { canonicalIngredientKey } from './compositionParser';
 import { INGREDIENT_CATEGORIES } from './ingredientCategories';
+import {
+  normalizeResearchStructuredValue,
+  RESEARCH_PROCESSING_METHODS,
+} from './researchEvidenceReview';
 import type { FoodFull, FoodNutrients } from './foodFull';
 import { supabaseAdmin } from './supabase';
 import type {
@@ -57,14 +61,8 @@ export const NUTRIENT_MATCH_RULES: Readonly<Record<string, NutrientMatchRule>> =
   'l-carnitine': { declaredNames: ['l-carnitine'] },
 };
 
-const PROCESSING_METHODS: Readonly<Record<string, FoodFull['food_type']>> = {
-  raw: 'raw',
-  kibble: 'kibble',
-  'cold pressed': 'cold_pressed',
-  cooked: 'cooked',
-  wet: 'wet',
-  other: 'other',
-};
+const PROCESSING_METHODS: Readonly<Record<string, FoodFull['food_type']>> =
+  RESEARCH_PROCESSING_METHODS;
 
 const CATEGORY_BY_SUBJECT = new Map<string, string>(
   INGREDIENT_CATEGORIES.flatMap((category) => [
@@ -105,12 +103,7 @@ export interface SubjectMatchResult {
 }
 
 function normalizeStructuredValue(value: string): string {
-  return value
-    .normalize('NFKC')
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ');
+  return normalizeResearchStructuredValue(value);
 }
 
 function ingredientNames(food: FoodFull): string[] {

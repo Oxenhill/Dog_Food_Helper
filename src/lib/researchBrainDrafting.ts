@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { embedResearchTexts, RESEARCH_BRAIN_EMBEDDING_MODEL } from './researchBrainPipeline';
 import { NUTRIENT_MATCH_RULES } from './activeClaimRetrieval';
 import { INGREDIENT_CATEGORIES } from './ingredientCategories';
+import { researchClusterIdentity } from './researchEvidenceReview';
 import { supabaseAdmin } from './supabase';
 import type {
   ResearchClaimDirection,
@@ -220,18 +221,6 @@ function claimIdentity(documentId: string, claim: DraftClaim): string {
         claim.effect_summary,
       ].map(normalize),
     })
-  );
-}
-
-function clusterIdentity(claim: DraftClaim): string {
-  return hash(
-    [
-      claim.subject_type,
-      normalize(claim.subject_value),
-      claim.outcome_type,
-      normalize(claim.outcome_value),
-      claim.direction,
-    ].join('|')
   );
 }
 
@@ -479,7 +468,7 @@ export async function draftDocumentIntoKnowledge(
     }
     queuedClaimIds.push(insertedClaim.id);
 
-    const cIdentity = clusterIdentity(claim);
+    const cIdentity = researchClusterIdentity(claim);
     const { data: existingCluster, error: existingClusterError } = await supabaseAdmin
       .from('research_evidence_clusters')
       .select('id, status')

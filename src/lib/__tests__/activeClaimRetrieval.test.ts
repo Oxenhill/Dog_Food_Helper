@@ -18,6 +18,7 @@ import type {
   ResearchChunk,
   ResearchDocument,
   ResearchClusterApplicability,
+  ResearchEvidenceCluster,
 } from '../types';
 
 const QUOTE = 'the inclusion of 45% green lentil in extruded diets does not lower taurine';
@@ -284,6 +285,70 @@ function applicability(
   };
 }
 
+function cluster(
+  overrides: Partial<ResearchEvidenceCluster> = {}
+): ResearchEvidenceCluster {
+  return {
+    id: 'cluster-1',
+    cluster_identity: 'a'.repeat(64),
+    label: 'green lentil — Dysbiosis Pattern Score',
+    subject_type: 'ingredient',
+    subject_value: 'green lentil',
+    outcome_type: 'biome_marker',
+    outcome_value: 'Dysbiosis Pattern Score',
+    direction: 'supports',
+    cautious_summary: 'The study found green lentil was associated with the measured marker.',
+    status: 'active',
+    reviewed_by: 'reviewer-1',
+    reviewed_at: '2026-07-29T12:00:00.000Z',
+    review_note: null,
+    created_at: '2026-07-29T11:00:00.000Z',
+    updated_at: '2026-07-29T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function clusteredSource(
+  overrides: {
+    cluster?: Partial<ResearchEvidenceCluster>;
+    contexts?: ResearchClusterApplicability[];
+    findingStatus?: 'accepted' | 'needs_review';
+    sourceDocument?: Partial<ResearchDocument>;
+  } = {}
+): ActiveClaimDataSource {
+  return {
+    loadActiveClaims: async () => [claim()],
+    loadDocuments: async () => [document(overrides.sourceDocument)],
+    loadChunks: async () => [chunk()],
+    loadDogConditions: async () => [],
+    loadClusterMembers: async () => [
+      { cluster_id: 'cluster-1', claim_id: 'claim-active' },
+    ],
+    loadClusters: async () => [cluster(overrides.cluster)],
+    loadApplicability: async () => overrides.contexts ?? [applicability()],
+    loadDogFindings: async () => [
+      {
+        id: 'finding-1',
+        document_id: 'dog-document-1',
+        dog_id: 'dog-1',
+        owner_id: 'owner-1',
+        finding_type: 'microbiome_marker',
+        marker_name: 'Dysbiosis Pattern Score',
+        value: 'high',
+        unit: null,
+        reference_range: null,
+        interpretation_flag: null,
+        source_kind: 'parsed_report',
+        review_status: overrides.findingStatus ?? 'accepted',
+        verbatim_source_text: 'Dysbiosis Pattern Score: high',
+        created_at: '2026-07-29T00:00:00.000Z',
+      },
+    ],
+    loadDogRestrictions: async () => [],
+    loadDogOutcomeMetrics: async () => [],
+  };
+}
+
 test('accepted report findings can satisfy exact structured applicability', () => {
   const result = clusterMatchesDogContext(
     [applicability()],
@@ -368,6 +433,67 @@ test('a clustered proposition with no reviewed dog context is not runtime eviden
   );
 });
 
+test('an active reviewed cluster plus an accepted dog finding reaches the food response', async () => {
+  const result = await createActiveClaimEvidenceRetriever(clusteredSource())(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  const evidence = result.evidenceByFoodId.get('food-1');
+  assert.equal(evidence?.length, 1);
+  assert.equal(evidence?.[0].cluster_id, 'cluster-1');
+  assert.deepEqual(evidence?.[0].matched_dog_context, [
+    'document finding: Dysbiosis Pattern Score = high',
+  ]);
+});
+
+test('queued and rejected clusters cannot appear even when their member claim is active', async () => {
+  for (const status of ['queued_for_review', 'rejected'] as const) {
+    const result = await createActiveClaimEvidenceRetriever(
+      clusteredSource({ cluster: { status } })
+    )(
+      { id: 'dog-1', life_stage: 'adult' },
+      [food()]
+    );
+    assert.deepEqual(result.evidenceByFoodId.get('food-1'), [], status);
+  }
+});
+
+test('an active claim in an inactive or unreviewed cluster cannot appear', async () => {
+  const inactive = await createActiveClaimEvidenceRetriever(
+    clusteredSource({
+      cluster: {
+        status: 'active',
+        reviewed_by: null,
+        reviewed_at: null,
+      },
+    })
+  )(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  assert.deepEqual(inactive.evidenceByFoodId.get('food-1'), []);
+});
+
+test('a no-context cluster is suppressed by the integrated retrieval path', async () => {
+  const result = await createActiveClaimEvidenceRetriever(
+    clusteredSource({ contexts: [] })
+  )(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  assert.deepEqual(result.evidenceByFoodId.get('food-1'), []);
+});
+
+test('an uncertain dog finding is suppressed by the integrated retrieval path', async () => {
+  const result = await createActiveClaimEvidenceRetriever(
+    clusteredSource({ findingStatus: 'needs_review' })
+  )(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  assert.deepEqual(result.evidenceByFoodId.get('food-1'), []);
+});
+
 test('unrelated partial ingredient names do not match', () => {
   for (const name of ['lentils', 'red lentils', 'lentil fibre', 'green lentil fibre']) {
     assert.equal(
@@ -418,6 +544,26 @@ test('open-access full text status is preserved', () => {
   assert.equal(toResearchEvidence(item).access_type, 'open_access_full_text');
 });
 
+test('private uploaded full text, exact quote, title and source reach the integrated response', async () => {
+  const result = await createActiveClaimEvidenceRetriever(
+    clusteredSource({
+      sourceDocument: {
+        access_type: 'uploaded_full_text_private',
+        abstract_only: false,
+        open_access: false,
+      },
+    })
+  )(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  const evidence = result.evidenceByFoodId.get('food-1')?.[0];
+  assert.equal(evidence?.access_type, 'uploaded_full_text_private');
+  assert.equal(evidence?.supporting_quote, QUOTE);
+  assert.equal(evidence?.title, 'Green lentil and taurine in dogs');
+  assert.equal(evidence?.source_url, 'https://pubmed.ncbi.nlm.nih.gov/34747447/');
+});
+
 test('neutral evidence and every other direction have zero Gate 4 ranking effect', () => {
   assert.deepEqual(researchRankingResult(['neutral']), {
     score: 0,
@@ -434,7 +580,18 @@ test('neutral evidence and every other direction have zero Gate 4 ranking effect
 });
 
 test('retrieval query count is fixed rather than N+1 per candidate food', async () => {
-  const calls = { claims: 0, documents: 0, chunks: 0, conditions: 0 };
+  const calls = {
+    claims: 0,
+    documents: 0,
+    chunks: 0,
+    conditions: 0,
+    findings: 0,
+    restrictions: 0,
+    outcomes: 0,
+    members: 0,
+    clusters: 0,
+    applicability: 0,
+  };
   const source: ActiveClaimDataSource = {
     loadActiveClaims: async () => {
       calls.claims += 1;
@@ -452,6 +609,30 @@ test('retrieval query count is fixed rather than N+1 per candidate food', async 
       calls.conditions += 1;
       return [];
     },
+    loadDogFindings: async () => {
+      calls.findings += 1;
+      return [];
+    },
+    loadDogRestrictions: async () => {
+      calls.restrictions += 1;
+      return [];
+    },
+    loadDogOutcomeMetrics: async () => {
+      calls.outcomes += 1;
+      return [];
+    },
+    loadClusterMembers: async () => {
+      calls.members += 1;
+      return [];
+    },
+    loadClusters: async () => {
+      calls.clusters += 1;
+      return [];
+    },
+    loadApplicability: async () => {
+      calls.applicability += 1;
+      return [];
+    },
   };
   const retrieve = createActiveClaimEvidenceRetriever(source);
   const foods = Array.from({ length: 100 }, (_, index) =>
@@ -459,7 +640,18 @@ test('retrieval query count is fixed rather than N+1 per candidate food', async 
   );
   const result = await retrieve({ id: 'dog-1', life_stage: 'adult' }, foods);
 
-  assert.deepEqual(calls, { claims: 1, documents: 1, chunks: 1, conditions: 1 });
+  assert.deepEqual(calls, {
+    claims: 1,
+    documents: 1,
+    chunks: 1,
+    conditions: 1,
+    findings: 1,
+    restrictions: 1,
+    outcomes: 1,
+    members: 1,
+    clusters: 1,
+    applicability: 1,
+  });
   assert.equal(result.evidenceByFoodId.size, 100);
   assert.equal(result.evidenceByFoodId.get('food-99')?.length, 1);
 });
@@ -490,6 +682,10 @@ test('recommendation request path has no Gateway, embedding, RAG or research que
     new URL('../../app/api/recommendations/route.ts', import.meta.url),
     'utf8'
   );
+  const retrieval = readFileSync(
+    new URL('../activeClaimRetrieval.ts', import.meta.url),
+    'utf8'
+  );
   for (const forbidden of [
     'ragRetrieval',
     'retrieveResearchFor',
@@ -505,4 +701,15 @@ test('recommendation request path has no Gateway, embedding, RAG or research que
   }
   assert.equal(route.includes('retrieveActiveClaimEvidence'), true);
   assert.equal(route.includes('researchRankingResult'), true);
+  for (const forbidden of [
+    "from 'ai'",
+    'gateway(',
+    'generateObject(',
+    'generateText(',
+    'embedResearchTexts(',
+    'researchBrainDrafting',
+    'researchBrainPipeline',
+  ]) {
+    assert.equal(retrieval.includes(forbidden), false, forbidden);
+  }
 });

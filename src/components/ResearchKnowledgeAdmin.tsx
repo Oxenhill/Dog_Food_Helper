@@ -37,6 +37,7 @@ interface ClusterContext {
   context_type: string;
   context_key: string;
   context_value: string | null;
+  match_operator: 'exact' | 'enum';
   required: boolean;
 }
 
@@ -44,6 +45,7 @@ interface ClusterMember {
   claim_id: string;
   independently_reviewed: boolean;
   claim: ProcessingClaim | null;
+  document: ProcessingDocument | null;
 }
 
 interface EvidenceCluster {
@@ -58,13 +60,58 @@ interface EvidenceCluster {
   status: string;
   reviewed_at: string | null;
   review_note: string | null;
+  updated_at: string;
   members: ClusterMember[];
   applicability: ClusterContext[];
 }
 
+interface ReviewOptions {
+  subject_types: string[];
+  outcome_types: string[];
+  directions: string[];
+  context_types: string[];
+  nutrient_subjects: string[];
+  processing_methods: string[];
+  ingredient_classes: Array<{ value: string; label: string }>;
+  document_finding_keys: string[];
+  life_stages: string[];
+}
+
+interface EditableContext {
+  context_type: string;
+  context_key: string;
+  context_value: string;
+  match_operator: 'exact' | 'enum';
+}
+
+interface EditableCluster {
+  expected_updated_at: string;
+  subject_type: string;
+  subject_value: string;
+  outcome_type: string;
+  outcome_value: string;
+  direction: string;
+  cautious_summary: string;
+  applicability: EditableContext[];
+}
+
+const EMPTY_REVIEW_OPTIONS: ReviewOptions = {
+  subject_types: ['ingredient', 'nutrient', 'ingredient_class', 'processing_method'],
+  outcome_types: ['condition', 'biome_marker', 'clinical_marker', 'outcome_metric', 'general_health'],
+  directions: ['supports', 'cautions_against', 'neutral', 'insufficient_evidence'],
+  context_types: ['health_condition', 'document_finding', 'life_stage', 'restriction', 'outcome_metric'],
+  nutrient_subjects: [],
+  processing_methods: [],
+  ingredient_classes: [],
+  document_finding_keys: [],
+  life_stages: [],
+};
+
 export default function ResearchKnowledgeAdmin() {
   const [documents, setDocuments] = useState<ProcessingDocument[]>([]);
   const [clusters, setClusters] = useState<EvidenceCluster[]>([]);
+  const [reviewOptions, setReviewOptions] = useState<ReviewOptions>(EMPTY_REVIEW_OPTIONS);
+  const [edits, setEdits] = useState<Record<string, EditableCluster>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -81,6 +128,7 @@ export default function ResearchKnowledgeAdmin() {
     }
     setDocuments(body.documents ?? []);
     setClusters(body.clusters ?? []);
+    setReviewOptions(body.review_options ?? EMPTY_REVIEW_OPTIONS);
   }, []);
 
   useEffect(() => {
@@ -141,6 +189,99 @@ export default function ResearchKnowledgeAdmin() {
     } finally {
       setBusy('');
     }
+  }
+
+  function beginEdit(cluster: EvidenceCluster) {
+    setEdits((current) => ({
+      ...current,
+      [cluster.id]: {
+        expected_updated_at: cluster.updated_at,
+        subject_type: cluster.subject_type,
+        subject_value: cluster.subject_value,
+        outcome_type: cluster.outcome_type,
+        outcome_value: cluster.outcome_value,
+        direction: cluster.direction,
+        cautious_summary: cluster.cautious_summary,
+        applicability: cluster.applicability.map((context) => ({
+          context_type: context.context_type,
+          context_key: context.context_key,
+          context_value: context.context_value ?? '',
+          match_operator: context.match_operator,
+        })),
+      },
+    }));
+  }
+
+  function updateEdit(clusterId: string, patch: Partial<EditableCluster>) {
+    setEdits((current) => ({
+      ...current,
+      [clusterId]: { ...current[clusterId], ...patch },
+    }));
+  }
+
+  function updateContext(
+    clusterId: string,
+    index: number,
+    patch: Partial<EditableContext>
+  ) {
+    const edit = edits[clusterId];
+    if (!edit) return;
+    updateEdit(clusterId, {
+      applicability: edit.applicability.map((context, contextIndex) =>
+        contextIndex === index ? { ...context, ...patch } : context
+      ),
+    });
+  }
+
+  async function saveEdit(clusterId: string) {
+    const edit = edits[clusterId];
+    if (!edit) return;
+    setBusy(clusterId);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/admin/research/processing', {
+        method: 'POST',
+        headers: { ...sessionAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'edit_cluster',
+          cluster_id: clusterId,
+          ...edit,
+          applicability: edit.applicability.map((context) => ({
+            ...context,
+            context_value: context.context_value.trim() || null,
+          })),
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Cluster edit failed');
+      setEdits((current) => {
+        const next = { ...current };
+        delete next[clusterId];
+        return next;
+      });
+      setNotice('The queued proposition was updated. It is still awaiting explicit approval.');
+      await load();
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : 'Cluster edit failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function subjectSuggestions(subjectType: string): string[] {
+    if (subjectType === 'nutrient') return reviewOptions.nutrient_subjects;
+    if (subjectType === 'processing_method') return reviewOptions.processing_methods;
+    if (subjectType === 'ingredient_class') {
+      return reviewOptions.ingredient_classes.map((category) => category.value);
+    }
+    return [];
+  }
+
+  function contextSuggestions(contextType: string): string[] {
+    if (contextType === 'document_finding') return reviewOptions.document_finding_keys;
+    if (contextType === 'life_stage') return reviewOptions.life_stages;
+    return [];
   }
 
   const pendingDocuments = documents.filter(
@@ -220,91 +361,350 @@ export default function ResearchKnowledgeAdmin() {
           <span className="badge-pine">{queuedClusters.length} queued</span>
         </div>
         <div className="mt-3 grid gap-4">
-          {queuedClusters.map((cluster) => (
-            <article key={cluster.id} className="rounded border border-line bg-paper p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="eyebrow">
-                    {cluster.subject_type.replace(/_/g, ' ')} →{' '}
-                    {cluster.outcome_type.replace(/_/g, ' ')}
-                  </p>
-                  <h4 className="mt-1 font-semibold text-ink">
-                    {cluster.subject_value} → {cluster.outcome_value}
-                  </h4>
-                </div>
-                <span className="badge-pine">{cluster.direction.replace(/_/g, ' ')}</span>
-              </div>
-              <p className="mt-3 text-[14px] leading-6 text-ink">{cluster.cautious_summary}</p>
+          {queuedClusters.map((cluster) => {
+            const edit = edits[cluster.id];
+            return (
+              <article key={cluster.id} className="rounded border border-line bg-paper p-4">
+                {edit ? (
+                  <div className="grid gap-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="eyebrow">Queued proposition</p>
+                        <h4 className="mt-1 font-semibold text-ink">Edit before approval</h4>
+                      </div>
+                      <span className="badge-pine">Still inactive</span>
+                    </div>
 
-              <div className="mt-3 rounded border border-line bg-surface p-3">
-                <p className="eyebrow">Required dog context</p>
-                {cluster.applicability.length === 0 ? (
-                  <p className="help-text mt-1">
-                    No dog-specific context was explicit in the source. Review whether this
-                    proposition is genuinely useful before approval.
-                  </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="field">
+                        <span className="label">Food subject type</span>
+                        <select
+                          className="select"
+                          value={edit.subject_type}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, {
+                              subject_type: event.target.value,
+                              subject_value: '',
+                            })
+                          }
+                        >
+                          {reviewOptions.subject_types.map((value) => (
+                            <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span className="label">Food subject</span>
+                        <input
+                          className="input"
+                          list={`subject-options-${cluster.id}`}
+                          value={edit.subject_value}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, { subject_value: event.target.value })
+                          }
+                        />
+                        <datalist id={`subject-options-${cluster.id}`}>
+                          {subjectSuggestions(edit.subject_type).map((value) => (
+                            <option key={value} value={value} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label className="field">
+                        <span className="label">Measured outcome type</span>
+                        <select
+                          className="select"
+                          value={edit.outcome_type}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, { outcome_type: event.target.value })
+                          }
+                        >
+                          {reviewOptions.outcome_types.map((value) => (
+                            <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span className="label">Measured outcome</span>
+                        <input
+                          className="input"
+                          value={edit.outcome_value}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, { outcome_value: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="field sm:col-span-2">
+                        <span className="label">Direction</span>
+                        <select
+                          className="select"
+                          value={edit.direction}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, { direction: event.target.value })
+                          }
+                        >
+                          {reviewOptions.directions.map((value) => (
+                            <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field sm:col-span-2">
+                        <span className="label">Cautious summary</span>
+                        <textarea
+                          className="textarea min-h-[96px]"
+                          value={edit.cautious_summary}
+                          onChange={(event) =>
+                            updateEdit(cluster.id, { cautious_summary: event.target.value })
+                          }
+                        />
+                        <span className="help-text">
+                          One cautious sentence; no feeding advice or certainty claims.
+                        </span>
+                      </label>
+                    </div>
+
+                    <div className="rounded border border-line bg-surface p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="eyebrow">Required dog context</p>
+                          <p className="help-text mt-1">
+                            Every context entered here must match before this evidence can appear.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          disabled={edit.applicability.length >= 8}
+                          onClick={() =>
+                            updateEdit(cluster.id, {
+                              applicability: [
+                                ...edit.applicability,
+                                {
+                                  context_type: 'health_condition',
+                                  context_key: '',
+                                  context_value: '',
+                                  match_operator: 'exact',
+                                },
+                              ],
+                            })
+                          }
+                        >
+                          Add context
+                        </button>
+                      </div>
+                      {edit.applicability.length === 0 && (
+                        <p className="callout-alarm mt-3 text-[13px]">
+                          With no required dog context, runtime retrieval will suppress this cluster.
+                        </p>
+                      )}
+                      <div className="mt-3 grid gap-3">
+                        {edit.applicability.map((context, index) => (
+                          <div
+                            key={`${cluster.id}-context-${index}`}
+                            className="grid gap-2 rounded border border-line bg-paper p-3 sm:grid-cols-[1fr_1fr_1fr_auto]"
+                          >
+                            <select
+                              className="select"
+                              aria-label={`Context ${index + 1} type`}
+                              value={context.context_type}
+                              onChange={(event) =>
+                                updateContext(cluster.id, index, {
+                                  context_type: event.target.value,
+                                  context_key: '',
+                                  context_value: '',
+                                })
+                              }
+                            >
+                              {reviewOptions.context_types.map((value) => (
+                                <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>
+                              ))}
+                            </select>
+                            <div>
+                              <input
+                                className="input"
+                                aria-label={`Context ${index + 1} key`}
+                                list={`context-options-${cluster.id}-${index}`}
+                                placeholder="Required fact"
+                                value={context.context_key}
+                                onChange={(event) =>
+                                  updateContext(cluster.id, index, {
+                                    context_key: event.target.value,
+                                  })
+                                }
+                              />
+                              <datalist id={`context-options-${cluster.id}-${index}`}>
+                                {contextSuggestions(context.context_type).map((value) => (
+                                  <option key={value} value={value} />
+                                ))}
+                              </datalist>
+                            </div>
+                            <input
+                              className="input"
+                              aria-label={`Context ${index + 1} value`}
+                              placeholder="Exact value (optional)"
+                              value={context.context_value}
+                              onChange={(event) =>
+                                updateContext(cluster.id, index, {
+                                  context_value: event.target.value,
+                                })
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="btn-danger btn-sm"
+                              onClick={() =>
+                                updateEdit(cluster.id, {
+                                  applicability: edit.applicability.filter(
+                                    (_, contextIndex) => contextIndex !== index
+                                  ),
+                                })
+                              }
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary btn-sm"
+                        disabled={Boolean(busy)}
+                        onClick={() => void saveEdit(cluster.id)}
+                      >
+                        {busy === cluster.id ? 'Saving…' : 'Save queued edit'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={Boolean(busy)}
+                        onClick={() =>
+                          setEdits((current) => {
+                            const next = { ...current };
+                            delete next[cluster.id];
+                            return next;
+                          })
+                        }
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 ) : (
-                  <ul className="mt-2 grid gap-1 text-[13px]">
-                    {cluster.applicability.map((context) => (
-                      <li key={context.id}>
-                        {context.context_type.replace(/_/g, ' ')}: {context.context_key}
-                        {context.context_value ? ` = ${context.context_value}` : ''}
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="eyebrow">
+                          {cluster.subject_type.replace(/_/g, ' ')} →{' '}
+                          {cluster.outcome_type.replace(/_/g, ' ')}
+                        </p>
+                        <h4 className="mt-1 font-semibold text-ink">
+                          {cluster.subject_value} → {cluster.outcome_value}
+                        </h4>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="badge-pine">{cluster.direction.replace(/_/g, ' ')}</span>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          disabled={Boolean(busy)}
+                          onClick={() => beginEdit(cluster)}
+                        >
+                          Edit before review
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-[14px] leading-6 text-ink">
+                      {cluster.cautious_summary}
+                    </p>
+
+                    <div className="mt-3 rounded border border-line bg-surface p-3">
+                      <p className="eyebrow">Required dog context</p>
+                      {cluster.applicability.length === 0 ? (
+                        <p className="help-text mt-1">
+                          No dog-specific context was explicit in the source. Runtime retrieval will
+                          suppress this cluster unless an owner adds a justified context before approval.
+                        </p>
+                      ) : (
+                        <ul className="mt-2 grid gap-1 text-[13px]">
+                          {cluster.applicability.map((context) => (
+                            <li key={context.id}>
+                              {context.context_type.replace(/_/g, ' ')}: {context.context_key}
+                              {context.context_value ? ` = ${context.context_value}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className="mt-3 grid gap-3">
+                      {cluster.members.map((member) => (
+                        <blockquote
+                          key={member.claim_id}
+                          className="rounded border-l-4 border-pine bg-pine-tint/30 px-4 py-3"
+                        >
+                          <p className="font-semibold text-ink">
+                            {member.document?.title ?? 'Untitled research source'}
+                          </p>
+                          <p className="help-text mt-1">
+                            {member.document?.access_type?.replace(/_/g, ' ') ?? 'access status unavailable'}
+                            {' · '}Grade {member.claim?.evidence_grade ?? '—'} ·{' '}
+                            {member.claim?.grading_inputs_complete
+                              ? 'grading metadata complete'
+                              : 'grading metadata incomplete'}
+                          </p>
+                          {member.document?.source_url && (
+                            <a
+                              href={member.document.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-block text-[13px] font-semibold text-pine hover:underline"
+                            >
+                              Open paper ↗
+                            </a>
+                          )}
+                          <p className="mt-3 font-mono text-[13px] leading-relaxed">
+                            “{member.claim?.supporting_quote ?? 'Source claim missing'}”
+                          </p>
+                        </blockquote>
+                      ))}
+                    </div>
+
+                    <label className="field mt-4">
+                      <span className="label">Review note</span>
+                      <textarea
+                        className="textarea min-h-[72px]"
+                        value={notes[cluster.id] ?? ''}
+                        onChange={(event) =>
+                          setNotes((current) => ({ ...current, [cluster.id]: event.target.value }))
+                        }
+                        placeholder="Required for rejection; optional for approval"
+                      />
+                    </label>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary btn-sm"
+                        disabled={Boolean(busy)}
+                        onClick={() => void reviewCluster(cluster.id, 'approve_cluster')}
+                      >
+                        Approve proposition and source claims
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger btn-sm"
+                        disabled={Boolean(busy) || !(notes[cluster.id]?.trim())}
+                        onClick={() => void reviewCluster(cluster.id, 'reject_cluster')}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </>
                 )}
-              </div>
-
-              <div className="mt-3 grid gap-3">
-                {cluster.members.map((member) => (
-                  <blockquote
-                    key={member.claim_id}
-                    className="rounded border-l-4 border-pine bg-pine-tint/30 px-4 py-3"
-                  >
-                    <p className="font-mono text-[13px] leading-relaxed">
-                      “{member.claim?.supporting_quote ?? 'Source claim missing'}”
-                    </p>
-                    <p className="help-text mt-2">
-                      Grade {member.claim?.evidence_grade ?? '—'} ·{' '}
-                      {member.claim?.grading_inputs_complete
-                        ? 'grading metadata complete'
-                        : 'grading metadata incomplete'}
-                    </p>
-                  </blockquote>
-                ))}
-              </div>
-
-              <label className="field mt-4">
-                <span className="label">Review note</span>
-                <textarea
-                  className="textarea min-h-[72px]"
-                  value={notes[cluster.id] ?? ''}
-                  onChange={(event) =>
-                    setNotes((current) => ({ ...current, [cluster.id]: event.target.value }))
-                  }
-                  placeholder="Required for rejection; optional for approval"
-                />
-              </label>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn-primary btn-sm"
-                  disabled={Boolean(busy)}
-                  onClick={() => void reviewCluster(cluster.id, 'approve_cluster')}
-                >
-                  Approve proposition and source claims
-                </button>
-                <button
-                  type="button"
-                  className="btn-danger btn-sm"
-                  disabled={Boolean(busy) || !(notes[cluster.id]?.trim())}
-                  onClick={() => void reviewCluster(cluster.id, 'reject_cluster')}
-                >
-                  Reject
-                </button>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
           {queuedClusters.length === 0 && (
             <p className="help-text">No structured proposition clusters are awaiting review.</p>
           )}
@@ -313,4 +713,3 @@ export default function ResearchKnowledgeAdmin() {
     </section>
   );
 }
-

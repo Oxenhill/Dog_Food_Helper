@@ -432,3 +432,187 @@ define:
   manually activated incomplete evidence from being over-weighted.
 
 Gate 4 intentionally implements none of those ranking decisions.
+
+## Research Brain continuation — local implementation checkpoint (2026-07-30)
+
+### Status
+
+Owner edit-before-approval, source-paper display, and the requested runtime
+integration coverage are implemented and locally verified. The edit RPC and
+its related foreign-key index are live. The owner explicitly authorised the
+bounded quality-audit cleanup on 2026-08-01; it completed transactionally and
+preserved every ingestion job and its audit trail. No literature was approved.
+
+### Repository verification
+
+- Branch: `codex/mobile-pack-capture`.
+- Starting continuation HEAD: `7f89bf41bbf3ea6b5893f94abd7a7becc03bd675`
+  (`Checkpoint in-app research brain workflow`).
+- `313b973c48e38e797df0f09467f99f50cd511410` and Gate 4 starting commit
+  `6f7d10e1586ef0d0dd506f6df43796a243a97e1e` are both ancestors.
+- Refreshed `origin/main` remains an ancestor of the branch; the branch is one
+  local checkpoint commit ahead.
+- The pre-existing uncommitted Behive assessment in
+  `docs/research-brain-handoff-2026-07-29.md` was preserved and not folded into
+  implementation edits.
+- Live migration history contains
+  `research_brain_workflow` and `research_cluster_review_transaction` exactly
+  once. Neither was reapplied.
+
+### Queued-cluster quality audit
+
+The read-only live audit found exactly 40 queued, unreviewed clusters containing
+42 queued source claims:
+
+| Subject type | Clusters |
+|---|---:|
+| ingredient | 17 |
+| nutrient | 3 |
+| processing method | 20 |
+
+| Direction | Clusters |
+|---|---:|
+| supports | 22 |
+| cautions against | 11 |
+| neutral | 5 |
+| insufficient evidence | 2 |
+
+Context/member distribution:
+
+- 16 clusters have no applicability context and therefore remain suppressed by
+  runtime logic;
+- 22 have one required context;
+- 2 have two required contexts;
+- 38 have one source claim;
+- 2 have two source claims;
+- no cluster is active or reviewed.
+
+Nineteen fresh queued clusters were demonstrably mis-taxonomised:
+
+- 2 chronic-enteropathy propositions labelled `cooked` even though the quoted
+  intervention is an elimination/therapeutic/antigen-restricted diet;
+- 6 cobalamin propositions whose quotes establish food cobalamin content but
+  whose measured outcome was drafted as serum cobalamin concentration;
+- 7 diabetic-dog propositions labelled `cooked` although the quotes compare a
+  homemade diet with a commercial diet and do not establish cooking as the
+  intervention;
+- 1 antibiotic/dysbiosis proposition labelled `cooked`;
+- 1 acidic-urine/urolith proposition labelled `kibble`;
+- 2 hydrolysis propositions labelled `cooked`.
+
+Immediately before deletion, the scope was requeried and all 19 clusters were
+still fresh, queued, unreviewed, and attached only to the recorded population
+jobs. With explicit owner approval, one guarded transaction removed the 19
+clusters, their 20 isolated queued claims, and 20 claim embeddings. It
+preserved all 19 job rows and appended 19 deterministic discard records across
+the six affected jobs' `result_summary` values. Post-transaction checks found
+zero target clusters and no affected claim or embedding residue. Existing
+reviewed and legacy claims were outside the transaction.
+
+### Owner edit-before-approval
+
+`supabase/migrations/20260730120629_edit_research_evidence_cluster.sql`
+defines the transactional edit boundary:
+
+- only `draft`/`queued_for_review`, unreviewed clusters can be edited;
+- an expected `updated_at` value prevents stale writes;
+- the proposition identity and label are recomputed server-side;
+- identity collisions are rejected rather than merged silently;
+- all applicability rows are replaced in the same transaction;
+- report-field and life-stage contexts are allowlisted;
+- the last authenticated admin editor and edit time are recorded separately
+  from review metadata;
+- execution is revoked from `public`, `anon`, and `authenticated`, and granted
+  only to `service_role`.
+
+`src/lib/researchEvidenceReview.ts` centralises the runtime-aligned subject,
+direction, outcome, processing-method, nutrient, report-field, and life-stage
+validation. Biome markers cannot become food subjects, combined ingredients
+are rejected, summaries must remain one cautious sentence, and advice or
+certainty wording is rejected.
+
+`src/app/api/admin/research/processing/route.ts` validates an authenticated
+admin edit, computes the collision-safe identity, and calls the transaction.
+It also attaches each claim's source document to the cluster response.
+
+`src/components/ResearchKnowledgeAdmin.tsx` now provides:
+
+- editable subject type/value;
+- editable measured outcome type/value;
+- editable direction and cautious summary;
+- add/remove editing for up to eight required applicability contexts;
+- explicit warning that a no-context cluster remains runtime-suppressed;
+- source paper title, honest access type, usable link, grade metadata, and
+  literal quote in every review card;
+- separate save and approve actions, with saved edits remaining inactive.
+
+Active, rejected, and superseded clusters never appear in the edit surface.
+Approval and rejection continue to use the existing separate review
+transaction.
+
+### Runtime integration coverage
+
+The expanded tests now cover:
+
+- an active reviewed cluster plus an accepted dog finding appears;
+- queued and rejected clusters do not appear;
+- an active claim in an inactive or unreviewed cluster does not appear;
+- a no-context cluster is suppressed;
+- an uncertain dog finding is suppressed;
+- exact quote, source title/link, and access status reach the response;
+- `uploaded_full_text_private` is preserved;
+- the recommendation runtime imports no Gateway, drafting, embedding, RAG,
+  cache, or queue dependency;
+- all ten bounded data-source reads occur once across 100 food candidates,
+  with no per-food query;
+- neutral and every other evidence direction retain zero ranking effect;
+- edit identity/allowlists/cautious-summary rules are deterministic;
+- the edit transaction retains queued-only, concurrency, collision, atomic
+  applicability, editor-metadata, and service-role guards.
+
+### Local verification
+
+- Full test suite: 271/271 passed.
+- TypeScript: `tsc --noEmit` passed.
+- Production build: `next build` exited 0.
+- `git diff --check` passed apart from expected line-ending warnings.
+- The build emitted the repository's existing dynamic-route static-analysis
+  diagnostics but completed successfully.
+
+### Live migration, rollback, advisors, and invariants (2026-08-01)
+
+- Live migration history now records `edit_research_evidence_cluster` and
+  `index_research_cluster_last_editor` exactly once, in addition to the two
+  previously applied Research Brain migrations.
+- A transactionally rolled-back live exercise proved that a valid queued edit
+  succeeds while stale writes, active-cluster edits, the excluded
+  `Bacteriodetes` report context, and identity collisions fail. The rollback
+  left cluster and review state unchanged.
+- Security advisor: 20 existing findings (13 info, 5 warning, 2 error) and no
+  Research Brain edit finding. The unrelated existing RLS-disabled errors are
+  `manufacturer_entities` and `terms_clause_patterns`; remediation:
+  [Supabase RLS-disabled linter guidance](https://supabase.com/docs/guides/database/database-linter?lint=0013_rls_disabled_in_public).
+- Performance advisor: 66 existing findings (53 info, 13 warning). The
+  follow-up refresh recognises the edit migration's `last_edited_by` covering
+  index: it is no longer reported as an unindexed foreign key and appears only
+  as a new, not-yet-used index. Existing unindexed-FK remediation reference:
+  [Supabase unindexed-FK guidance](https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys).
+- After the authorised cleanup, claims are exactly 1 active and 23 queued;
+  clusters are exactly 21 queued and none reviewed or active. Both legacy
+  claims retain their exact
+  status, reviewer, review timestamp, note, and update timestamp. All
+  `corroborating_claim_ids` arrays remain empty.
+- Protected corpus counts remain 30 documents, 695 chunks, 88 centroids, and
+  2,282 relevance rows. Cache and queue remain empty. The background workflow
+  has 19 job audits, 21 clusters, 22 memberships, 12 applicability rows, and
+  368 Voyage embeddings (346 chunks and 22 queued claims). Six jobs retain the
+  19 quality-audit discard records.
+- Lenny remains one `partial` Biome4Pets document with 11 findings: 10
+  `accepted` and the `Bacteriodetes` typo still `needs_review` and excluded.
+
+### Deployment completion still required
+
+1. Commit only the Research Layer files.
+2. Push to `main`, wait for the Vercel deployment, and perform the requested
+   authenticated desktop/mobile admin, owner-report, recommendation, link, and
+   console checks.

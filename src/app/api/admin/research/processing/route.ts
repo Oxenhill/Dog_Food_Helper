@@ -1,14 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import {
   draftDocumentIntoKnowledge,
   RESEARCH_BRAIN_DRAFT_MODEL,
 } from '@/lib/researchBrainDrafting';
+import {
+  RESEARCH_CONTEXT_TYPES,
+  RESEARCH_DOCUMENT_FINDING_KEYS,
+  RESEARCH_DIRECTIONS,
+  RESEARCH_LIFE_STAGE_CONTEXTS,
+  RESEARCH_NUTRIENT_SUBJECTS,
+  RESEARCH_OUTCOME_TYPES,
+  RESEARCH_PROCESSING_METHODS,
+  researchClusterIdentity,
+  researchClusterLabel,
+  validateResearchClusterEdit,
+  type ResearchClusterEdit,
+} from '@/lib/researchEvidenceReview';
+import { INGREDIENT_CATEGORIES } from '@/lib/ingredientCategories';
 import { RESEARCH_BRAIN_EMBEDDING_MODEL } from '@/lib/researchBrainPipeline';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
+
+const ClusterEditSchema = z.object({
+  cluster_id: z.string().uuid(),
+  expected_updated_at: z.string().min(1),
+  subject_type: z.enum([
+    'ingredient',
+    'nutrient',
+    'ingredient_class',
+    'processing_method',
+    'biome_marker',
+  ]),
+  subject_value: z.string().min(1),
+  outcome_type: z.enum(RESEARCH_OUTCOME_TYPES),
+  outcome_value: z.string().min(1),
+  direction: z.enum(RESEARCH_DIRECTIONS),
+  cautious_summary: z.string().min(1),
+  applicability: z.array(
+    z.object({
+      context_type: z.enum(RESEARCH_CONTEXT_TYPES),
+      context_key: z.string().min(1),
+      context_value: z.string().nullable(),
+      match_operator: z.enum(['exact', 'enum']).default('exact'),
+    })
+  ).max(8),
+});
 
 async function listProcessingState() {
   const [
@@ -22,7 +62,7 @@ async function listProcessingState() {
         'id, title, source_url, pmid, topic, evidence_grade, grading_inputs_complete, access_type, review_status, retracted, superseded_by, retrieved_at'
       )
       .order('retrieved_at', { ascending: false })
-      .limit(100),
+      .limit(200),
     supabaseAdmin.from('research_claims').select(
       'id, document_id, status, supporting_quote, subject_type, subject_value, direction, effect_summary, evidence_grade, grading_inputs_complete'
     ),
@@ -54,6 +94,9 @@ async function listProcessingState() {
   if (applicabilityError) throw applicabilityError;
 
   const claimById = new Map((claims ?? []).map((claim) => [claim.id, claim]));
+  const documentById = new Map(
+    (documents ?? []).map((document) => [document.id, document])
+  );
   const claimsByDocument = new Map<string, Array<Record<string, unknown>>>();
   for (const claim of claims ?? []) {
     const rows = claimsByDocument.get(claim.document_id) ?? [];
@@ -63,7 +106,14 @@ async function listProcessingState() {
   const membersByCluster = new Map<string, Array<Record<string, unknown>>>();
   for (const member of members ?? []) {
     const rows = membersByCluster.get(member.cluster_id) ?? [];
-    rows.push({ ...member, claim: claimById.get(member.claim_id) ?? null });
+    const memberClaim = claimById.get(member.claim_id) ?? null;
+    rows.push({
+      ...member,
+      claim: memberClaim,
+      document: memberClaim
+        ? documentById.get(memberClaim.document_id) ?? null
+        : null,
+    });
     membersByCluster.set(member.cluster_id, rows);
   }
   const applicabilityByCluster = new Map<string, Array<Record<string, unknown>>>();
@@ -83,6 +133,25 @@ async function listProcessingState() {
       members: membersByCluster.get(cluster.id) ?? [],
       applicability: applicabilityByCluster.get(cluster.id) ?? [],
     })),
+    review_options: {
+      subject_types: [
+        'ingredient',
+        'nutrient',
+        'ingredient_class',
+        'processing_method',
+      ],
+      outcome_types: RESEARCH_OUTCOME_TYPES,
+      directions: RESEARCH_DIRECTIONS,
+      context_types: RESEARCH_CONTEXT_TYPES,
+      nutrient_subjects: RESEARCH_NUTRIENT_SUBJECTS,
+      processing_methods: Object.keys(RESEARCH_PROCESSING_METHODS),
+      ingredient_classes: INGREDIENT_CATEGORIES.map(({ value, label }) => ({
+        value,
+        label,
+      })),
+      document_finding_keys: RESEARCH_DOCUMENT_FINDING_KEYS,
+      life_stages: RESEARCH_LIFE_STAGE_CONTEXTS,
+    },
   };
 }
 
@@ -193,6 +262,60 @@ export async function POST(request: NextRequest) {
         p_action: action === 'approve_cluster' ? 'approve' : 'reject',
         p_reviewer_id: admin.id,
         p_review_note: reviewNote,
+      }
+    );
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ cluster: data });
+  }
+
+  if (action === 'edit_cluster') {
+    const parsed = ClusterEditSchema.safeParse(body);
+    if (!parsed.success) {
+      const details = parsed.error.issues.map((issue) => issue.message);
+      return NextResponse.json(
+        {
+          error: `Cluster edit is invalid: ${details.join(' ')}`,
+          details,
+        },
+        { status: 400 }
+      );
+    }
+    const edit: ResearchClusterEdit = {
+      subject_type: parsed.data.subject_type,
+      subject_value: parsed.data.subject_value.trim(),
+      outcome_type: parsed.data.outcome_type,
+      outcome_value: parsed.data.outcome_value.trim(),
+      direction: parsed.data.direction,
+      cautious_summary: parsed.data.cautious_summary.trim(),
+      applicability: parsed.data.applicability.map((context) => ({
+        context_type: context.context_type,
+        context_key: context.context_key.trim(),
+        context_value: context.context_value?.trim() || null,
+        match_operator: context.match_operator,
+      })),
+    };
+    const validationErrors = validateResearchClusterEdit(edit);
+    if (validationErrors.length > 0) {
+      return NextResponse.json(
+        { error: validationErrors.join(' ') },
+        { status: 400 }
+      );
+    }
+    const { data, error } = await supabaseAdmin.rpc(
+      'edit_research_evidence_cluster',
+      {
+        p_cluster_id: parsed.data.cluster_id,
+        p_expected_updated_at: parsed.data.expected_updated_at,
+        p_editor_id: admin.id,
+        p_cluster_identity: researchClusterIdentity(edit),
+        p_label: researchClusterLabel(edit),
+        p_subject_type: edit.subject_type,
+        p_subject_value: edit.subject_value,
+        p_outcome_type: edit.outcome_type,
+        p_outcome_value: edit.outcome_value,
+        p_direction: edit.direction,
+        p_cautious_summary: edit.cautious_summary,
+        p_contexts: edit.applicability,
       }
     );
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
