@@ -79,7 +79,7 @@ export default function DogDocumentsCard({ dogId }: { dogId: string }) {
         const response = await fetch(`/api/dogs/${dogId}/documents`, {
           headers: authHeaders(),
         });
-        const body = await response.json();
+        const body = await responseBody(response);
         if (!response.ok) throw new Error(body.error ?? 'Could not load documents');
         if (active) setDocuments(body.documents ?? []);
       } catch (loadError) {

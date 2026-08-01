@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
-import { extractPdfText } from '@/lib/pdfText';
 import {
   isBiome4PetsDocument,
   parseBiome4Pets,
@@ -224,6 +223,10 @@ export async function POST(
     | 'failed' = 'pending';
   let parseResult: Biome4PetsParseResult | null = null;
   try {
+    // pdf-parse pulls in its worker/runtime at module evaluation time. Keep that
+    // dependency out of GET and upload-preparation requests so read-only document
+    // listing remains available in the serverless function.
+    const { extractPdfText } = await import('@/lib/pdfText');
     const extracted = await extractPdfText(new Uint8Array(buffer));
     extractedText = extracted.text;
     if (!extractedText.trim()) {

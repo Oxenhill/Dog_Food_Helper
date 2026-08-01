@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractPdfText } from '@/lib/pdfText';
 import {
   ingestDiscoveryCandidate,
   ingestUploadedResearchPdf,
@@ -198,6 +197,9 @@ export async function POST(request: NextRequest) {
       if (Buffer.from(bytes.subarray(0, 5)).toString('ascii') !== '%PDF-') {
         throw new Error('Uploaded file is not a valid PDF');
       }
+      // Avoid loading the PDF worker/runtime for job listing and structured-source
+      // imports. Only uploaded-PDF finalisation needs this serverless dependency.
+      const { extractPdfText } = await import('@/lib/pdfText');
       const extracted = await extractPdfText(bytes);
       if (!extracted.text.trim()) {
         throw new Error('No text could be extracted from this PDF');
@@ -328,4 +330,3 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
 }
-
