@@ -3,6 +3,7 @@ import {
   finishResearchMissionJob,
   startResearchMissionJob,
 } from '../src/lib/researchMissionLifecycle';
+import { isPersistedResearchProviderHalt } from '../src/lib/researchProviderTelemetry';
 import { supabaseAdmin } from '../src/lib/supabase';
 
 const DEFAULT_TOPICS = [
@@ -95,17 +96,10 @@ async function main() {
         job.id,
         job.control_plane
       );
-      const configuredModels = job.control_plane.model_routes
-        .filter((route) => route.execution_kind.endsWith('_model'))
-        .map((route) => route.model_identifier)
-        .join(' + ');
       await finishResearchMissionJob({
         jobId: job.id,
         status: 'succeeded',
         resultSummary: { ...result },
-        gatewayInputTokens: result.usage.inputTokens + result.embedding.inputTokens,
-        gatewayOutputTokens: result.usage.outputTokens,
-        gatewayModel: configuredModels || null,
         eventPayload: {
           source: 'bounded_initial_population',
           document_id: document.id,
@@ -121,19 +115,21 @@ async function main() {
           : typeof error === 'object' && error && 'message' in error
             ? String(error.message)
             : JSON.stringify(error);
-      try {
-        await finishResearchMissionJob({
-          jobId: job.id,
-          status: 'failed',
-          reasonCode: 'claim_drafting_failed',
-          errorMessage: message,
-          eventPayload: {
-            source: 'bounded_initial_population',
-            document_id: document.id,
-          },
-        });
-      } catch {
-        // Keep reporting the drafting failure if lifecycle finalisation also fails.
+      if (!isPersistedResearchProviderHalt(error)) {
+        try {
+          await finishResearchMissionJob({
+            jobId: job.id,
+            status: 'failed',
+            reasonCode: 'claim_drafting_failed',
+            errorMessage: message,
+            eventPayload: {
+              source: 'bounded_initial_population',
+              document_id: document.id,
+            },
+          });
+        } catch {
+          // Keep reporting the drafting failure if lifecycle finalisation also fails.
+        }
       }
       process.stdout.write(`FAIL ${document.discovery_topic}: ${message}\n`);
     }

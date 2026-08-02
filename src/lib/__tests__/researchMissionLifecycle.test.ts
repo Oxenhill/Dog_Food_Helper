@@ -119,7 +119,7 @@ test('admin mission read model groups and orders persisted stages and events', (
 
   const result = assembleResearchMissionReadModels(missions, stages, events);
   assert.equal(result.length, 1);
-  assert.deepEqual(result[0].stages.map((stage) => stage.id), ['stage-1', 'stage-2']);
+  assert.deepEqual(result[0].stages.map((attempt) => attempt.stage.id), ['stage-1', 'stage-2']);
   assert.deepEqual(result[0].events.map((event) => event.id), [11, 12]);
 });
 

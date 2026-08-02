@@ -13,17 +13,21 @@ import {
   requireResearchModelRoute,
   type ResearchStageControlPlaneSnapshot,
 } from './researchModelRouting';
+import {
+  createResearchProviderEstimate,
+  executeTrackedResearchProviderCall,
+} from './researchProviderTelemetry';
 import { supabaseAdmin } from './supabase';
 import type { ResearchTopic } from './types';
 
 export const RESEARCH_BRAIN_EMBEDDING_MODEL = 'voyage/voyage-4' as const;
 export const RESEARCH_BRAIN_EMBEDDING_DIMENSIONS = 1024;
 export const RESEARCH_BRAIN_CHUNK_CHARACTERS = 1800;
-const VOYAGE_INPUT_USD_PER_MILLION_TOKENS = 0.06;
 
 export interface ResearchEmbeddingRun {
   vectors: number[][];
-  inputTokens: number;
+  providerReportedInputTokens: number | null;
+  estimatedInputTokens: number;
   estimatedCostUsd: number;
 }
 
@@ -52,17 +56,53 @@ function assertGatewayConfigured(): void {
  */
 export async function embedResearchTexts(
   texts: string[],
-  modelIdentifier: string = RESEARCH_BRAIN_EMBEDDING_MODEL
+  modelIdentifier: string,
+  telemetry: {
+    jobId: string;
+    controlPlane: ResearchStageControlPlaneSnapshot;
+    callKeyPrefix: string;
+  }
 ): Promise<ResearchEmbeddingRun> {
   assertGatewayConfigured();
   const vectors: number[][] = [];
-  let inputTokens = 0;
+  let providerReportedInputTokens = 0;
+  let providerUsageComplete = true;
+  let estimatedInputTokens = 0;
+  let estimatedCostUsd = 0;
 
   for (let offset = 0; offset < texts.length; offset += 64) {
     const values = texts.slice(offset, offset + 64);
-    const result = await embedMany({
-      model: modelIdentifier,
-      values,
+    const estimate = await createResearchProviderEstimate({
+      provider: 'vercel_ai_gateway',
+      modelIdentifier,
+      inputText: values,
+    });
+    const batchNumber = Math.floor(offset / 64) + 1;
+    const result = await executeTrackedResearchProviderCall({
+      jobId: telemetry.jobId,
+      controlPlane: telemetry.controlPlane,
+      routeKey: 'semantic_embedding',
+      executionKind: 'embedding_model',
+      callKey: `${telemetry.callKeyPrefix}.batch_${batchNumber}`,
+      estimate,
+      execute: () => embedMany({ model: modelIdentifier, values, maxRetries: 0 }),
+      readUsage: (response) => {
+        const tokens = response?.usage?.tokens;
+        return Number.isSafeInteger(tokens) && tokens >= 0
+          ? { inputTokens: tokens, outputTokens: 0, totalTokens: tokens }
+          : null;
+      },
+      readResponse: (response) => {
+        const headers = response.responses
+          ?.map((entry) => entry?.headers)
+          .find((entry): entry is Record<string, string> => Boolean(entry));
+        return {
+          requestId:
+            headers?.['x-vercel-ai-gateway-generation-id']
+            ?? headers?.['x-vercel-ai-generation-id']
+            ?? null,
+        };
+      },
     });
     if (
       result.embeddings.length !== values.length ||
@@ -75,18 +115,23 @@ export async function embedResearchTexts(
       );
     }
     vectors.push(...result.embeddings);
-    const usage = result.usage as { tokens?: number; inputTokens?: number } | undefined;
-    inputTokens += usage?.tokens ?? usage?.inputTokens ?? Math.ceil(
-      values.reduce((sum, value) => sum + value.length, 0) / 4
-    );
+    const reportedTokens = result?.usage?.tokens;
+    if (Number.isSafeInteger(reportedTokens) && reportedTokens >= 0) {
+      providerReportedInputTokens += reportedTokens;
+    } else {
+      providerUsageComplete = false;
+    }
+    estimatedInputTokens += estimate.inputTokens;
+    estimatedCostUsd += estimate.costUsd;
   }
 
   return {
     vectors,
-    inputTokens,
-    estimatedCostUsd: Number(
-      ((inputTokens / 1_000_000) * VOYAGE_INPUT_USD_PER_MILLION_TOKENS).toFixed(6)
-    ),
+    providerReportedInputTokens: providerUsageComplete
+      ? providerReportedInputTokens
+      : null,
+    estimatedInputTokens,
+    estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
   };
 }
 
@@ -160,9 +205,15 @@ async function storeDocumentWithVoyage(input: {
   documentRow: Record<string, unknown>;
   text: string;
   embeddingModel: string;
+  controlPlane: ResearchStageControlPlaneSnapshot;
+  callKeyPrefix: string;
 }): Promise<ResearchIngestionResult> {
   const chunks = chunkText(input.text, RESEARCH_BRAIN_CHUNK_CHARACTERS);
-  const embedding = await embedResearchTexts(chunks, input.embeddingModel);
+  const embedding = await embedResearchTexts(chunks, input.embeddingModel, {
+    jobId: input.jobId,
+    controlPlane: input.controlPlane,
+    callKeyPrefix: input.callKeyPrefix,
+  });
 
   const { data: document, error: documentError } = await supabaseAdmin
     .from('research_documents')
@@ -214,7 +265,8 @@ async function storeDocumentWithVoyage(input: {
     chunkCount: chunks.length,
     duplicate: false,
     embedding: {
-      inputTokens: embedding.inputTokens,
+      providerReportedInputTokens: embedding.providerReportedInputTokens,
+      estimatedInputTokens: embedding.estimatedInputTokens,
       estimatedCostUsd: embedding.estimatedCostUsd,
     },
   };
@@ -227,6 +279,9 @@ export async function ingestDiscoveryCandidate(input: {
   controlPlane?: ResearchStageControlPlaneSnapshot;
   literatureRegistry?: LiteratureRegistrySnapshot;
 }): Promise<ResearchIngestionResult> {
+  if (!input.controlPlane) {
+    throw new Error('Pinned research control-plane configuration is required');
+  }
   const admissibility = evaluateResearchEvidenceAdmissibility({
     evidenceScope: input.candidate.evidence_scope,
     species: input.candidate.species,
@@ -236,13 +291,11 @@ export async function ingestDiscoveryCandidate(input: {
   if (!admissibility.admissible) {
     throw new Error(admissibility.code);
   }
-  const embeddingModel = input.controlPlane
-    ? requireResearchModelRoute(
-        input.controlPlane,
-        'semantic_embedding',
-        'embedding_model'
-      ).model_identifier
-    : RESEARCH_BRAIN_EMBEDDING_MODEL;
+  const embeddingModel = requireResearchModelRoute(
+    input.controlPlane,
+    'semantic_embedding',
+    'embedding_model'
+  ).model_identifier;
   const duplicate = await existingDocument(
     input.candidate.source_id,
     input.candidate.doi
@@ -256,7 +309,11 @@ export async function ingestDiscoveryCandidate(input: {
       documentId: duplicate.id,
       chunkCount: 0,
       duplicate: true,
-      embedding: { inputTokens: 0, estimatedCostUsd: 0 },
+      embedding: {
+        providerReportedInputTokens: null,
+        estimatedInputTokens: 0,
+        estimatedCostUsd: 0,
+      },
     };
   }
 
@@ -270,6 +327,8 @@ export async function ingestDiscoveryCandidate(input: {
     topic: input.candidate.topic,
     text: source.plain_text,
     embeddingModel,
+    controlPlane: input.controlPlane,
+    callKeyPrefix: 'document_embedding',
     documentRow: {
       topic_group: input.candidate.topic_group,
       discovery_topic: input.candidate.discovery_topic,
@@ -330,18 +389,21 @@ export async function ingestUploadedResearchPdf(input: {
   text: string;
   controlPlane?: ResearchStageControlPlaneSnapshot;
 }): Promise<ResearchIngestionResult> {
-  const embeddingModel = input.controlPlane
-    ? requireResearchModelRoute(
-        input.controlPlane,
-        'semantic_embedding',
-        'embedding_model'
-      ).model_identifier
-    : RESEARCH_BRAIN_EMBEDDING_MODEL;
+  if (!input.controlPlane) {
+    throw new Error('Pinned research control-plane configuration is required');
+  }
+  const embeddingModel = requireResearchModelRoute(
+    input.controlPlane,
+    'semantic_embedding',
+    'embedding_model'
+  ).model_identifier;
   return storeDocumentWithVoyage({
     jobId: input.jobId,
     topic: input.topic,
     text: input.text,
     embeddingModel,
+    controlPlane: input.controlPlane,
+    callKeyPrefix: 'document_embedding',
     documentRow: {
       title: input.title,
       source_url: input.sourceUrl,

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   ingestDiscoveryCandidate,
   ingestUploadedResearchPdf,
-  RESEARCH_BRAIN_EMBEDDING_MODEL,
 } from '@/lib/researchBrainPipeline';
 import { resolveResearchCandidate } from '@/lib/researchDiscovery';
 import { loadLiteratureRegistrySnapshot } from '@/lib/researchLiteratureSources';
@@ -13,6 +12,7 @@ import {
   startResearchMissionJob,
   type ResearchMissionJob,
 } from '@/lib/researchMissionLifecycle';
+import { isPersistedResearchProviderHalt } from '@/lib/researchProviderTelemetry';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 import type { ResearchCandidate } from '@/lib/researchEvidence';
@@ -36,6 +36,7 @@ async function failJob(
   reasonCode = 'document_ingestion_failed'
 ): Promise<string> {
   const message = error instanceof Error ? error.message : 'Research processing failed';
+  if (isPersistedResearchProviderHalt(error)) return message;
   try {
     await finishResearchMissionJob({
       jobId,
@@ -55,13 +56,13 @@ async function completeJob(
     documentId: string;
     chunkCount: number;
     duplicate: boolean;
-    embedding: { inputTokens: number; estimatedCostUsd: number };
+    embedding: {
+      providerReportedInputTokens: number | null;
+      estimatedInputTokens: number;
+      estimatedCostUsd: number;
+    };
   }
 ) {
-  const configuredModels = job.control_plane.model_routes
-    .filter((route) => route.execution_kind.endsWith('_model'))
-    .map((route) => route.model_identifier)
-    .join(' + ');
   return finishResearchMissionJob({
     jobId: job.id,
     status: 'succeeded',
@@ -71,10 +72,6 @@ async function completeJob(
         duplicate: result.duplicate,
         recommendation_runtime_model_calls: 0,
     },
-    gatewayModel: result.duplicate ? null : configuredModels || RESEARCH_BRAIN_EMBEDDING_MODEL,
-    gatewayInputTokens: result.embedding.inputTokens,
-    gatewayOutputTokens: 0,
-    gatewayCostUsd: result.embedding.estimatedCostUsd,
     eventPayload: {
       document_id: result.documentId,
       chunk_count: result.chunkCount,

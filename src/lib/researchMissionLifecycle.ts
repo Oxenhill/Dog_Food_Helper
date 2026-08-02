@@ -134,10 +134,6 @@ export async function finishResearchMissionJob(input: {
   resultSummary?: Record<string, unknown> | null;
   reasonCode?: string | null;
   errorMessage?: string | null;
-  gatewayModel?: string | null;
-  gatewayInputTokens?: number | null;
-  gatewayOutputTokens?: number | null;
-  gatewayCostUsd?: number | null;
   eventPayload?: Record<string, unknown>;
 }): Promise<ResearchMissionJob> {
   const { data, error } = await supabaseAdmin.rpc(
@@ -148,10 +144,10 @@ export async function finishResearchMissionJob(input: {
       p_result_summary: input.resultSummary ?? null,
       p_reason_code: input.reasonCode ?? null,
       p_error_message: input.errorMessage ?? null,
-      p_gateway_model: input.gatewayModel ?? null,
-      p_gateway_input_tokens: input.gatewayInputTokens ?? null,
-      p_gateway_output_tokens: input.gatewayOutputTokens ?? null,
-      p_gateway_cost_usd: input.gatewayCostUsd ?? null,
+      p_gateway_model: null,
+      p_gateway_input_tokens: null,
+      p_gateway_output_tokens: null,
+      p_gateway_cost_usd: null,
       p_event_payload: input.eventPayload ?? {},
     }
   );

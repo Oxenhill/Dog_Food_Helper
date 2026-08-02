@@ -50,6 +50,21 @@ export async function GET(request: NextRequest) {
       .select('*')
       .order('operation_key')
       .order('route_priority'),
+    supabaseAdmin
+      .from('research_budget_policy_versions')
+      .select('*')
+      .order('policy_key')
+      .order('version', { ascending: false }),
+    supabaseAdmin
+      .from('research_budget_stage_cap_versions')
+      .select('*')
+      .order('stage_key'),
+    supabaseAdmin
+      .from('research_usage_estimate_rate_versions')
+      .select('*')
+      .order('provider')
+      .order('model_identifier')
+      .order('version', { ascending: false }),
   ]);
   const failed = results.find((result) => result.error);
   if (failed?.error) {
@@ -68,6 +83,9 @@ export async function GET(request: NextRequest) {
       sourceVersions: results[7].data ?? [],
       sourcePolicies: results[8].data ?? [],
       sourceRoutes: results[9].data ?? [],
+      budgetPolicies: results[10].data ?? [],
+      stageCaps: results[11].data ?? [],
+      estimateRates: results[12].data ?? [],
     }),
     { headers: { 'Cache-Control': 'private, no-store' } }
   );

@@ -1,5 +1,44 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer P2 persisted provider usage and deterministic caps (2026-08-01, local approval gate)
+
+P2 is implemented and verified locally only. No Supabase migration has been
+applied and no Vercel deployment has been created. The candidate migration is
+`20260801223514_research_provider_usage_and_budget_caps.sql`.
+
+The slice adds immutable estimate-rate, mission-budget, and stage-cap versions;
+one append-preserving row per provider call; exact links to mission, stage
+attempt, job, model-stage configuration, route, and estimate rate; atomic
+pre-call cap reservation; deterministic halt reasons; and retry-safe history.
+Provider-reported tokens/cost remain separate from character-count/token-cap
+estimates. Missing provider usage remains missing and is never replaced by an
+estimate. Measured client timing and provider timing, when reported, aggregate
+from call rows by stage and mission.
+
+The existing admin polling endpoint now returns a complete mission detail read
+model and resumes events strictly after a persisted sequence cursor, with
+bounded pagination. The admin research page exposes attempts, ordered events,
+exact routes/configurations, actual reported usage, clearly labelled estimates,
+timing, caps, and deterministic halt reasons. No SSE path was added. Private dog
+reports and recommendation runtime remain outside the mission/call/event model.
+
+The exact P0 -> P1 -> candidate P2 migration chain passed in a disposable
+Supabase Postgres 17 runtime. Behavioral assertions covered valid calls,
+reported usage/timing, replay-safe completion, duplicate call-key rejection,
+pre-call cap halt, preserved prior history, a distinct retry attempt, exact
+route/config/rate links, continuous event sequencing, immutable completed rows,
+RLS/privileges, and covering indexes. Supabase `db lint` returned no schema
+errors or warnings. The disposable runtime and local preview were removed.
+
+Final local verification: 296/296 tests passed, `tsc --noEmit` passed,
+production build exited 0, and `git diff --check` passed. Visual navigation
+reached the normal sign-in gate; authentication was not bypassed. Production
+remains on migration `20260801221635 research_model_routing_and_literature_registry`
+and deployment `dpl_8aKEfQ5L8So59mo3mJD82vcvDAqx`; mission, stage, and event
+counts remain zero and all four P2 tables remain absent. Current production
+advisor baseline is unchanged at 30 security findings (23 info, 5 warning,
+2 error) and 84 performance findings (71 info, 13 warning).
+
 ## Research Layer Gate 4 active-claim runtime integration (2026-07-29, latest)
 
 Gate 4 replaces request-time embedding/chunk RAG and research score-cache/queue

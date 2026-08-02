@@ -23,6 +23,9 @@ export function assembleResearchConfigurationReadModel(input: {
   sourceVersions: Row[];
   sourcePolicies: Row[];
   sourceRoutes: Row[];
+  budgetPolicies?: Row[];
+  stageCaps?: Row[];
+  estimateRates?: Row[];
 }) {
   const routesByStage = rowsBy(input.modelRoutes, 'stage_configuration_version_id');
   const stagesBySet = rowsBy(input.stageConfigurations, 'configuration_set_id');
@@ -34,6 +37,7 @@ export function assembleResearchConfigurationReadModel(input: {
   const policiesBySourceVersion = rowsBy(input.sourcePolicies, 'source_version_id');
   const sourceVersionsByRegistry = rowsBy(input.sourceVersions, 'registry_version_id');
   const sourceRoutesByRegistry = rowsBy(input.sourceRoutes, 'registry_version_id');
+  const stageCapsByPolicy = rowsBy(input.stageCaps ?? [], 'budget_policy_version_id');
 
   return {
     model_configuration_sets: input.modelSets.map((modelSet) => ({
@@ -45,6 +49,11 @@ export function assembleResearchConfigurationReadModel(input: {
     })),
     discovery_question_policy_versions: input.discoveryQuestionPolicies,
     evidence_admissibility_policy_versions: input.evidenceAdmissibilityPolicies,
+    budget_policy_versions: (input.budgetPolicies ?? []).map((policy) => ({
+      ...policy,
+      stage_caps: stageCapsByPolicy.get(String(policy.id)) ?? [],
+    })),
+    usage_estimate_rate_versions: input.estimateRates ?? [],
     literature_registry_versions: input.registries.map((registry) => ({
       ...registry,
       sources: (sourceVersionsByRegistry.get(String(registry.id)) ?? []).map(

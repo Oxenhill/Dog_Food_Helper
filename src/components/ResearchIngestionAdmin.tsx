@@ -370,8 +370,10 @@ export default function ResearchIngestionAdmin() {
                 <span>{job.job_type.replace(/_/g, ' ')} · {job.status.replace(/_/g, ' ')}</span>
                 <span className="metric">
                   {job.gateway_model
-                    ? `${job.gateway_model} · $${Number(job.gateway_cost_usd ?? 0).toFixed(4)}`
-                    : 'No Gateway cost'}
+                    ? `${job.gateway_model} · ${job.gateway_cost_usd === null
+                      ? 'actual cost not reported'
+                      : `actual provider-reported cost $${Number(job.gateway_cost_usd).toFixed(6)}`}`
+                    : 'No provider call recorded'}
                 </span>
                 {job.error_message && <p className="error-text w-full">{job.error_message}</p>}
               </div>
@@ -382,4 +384,3 @@ export default function ResearchIngestionAdmin() {
     </section>
   );
 }
-

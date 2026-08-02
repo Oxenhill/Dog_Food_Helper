@@ -22,6 +22,7 @@ import {
   startResearchMissionJob,
   type ResearchMissionJob,
 } from '@/lib/researchMissionLifecycle';
+import { isPersistedResearchProviderHalt } from '@/lib/researchProviderTelemetry';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 
@@ -210,19 +211,10 @@ export async function POST(request: NextRequest) {
         job.id,
         job.control_plane
       );
-      const configuredModels = job.control_plane.model_routes
-        .filter((route) => route.execution_kind.endsWith('_model'))
-        .map((route) => route.model_identifier)
-        .join(' + ');
       const completed = await finishResearchMissionJob({
         jobId: job.id,
         status: 'succeeded',
         resultSummary: { ...result },
-        gatewayInputTokens:
-          result.usage.inputTokens + result.embedding.inputTokens,
-        gatewayOutputTokens: result.usage.outputTokens,
-        gatewayCostUsd: null,
-        gatewayModel: configuredModels || null,
         eventPayload: {
           document_id: documentId,
           drafted_claim_count: result.drafted,
@@ -237,16 +229,18 @@ export async function POST(request: NextRequest) {
           : typeof error === 'object' && error && 'message' in error
             ? String(error.message)
             : 'Claim drafting failed';
-      try {
-        await finishResearchMissionJob({
-          jobId: job.id,
-          status: 'failed',
-          reasonCode: 'claim_drafting_failed',
-          errorMessage: message,
-          eventPayload: { document_id: documentId },
-        });
-      } catch {
-        // Preserve the drafting failure as the response if audit finalisation fails.
+      if (!isPersistedResearchProviderHalt(error)) {
+        try {
+          await finishResearchMissionJob({
+            jobId: job.id,
+            status: 'failed',
+            reasonCode: 'claim_drafting_failed',
+            errorMessage: message,
+            eventPayload: { document_id: documentId },
+          });
+        } catch {
+          // Preserve the drafting failure as the response if audit finalisation fails.
+        }
       }
       return NextResponse.json({ error: message, job_id: job.id }, { status: 500 });
     }

@@ -18,6 +18,10 @@ import {
   requireResearchModelRoute,
   type ResearchStageControlPlaneSnapshot,
 } from './researchModelRouting';
+import {
+  createResearchProviderEstimate,
+  executeTrackedResearchProviderCall,
+} from './researchProviderTelemetry';
 
 export const RESEARCH_BRAIN_DRAFT_MODEL = 'anthropic/claude-sonnet-5' as const;
 export const MAX_DRAFT_CHUNKS_PER_DOCUMENT = 8;
@@ -343,9 +347,12 @@ async function semanticallySelectChunks(
   document: Pick<ResearchDocument, 'title' | 'topic' | 'discovery_topic'>,
   chunks: Array<{ id: string; content: string; chunk_index: number }>,
   embeddingModel: string,
+  jobId: string,
+  controlPlane: ResearchStageControlPlaneSnapshot,
 ): Promise<{
   selected: Array<{ id: string; content: string; chunk_index: number }>;
-  inputTokens: number;
+  providerReportedInputTokens: number | null;
+  estimatedInputTokens: number;
   estimatedCostUsd: number;
 }> {
   const ids = chunks.map((chunk) => chunk.id);
@@ -370,7 +377,12 @@ async function semanticallySelectChunks(
   ].join(' | ');
   const embedded = await embedResearchTexts(
     [...missing.map((chunk) => chunk.content), query],
-    embeddingModel
+    embeddingModel,
+    {
+      jobId,
+      controlPlane,
+      callKeyPrefix: 'relevance_embedding',
+    }
   );
   for (let index = 0; index < missing.length; index++) {
     vectors.set(missing[index].id, embedded.vectors[index]);
@@ -408,7 +420,8 @@ async function semanticallySelectChunks(
       )
       .slice(0, MAX_DRAFT_CHUNKS_PER_DOCUMENT)
       .map((row) => row.chunk),
-    inputTokens: embedded.inputTokens,
+    providerReportedInputTokens: embedded.providerReportedInputTokens,
+    estimatedInputTokens: embedded.estimatedInputTokens,
     estimatedCostUsd: embedded.estimatedCostUsd,
   };
 }
@@ -418,8 +431,20 @@ export interface DraftDocumentResult {
   rejected: Array<{ chunk_id: string; reasons: string[] }>;
   queuedClaimIds: string[];
   clusterIds: string[];
-  usage: { inputTokens: number; outputTokens: number };
-  embedding: { inputTokens: number; estimatedCostUsd: number };
+  usage: {
+    providerReportedInputTokens: number | null;
+    providerReportedOutputTokens: number | null;
+  };
+  embedding: {
+    providerReportedInputTokens: number | null;
+    estimatedInputTokens: number;
+    estimatedCostUsd: number;
+  };
+  estimates: {
+    generationInputTokens: number;
+    generationOutputTokenCap: number;
+    generationCostUsd: number;
+  };
 }
 
 export async function draftDocumentIntoKnowledge(
@@ -427,20 +452,21 @@ export async function draftDocumentIntoKnowledge(
   jobId: string,
   controlPlane?: ResearchStageControlPlaneSnapshot,
 ): Promise<DraftDocumentResult> {
-  const draftModel = controlPlane
-    ? requireResearchModelRoute(
-        controlPlane,
-        'draft_generation',
-        'language_model'
-      ).model_identifier
-    : RESEARCH_BRAIN_DRAFT_MODEL;
-  const embeddingModel = controlPlane
-    ? requireResearchModelRoute(
-        controlPlane,
-        'semantic_embedding',
-        'embedding_model'
-      ).model_identifier
-    : RESEARCH_BRAIN_EMBEDDING_MODEL;
+  if (!controlPlane) {
+    throw new Error('Pinned research control-plane configuration is required');
+  }
+  const draftRoute = requireResearchModelRoute(
+    controlPlane,
+    'draft_generation',
+    'language_model'
+  );
+  const embeddingRoute = requireResearchModelRoute(
+    controlPlane,
+    'semantic_embedding',
+    'embedding_model'
+  );
+  const draftModel = draftRoute.model_identifier;
+  const embeddingModel = embeddingRoute.model_identifier;
   if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
     throw new Error('Vercel AI Gateway is not configured');
   }
@@ -468,21 +494,61 @@ export async function draftDocumentIntoKnowledge(
   const semanticSelection = await semanticallySelectChunks(
     document as ResearchDocument,
     allChunks,
-    embeddingModel
+    embeddingModel,
+    jobId,
+    controlPlane
   );
   const chunks = semanticSelection.selected;
-  const generated = await generateObject({
-    model: gateway(draftModel),
-    schema: DraftResponseSchema,
-    system: RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT,
-    prompt: promptForDocument(document as ResearchDocument, chunks),
-    maxOutputTokens: 3200,
-    maxRetries: 0,
-    temperature: 0,
-    providerOptions: {
-      anthropic: { effort: 'low', structuredOutputMode: 'outputFormat' },
-      gateway: { tags: ['research-brain-in-app'] },
+  const draftPrompt = promptForDocument(document as ResearchDocument, chunks);
+  const generationEstimate = await createResearchProviderEstimate({
+    provider: draftRoute.provider,
+    modelIdentifier: draftModel,
+    inputText: [RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT, draftPrompt],
+    outputTokenCap: 3200,
+    fixedInputTokenAllowance: 1000,
+  });
+  const generated = await executeTrackedResearchProviderCall({
+    jobId,
+    controlPlane,
+    routeKey: 'draft_generation',
+    executionKind: 'language_model',
+    callKey: 'draft_generation',
+    estimate: generationEstimate,
+    execute: () => generateObject({
+      model: gateway(draftModel),
+      schema: DraftResponseSchema,
+      system: RESEARCH_BRAIN_DRAFT_SYSTEM_PROMPT,
+      prompt: draftPrompt,
+      maxOutputTokens: 3200,
+      maxRetries: 0,
+      temperature: 0,
+      providerOptions: {
+        anthropic: { effort: 'low', structuredOutputMode: 'outputFormat' },
+        gateway: { tags: ['research-brain-in-app'] },
+      },
+    }),
+    readUsage: (response) => {
+      const usage = response.usage;
+      const hasReportedUsage = [
+        usage.inputTokens,
+        usage.outputTokens,
+        usage.totalTokens,
+      ].some((value) => typeof value === 'number' && Number.isFinite(value));
+      return hasReportedUsage
+        ? {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            reasoningTokens: usage.outputTokenDetails.reasoningTokens,
+            cacheReadTokens: usage.inputTokenDetails.cacheReadTokens,
+            cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens,
+          }
+        : null;
     },
+    readResponse: (response) => ({
+      modelIdentifier: response.response.modelId,
+      requestId: response.response.id,
+    }),
   });
 
   const chunkContent = new Map(chunks.map((chunk) => [chunk.id, chunk.content]));
@@ -507,8 +573,17 @@ export async function draftDocumentIntoKnowledge(
   );
   const embedding =
     propositionTexts.length > 0
-      ? await embedResearchTexts(propositionTexts, embeddingModel)
-      : { vectors: [], inputTokens: 0, estimatedCostUsd: 0 };
+      ? await embedResearchTexts(propositionTexts, embeddingModel, {
+          jobId,
+          controlPlane,
+          callKeyPrefix: 'claim_embedding',
+        })
+      : {
+          vectors: [],
+          providerReportedInputTokens: null,
+          estimatedInputTokens: 0,
+          estimatedCostUsd: 0,
+        };
 
   const queuedClaimIds: string[] = [];
   const clusterIds = new Set<string>();
@@ -642,14 +717,26 @@ export async function draftDocumentIntoKnowledge(
     queuedClaimIds,
     clusterIds: [...clusterIds],
     usage: {
-      inputTokens: generated.usage.inputTokens ?? 0,
-      outputTokens: generated.usage.outputTokens ?? 0,
+      providerReportedInputTokens: generated.usage.inputTokens ?? null,
+      providerReportedOutputTokens: generated.usage.outputTokens ?? null,
     },
     embedding: {
-      inputTokens: embedding.inputTokens + semanticSelection.inputTokens,
+      providerReportedInputTokens:
+        embedding.providerReportedInputTokens !== null
+          && semanticSelection.providerReportedInputTokens !== null
+          ? embedding.providerReportedInputTokens
+            + semanticSelection.providerReportedInputTokens
+          : null,
+      estimatedInputTokens:
+        embedding.estimatedInputTokens + semanticSelection.estimatedInputTokens,
       estimatedCostUsd: Number(
         (embedding.estimatedCostUsd + semanticSelection.estimatedCostUsd).toFixed(6)
       ),
+    },
+    estimates: {
+      generationInputTokens: generationEstimate.inputTokens,
+      generationOutputTokenCap: generationEstimate.outputTokens,
+      generationCostUsd: generationEstimate.costUsd,
     },
   };
 }

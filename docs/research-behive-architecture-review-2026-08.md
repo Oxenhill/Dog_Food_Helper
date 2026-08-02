@@ -1,6 +1,6 @@
 # Bowl Research Layer: Behive-informed architecture review
 
-**Status:** owner-approved P0 released to production
+**Status:** P0 and P1 released; P2 implemented and verified locally, awaiting production approval
 **Reviewed:** 2026-08-01
 **Behive implementation reviewed:** public commit [`c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd`](https://github.com/qa10devteam/behive/tree/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd)
 **Bowl baseline:** `9ce3be3c46b09709aac4f9561a2b363f2e8c63b3`
@@ -264,3 +264,59 @@ The P0 local migration is `supabase/migrations/20260801204309_research_mission_l
 ### P0 release record
 
 The owner subsequently approved the production release on 2026-08-01. Migration `20260801211409 research_mission_lifecycle` was applied to Supabase project `ysffyuohwvdifvbopfcm`, and application commit `51c20d8` was deployed to Vercel project `dog-food-helper` as deployment `dpl_7eRN3MwQJQk1Lz8tdDKHgb4WyrdZ`. Post-release checks confirmed the new tables and events were empty, protected research and private-report baselines were unchanged, the admin mission endpoint failed closed without authentication, and live recommendations remained deterministic with research excluded from ranking.
+
+### P1 release record
+
+The owner subsequently approved P1 on 2026-08-01. Production migration
+`20260801221635 research_model_routing_and_literature_registry` pinned one
+model-configuration set, seven stage configurations, eight exact routes, one
+discovery-question policy, one evidence-admissibility policy, one literature
+registry, two structured sources, two source versions, two source-policy
+versions, and six source-policy routes. Application commit
+`07ca6eae776469ee41eb71064573a0605cf435aa` was deployed to Vercel project
+`dog-food-helper` as deployment `dpl_8aKEfQ5L8So59mo3mJD82vcvDAqx`.
+Post-release checks confirmed zero missions/stages/events and unchanged
+protected research, private-report, recommendation, food, and dog data.
+
+### P2 local implementation and production gate
+
+Candidate migration
+`supabase/migrations/20260801223514_research_provider_usage_and_budget_caps.sql`
+implements P2 without applying it to production. It adds:
+
+- two immutable estimate-rate versions, with estimates explicitly distinct from
+  actual provider/gateway-reported usage and cost;
+- one immutable mission budget policy and seven immutable stage-cap rows;
+- append-preserving provider-call rows linked to the exact mission, stage
+  attempt, executable job, model-stage configuration, model route, and estimate
+  rate;
+- atomic pre-call reservation under deterministic mission, stage, elapsed,
+  token, cost, and per-call caps;
+- idempotent terminal completion, measured timing, retry-attempt history, and
+  persisted `provider_call.*` / `budget.halted` events;
+- stage/mission rollups that never substitute estimates for missing reported
+  usage; and
+- service-role-only functions, private RLS tables, database link invariants,
+  immutable completed telemetry, and covering foreign-key indexes.
+
+The application routes every current Voyage embedding and Claude drafting call
+through that persisted reservation/completion path. The admin mission detail
+read model and polling endpoint resume from `after_sequence`, page persisted
+events, and expose attempts, routes, actual reported usage, separately labelled
+estimates, timing, caps, and deterministic reasons. No SSE, crawler, graph
+table/store, recurring mission, claim scoring, literature approval, evidence
+activation, food/dog mutation, or recommendation-ranking change is included.
+
+Validation used a disposable Supabase Postgres 17 database with the real P0,
+real P1, and candidate P2 migrations applied in order. Database assertions
+proved replay safety, no completed-call double count, deterministic pre-call
+halt with prior history preserved, distinct retry attempts, exact links,
+continuous event sequence, RLS/privileges, immutability, and indexed foreign
+keys. Supabase `db lint --level warning --fail-on warning` returned no findings.
+The full 296-test suite, TypeScript, optimized production build, and
+`git diff --check` pass. The disposable database and local preview were removed.
+
+Production remains unchanged pending an explicit owner release decision. It is
+still on P1 migration `20260801221635` and Vercel deployment
+`dpl_8aKEfQ5L8So59mo3mJD82vcvDAqx`; all four P2 tables are absent and current
+mission/stage/event counts are zero.
