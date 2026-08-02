@@ -28,6 +28,7 @@ interface ProcessingDocument {
   review_status: string;
   retracted: boolean;
   superseded_by: string | null;
+  duplicate_of_document_id: string | null;
   retrieved_at: string;
   claims: ProcessingClaim[];
 }
@@ -288,6 +289,7 @@ export default function ResearchKnowledgeAdmin() {
     (document) =>
       !document.retracted &&
       !document.superseded_by &&
+      !document.duplicate_of_document_id &&
       document.claims.length === 0
   );
   const queuedClusters = clusters.filter(
@@ -318,6 +320,14 @@ export default function ResearchKnowledgeAdmin() {
         <summary className="cursor-pointer font-semibold text-ink">
           Papers awaiting structured processing ({pendingDocuments.length})
         </summary>
+        {documents.some((document) => document.duplicate_of_document_id) && (
+          <p className="help-text mt-2">
+            {documents.filter((document) => document.duplicate_of_document_id).length} paper(s)
+            automatically matched as a republished form of one already in the system (see the
+            admin graph explorer's SAME_STUDY_FAMILY edges) are excluded here to avoid drafting
+            the same study twice.
+          </p>
+        )}
         <div className="mt-3 grid gap-3">
           {pendingDocuments.slice(0, 30).map((document) => (
             <article key={document.id} className="rounded border border-line bg-paper p-4">

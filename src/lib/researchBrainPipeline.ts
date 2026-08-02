@@ -17,8 +17,9 @@ import {
   createResearchProviderEstimate,
   executeTrackedResearchProviderCall,
 } from './researchProviderTelemetry';
+import { detectAndLinkStudyFamily, StudyFamilyMatch } from './researchStudyFamily';
 import { supabaseAdmin } from './supabase';
-import type { ResearchTopic } from './types';
+import type { EvidenceGrade, ResearchTopic } from './types';
 
 export const RESEARCH_BRAIN_EMBEDDING_MODEL = 'voyage/voyage-4' as const;
 export const RESEARCH_BRAIN_EMBEDDING_DIMENSIONS = 1024;
@@ -36,6 +37,7 @@ export interface ResearchIngestionResult {
   chunkCount: number;
   duplicate: boolean;
   embedding: Omit<ResearchEmbeddingRun, 'vectors'>;
+  studyFamilyMatch: StudyFamilyMatch | null;
 }
 
 function sha256(value: string): string {
@@ -224,11 +226,20 @@ async function storeDocumentWithVoyage(input: {
       ingestion_job_id: input.jobId,
       retrieved_at: new Date().toISOString(),
     })
-    .select('id')
+    .select('id, title, authors, publication_year, is_preprint, abstract_only, evidence_grade')
     .single();
   if (documentError || !document) {
     throw documentError ?? new Error('Could not store the research document');
   }
+
+  const studyFamilyMatch = await detectAndLinkStudyFamily(document.id, {
+    title: (document.title as string | null) ?? '',
+    authors: (document.authors as string[] | null) ?? [],
+    publication_year: document.publication_year as number | null,
+    is_preprint: Boolean(document.is_preprint),
+    abstract_only: Boolean(document.abstract_only),
+    evidence_grade: (document.evidence_grade as EvidenceGrade | null) ?? null,
+  });
 
   const { data: chunkRows, error: chunkError } = await supabaseAdmin
     .from('research_chunks')
@@ -269,6 +280,7 @@ async function storeDocumentWithVoyage(input: {
       estimatedInputTokens: embedding.estimatedInputTokens,
       estimatedCostUsd: embedding.estimatedCostUsd,
     },
+    studyFamilyMatch,
   };
 }
 
@@ -314,6 +326,7 @@ export async function ingestDiscoveryCandidate(input: {
         estimatedInputTokens: 0,
         estimatedCostUsd: 0,
       },
+      studyFamilyMatch: null,
     };
   }
 
@@ -341,6 +354,7 @@ export async function ingestDiscoveryCandidate(input: {
       pmcid: input.candidate.pmcid,
       journal: input.candidate.journal,
       publication_year: input.candidate.publication_year,
+      authors: input.candidate.authors,
       study_design: input.candidate.study_design,
       species: input.candidate.species,
       sample_size: input.candidate.sample_size,

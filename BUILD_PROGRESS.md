@@ -1,6 +1,125 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Research Layer P3 deterministic graph projection (2026-08-02, production, latest)
+## Research Layer P4 admin graph explorer (2026-08-02, local implementation, latest)
+
+P4 is complete as one whole phase, per
+`docs/research-behive-architecture-review-2026-08.md:238-241`: "Add
+claim/cluster/document/study-family navigation and literal-quote
+drill-down. Acceptance: every displayed edge resolves to review metadata and
+quote; similarity/degree are labelled navigation signals only." Nothing was
+committed or pushed.
+
+**Claim/cluster/document navigation and quote drill-down** reads the nine
+P3 `research_graph_*` views, already live in production, `service_role`-only
+with zero `anon`/`authenticated`/`PUBLIC` grants — no migration needed for
+this part.
+- `src/lib/researchGraphReadModel.ts` -- pure assembler turning the view
+  rows (plus `research_evidence_cluster_members.semantic_similarity`, read
+  from the base table for the same already-eligible pairs the view already
+  selected) into a node/edge read model. `DERIVED_FROM`/`CONCERNS`/
+  `MEMBER_OF` resolve their quote and reviewer directly from the claim
+  endpoint. `SUPPORTS`/`CAUTIONS_AGAINST`/`APPLIES_TO` have no claim endpoint
+  of their own, so their quote is resolved from their cluster's eligible
+  member claims; if none remain eligible, the edge is returned with
+  `quote_unresolved: true` rather than silently rendering as fully evidenced.
+  `navigation_degree` (edge count per node) and `semantic_similarity` are
+  both explicit, separately labelled fields -- never merged into or presented
+  as evidence strength.
+- `src/app/api/admin/research/graph/route.ts` -- `GET`, `requireAdmin`-gated
+  (fail-closed 404), queries the views with `supabaseAdmin` (the same
+  pattern `missions/route.ts` and `claims/route.ts` already use for other
+  service-role-only tables), returns the assembled graph with
+  `Cache-Control: private, no-store`.
+- `src/components/ResearchGraphExplorer.tsx` -- read-only admin UI: search
+  and filter nodes by kind, select one to see its connected edges, each edge
+  showing its reviewer(s), literal quote(s) (or the unresolved-quote
+  warning), and any similarity value visibly captioned "nav signal only, not
+  evidence strength". Wired into `src/app/admin/research/page.tsx` after
+  `ResearchKnowledgeAdmin`.
+
+**Study-family navigation** needed a real data model — it did not exist
+after P3 (which correctly deferred it, since `research_documents` only
+deduplicated by unique DOI/source record, not "same underlying trial or
+population"). The owner answered the design questions directly (recorded
+verbatim in the architecture doc's P4 implementation record) rather than
+letting this get deferred into a separate phase: matching is **fully
+automatic** (no confirmation step), using **author overlap + publish-date
+proximity + title similarity**, run **at document import**, scoped to
+**"same paper, republished" only** (preprint/press-release/abstract of one
+study — not overlapping trial populations), and **biased toward the fullest
+version** of the study when choosing which copy claims get drafted from.
+
+New migration `supabase/migrations/20260802190000_research_document_study_family.sql`
+adds to `research_documents`: `authors text[]`, `duplicate_of_document_id`
+(self-referencing FK, always points directly to a primary — a
+`before insert or update` trigger, `enforce_research_document_duplicate_target`,
+rejects chains), `duplicate_match_basis jsonb`, `duplicate_detected_at`. It
+also adds a tenth graph view, `research_graph_edges_same_study_family`
+(same `security_invoker`/zero-anon-grant pattern as the P3 nine), joined
+against `research_graph_documents` on both ends so a duplicate link into an
+ineligible document produces no edge.
+
+Two invariants keep "fully automatic, no review" honest rather than reckless:
+1. **A document with claims already drafted from it can never be demoted or
+   re-pointed** (`src/lib/researchStudyFamily.ts`'s `findStudyFamilyMatch`
+   only lets the fuller document win when the existing primary has zero
+   claims). Immutable once claims exist, same as every other approved record
+   in this schema.
+2. **Every match is transparent, never dressed up as a review.** The graph
+   explorer labels a `SAME_STUDY_FAMILY` edge "Automatically matched, not
+   human-reviewed" and shows exactly what matched (method, title similarity,
+   shared authors, year delta) instead of reviewer/reviewed_at, and it has no
+   literal quote by design — it's bibliographic identity, not an evidentiary
+   claim, so `quote_unresolved` is `false`, not a warning.
+
+Matching thresholds (`src/lib/researchStudyFamily.ts`): title similarity
+≥0.92 alone (the same bar the existing intra-batch discovery deduplication in
+`researchGate2Database.ts`/`researchDiscovery.ts` already uses), OR ≥0.85
+title similarity when at least one author overlaps and publication years are
+within 1 year. Below 0.85, nothing matches regardless of authors. Author
+names are a new signal end to end: `src/lib/researchEvidence.ts`'s
+`parsePubMedXml` now parses PubMed `<AuthorList>` into normalized
+"surname initials" strings (never rendered as a byline), threaded through
+`ResearchCandidate` into the `research_documents` row. PDF uploads have no
+structured authors, so they degrade gracefully to the 0.92 title-only bar.
+Hooked into `src/lib/researchBrainPipeline.ts`'s `storeDocumentWithVoyage`,
+the single insert path shared by both discovery-import and PDF-upload
+ingestion, so both call sites get it automatically. The one-off
+`researchGate2Database.ts`/`scripts/researchGate2Run.ts` path has no wired
+API route and was left out of scope.
+
+"Never process the same study twice": `src/app/api/admin/research/processing/route.ts`
+now also selects `duplicate_of_document_id`, and `ResearchKnowledgeAdmin.tsx`'s
+"papers awaiting structured processing" list excludes any document flagged as
+a duplicate, with a visible count so it's not a silent omission.
+
+**Known verification gap, disclosed rather than glossed over:** unlike
+P0-P3, this migration was **not** validated in a disposable/isolated
+Postgres instance before being written here — this session's sandbox denied
+Docker access (`docker ps` was blocked by the environment's auto-mode
+classifier). The trigger logic, constraint, and view were written carefully
+and reviewed against the exact live production schema (fetched read-only via
+`information_schema.columns` against `ysffyuohwvdifvbopfcm`, not guessed),
+but they have not been executed against a real Postgres instance. Recommend
+running the isolated-container validation P0-P3 each got before this is
+applied to production.
+
+Verified live: full test suite 309/309 (296 original + 6 P4-graph-explorer +
+6 P4-study-family, with the original single "no study_family or supersession"
+test correctly split into a real SAME_STUDY_FAMILY assertion plus a narrower
+"no supersession" one now that the edge legitimately exists), `tsc --noEmit`
+clean, optimized production build clean (`/api/admin/research/graph` in the
+build output), `git diff --check` clean. No ranking/recommendation code path
+was touched. The owner's `docs/research-brain-handoff-2026-07-29.md` edit
+was not touched throughout.
+
+Per the same phase-gate pattern P0-P3 each required, this stops at local
+implementation. Commit, push, migration application, and deployment all
+require a separate, explicit owner approval — and given the disclosed
+verification gap above, the migration specifically warrants isolated
+validation before that approval, not just a review of the SQL.
+
+## Research Layer P3 deterministic graph projection (2026-08-02, production)
 
 Released to production from exact application commit
 `7b50c55643b6a17f1cede3d9a4e0dc98405f679c`. Supabase project

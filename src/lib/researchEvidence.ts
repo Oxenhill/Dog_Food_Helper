@@ -79,6 +79,7 @@ export interface PubMedRecord {
   publication_types: string[];
   mesh_headings: string[];
   keywords: string[];
+  authors: string[];
 }
 
 /** Minimal Europe PMC core shape retained for the retraction-watch lookup. */
@@ -129,6 +130,7 @@ export interface ResearchCandidate {
   abstract_text: string | null;
   publication_types: string[];
   mesh_headings: string[];
+  authors: string[];
   source_metadata: Record<string, unknown>;
   duplicate_of?: string | null;
   title_similarity?: number | null;
@@ -298,6 +300,29 @@ function articleId(article: string, idType: string): string | null {
   return textFromXml(article.match(expression)?.[1])?.trim() || null;
 }
 
+/**
+ * Normalized "surname initials" strings (or a collective/group name) from a
+ * PubMed <AuthorList>. Used only as a study-family matching signal, never as
+ * a display byline -- ordering and exact form are not preserved.
+ */
+function authorSurnames(article: string): string[] {
+  const authorListBody = elementBodies(article, 'AuthorList')[0];
+  if (!authorListBody) return [];
+  const authors = elementBodies(authorListBody, 'Author');
+  const names: string[] = [];
+  for (const author of authors) {
+    const lastName = firstElementText(author, 'LastName');
+    if (lastName) {
+      const initials = firstElementText(author, 'Initials');
+      names.push(`${lastName.toLowerCase()} ${initials?.toLowerCase() ?? ''}`.trim());
+      continue;
+    }
+    const collectiveName = firstElementText(author, 'CollectiveName');
+    if (collectiveName) names.push(collectiveName.toLowerCase().trim());
+  }
+  return [...new Set(names)];
+}
+
 function publicationYear(article: string): number | null {
   const journalIssue = article.match(/<JournalIssue\b[\s\S]*?<\/JournalIssue>/i)?.[0] ?? '';
   const year = firstElementText(journalIssue, 'Year');
@@ -335,6 +360,7 @@ export function parsePubMedXml(xml: string): Map<string, PubMedRecord> {
       publication_types: [...new Set(publicationTypes)],
       mesh_headings: [...new Set(meshHeadings)],
       keywords: [...new Set(keywords)],
+      authors: authorSurnames(article),
     });
   }
 
@@ -466,6 +492,7 @@ export function mapPubMedRecord(
     abstract_text: record.abstract_text,
     publication_types: record.publication_types,
     mesh_headings: record.mesh_headings,
+    authors: record.authors,
     source_metadata: {
       pubmed: record,
     },

@@ -239,6 +239,12 @@ flowchart TD
 
 - Add claim/cluster/document/study-family navigation and literal-quote drill-down.
 - Acceptance: every displayed edge resolves to review metadata and quote; similarity/degree are labelled navigation signals only.
+- Status (2026-08-02): complete, locally implemented as one phase (see the
+  P4 local implementation record below). `SAME_STUDY_FAMILY` now has a data
+  model: automatic bibliographic-identity matching (author overlap, title
+  similarity, publish-date proximity), per the owner's answers recorded
+  below — not the text/domain claim-similarity mechanism this document
+  rejects elsewhere, which is a different thing entirely.
 
 ### P5 — retraction and supersession validation
 
@@ -438,3 +444,138 @@ P3 added no API route of its own) returned fail-closed HTTP 404 JSON
 unauthenticated, matching every prior release. No application code changed
 in this release, so this was a re-verification of existing behaviour, not a
 new code path.
+
+### P4 local implementation (complete, not yet committed)
+
+P4 shipped as one complete phase, per the owner's explicit direction not to
+split it into sub-phases: claim/cluster/document navigation, quote
+drill-down, and study-family navigation all landed together below, not as
+separate releases.
+
+**Claim/cluster/document navigation and quote drill-down.** Required no
+migration: the nine P3
+`research_graph_*` views are already live in production and remain
+`service_role`-only, so the first real work was an authenticated-admin API
+path onto them, per the standing note that these views had zero UI/API
+consumer. `src/app/api/admin/research/graph/route.ts` is `requireAdmin`-gated
+(fail-closed 404) and queries the views plus
+`research_evidence_cluster_members` (for `semantic_similarity` only) with the
+service-role client, the same pattern `missions/route.ts` and
+`claims/route.ts` already use.
+
+`src/lib/researchGraphReadModel.ts` assembles nodes and edges so that every
+displayed edge resolves to reviewer metadata and a literal quote, per the P4
+acceptance criterion. `DERIVED_FROM`/`CONCERNS`/`MEMBER_OF` read their quote
+directly off the claim endpoint. `SUPPORTS`/`CAUTIONS_AGAINST`/`APPLIES_TO`
+have no claim endpoint of their own, so their quote is resolved from their
+cluster's eligible member claims; when a cluster's only supporting claim has
+since become ineligible (e.g. its document was retracted after the cluster
+was approved), the edge is returned with `quote_unresolved: true` instead of
+rendering as if fully evidenced. `navigation_degree` (edges touching a node)
+and `semantic_similarity` are both present but explicitly and separately
+labelled — the UI captions them "navigation hint only, not evidence
+strength" and neither value feeds into how an edge's evidence is displayed.
+
+`SUPERSEDES`/`RETRACTED_BY` are absent for a different, already-settled
+reason: a retracted or superseded document has no node in this projection at
+all, so there is nothing to attach a transition edge to before P5.
+
+`src/components/ResearchGraphExplorer.tsx` is a read-only admin UI — search
+and filter nodes by kind, select one to see its connected edges with
+reviewer(s), literal quote(s) or the unresolved-quote warning, and any
+similarity value. It approves, edits, and publishes nothing; that authority
+remains with the existing `research_evidence_clusters` review action and
+`edit_research_evidence_cluster` RPC. Wired into
+`src/app/admin/research/page.tsx` after `ResearchKnowledgeAdmin`.
+
+**Study-family navigation.** An earlier draft of this record split this out
+into an invented "P4.5" sub-phase; the owner rejected that ("there shouldnt
+be an item P4.5 youve invented that division in the build ... P'n' is a
+whole section task, dont start breaking them apart") and asked the design
+questions directly instead. The questions and the owner's answers, verbatim
+where it matters:
+
+1. *Linkage mechanism?* Owner: "Publish date and authors will be good to
+   look at, as well as the obvious titles, matching authors wont publish
+   multiple studies on the same date. I do not want to have to have to
+   manually do this task, it should be achievable by the system somehow."
+   Follow-up on whether an automatic match should still need a one-click
+   human confirmation before counting as corroboration: **fully automatic,
+   no human step.**
+2. *When does detection run?* **At import**, before any claim drafting.
+3. *How far does "same family" reach?* **Same paper, different forms only**
+   (preprint, published version, press release, abstract) — explicitly not
+   population overlap across distinct trials. Owner's own framing: "we never
+   want to process the same study, thats pointless waste, but ... we should
+   always bias full studies over partial ones."
+
+This is why "fully automatic" is safe here in a way it would not be for
+actual cross-study corroboration: matching two document *records* as the
+same bibliographic identity (a preprint and its own later publication) is
+the opposite of the "similar claim text across domains inflates confidence"
+mechanism this document rejects elsewhere — it *prevents* a single study
+from being double-counted, rather than inferring that two independent
+studies agree. The one thing automation must never be allowed to touch is
+already-reviewed evidence, so two invariants are enforced regardless of how
+confident a match is: a document that already has claims drafted from it can
+never be demoted or re-pointed (immutable once claims exist, matching every
+other approved record in this schema), and every match is recorded and
+displayed as exactly what it is — "automatically matched, not
+human-reviewed" plus the concrete signals — never presented as if a reviewer
+looked at it.
+
+Implementation: migration
+`supabase/migrations/20260802190000_research_document_study_family.sql`
+adds `authors text[]`, `duplicate_of_document_id` (self-referencing FK, a
+`before insert or update` trigger rejects chains so it always points
+directly to a primary), `duplicate_match_basis jsonb`, and
+`duplicate_detected_at` to `research_documents`, plus a tenth graph view,
+`research_graph_edges_same_study_family` (same `security_invoker`/zero-grant
+pattern as the original nine). `src/lib/researchStudyFamily.ts` holds the
+pure matching decision (title similarity ≥0.92 alone, the same bar the
+existing intra-batch discovery deduplication already uses; or ≥0.85 with at
+least one shared author and publication years within 1 year) and the
+fullness ranking (not abstract-only, not a preprint, better evidence grade)
+that decides which side wins when neither has claims yet. `src/lib/researchEvidence.ts`'s
+PubMed XML parser now extracts `<AuthorList>` into normalized surname/initial
+strings (a matching signal only, never a byline) to feed this. Hooked into
+the single shared insert path in `src/lib/researchBrainPipeline.ts`
+(`storeDocumentWithVoyage`) so both the discovery-import and PDF-upload
+routes get it automatically; PDF uploads have no structured authors and
+degrade to the 0.92 title-only bar. `src/app/api/admin/research/processing/route.ts`
+and `ResearchKnowledgeAdmin.tsx` now exclude documents flagged as duplicates
+from "papers awaiting structured processing," with a visible count, so the
+"don't process the same study twice" goal is real, not just a graph label.
+
+**Disclosed verification gap:** this migration was not validated in a
+disposable/isolated Postgres instance the way every P0-P3 migration was —
+this session's environment denied Docker access outright (the sandbox's
+auto-mode classifier blocked `docker ps`). The trigger, constraint, and view
+were checked carefully against the live production schema (read via a
+read-only `information_schema.columns` query against `ysffyuohwvdifvbopfcm`,
+not assumed), but none of it has actually been executed against a real
+Postgres. This should get the same isolated-container validation pass P0-P3
+each received before it is applied to production — that is a concrete,
+specific owner-review item, not a formality.
+
+Verified live: `src/lib/__tests__/researchGraphReadModel.test.ts` (7 tests:
+the original 6 covering quote/review resolution, unresolved-quote handling,
+similarity labelling, and concept dedup, plus a new one asserting a
+`SAME_STUDY_FAMILY` edge carries its match basis and zero reviews/quotes by
+design, and a narrowed "no supersession edge" test now that
+`SAME_STUDY_FAMILY` legitimately exists) and
+`src/lib/__tests__/researchStudyFamily.test.ts` (6 new tests: the 0.92
+title-only bar, the 0.85-with-authors-and-close-year bar, the below-0.85
+no-match floor, fullness-based promotion, and — the one that matters most —
+that a primary with existing claims is never demoted) plus the full suite:
+309/309 passing, `tsc --noEmit` clean, optimized production build clean
+(`/api/admin/research/graph` in the build output), `git diff --check`
+clean. No ranking/recommendation code path was touched. The owner's
+`docs/research-brain-handoff-2026-07-29.md` edit was not touched throughout.
+
+P4 is complete as one phase. Per the same phase-gate pattern P0-P3 each
+required, this stops at local implementation — commit, push, migration
+application, and deployment all require a separate, explicit owner
+approval, and the disclosed verification gap above means the migration
+specifically should get isolated validation before that approval, not just
+a read-through.

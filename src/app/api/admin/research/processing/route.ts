@@ -63,7 +63,7 @@ async function listProcessingState() {
     supabaseAdmin
       .from('research_documents')
       .select(
-        'id, title, source_url, pmid, topic, evidence_grade, grading_inputs_complete, access_type, review_status, retracted, superseded_by, retrieved_at'
+        'id, title, source_url, pmid, topic, evidence_grade, grading_inputs_complete, access_type, review_status, retracted, superseded_by, duplicate_of_document_id, retrieved_at'
       )
       .order('retrieved_at', { ascending: false })
       .limit(200),
