@@ -1,6 +1,46 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Research Layer P5 retraction/supersession propagation (2026-08-02, local implementation, latest)
+## Research Layer P4+P5 production release (2026-08-02, latest)
+
+Owner approved commit, push, production migration, and deploy for both P4
+and P5 together in one pass. Sequence:
+
+1. Committed as `4838fea` on `codex/mobile-pack-capture`, pushed, then
+   fast-forwarded to `main` (was 0 ahead/8 behind — clean FF, no merge).
+2. Vercel's GitHub integration auto-deployed `main` to production
+   (`dpl_baEmqXdJguhMTHnVeiH6Z3zcF1n2`, target production, READY) before any
+   Supabase migration was applied — briefly meant the new admin routes
+   referenced database objects that did not exist in production yet.
+3. Applied `20260802190000_research_document_study_family` (P4) then
+   `20260802210000_research_retraction_supersession_propagation` (P5) to
+   `ysffyuohwvdifvbopfcm`, in that order, via the Supabase MCP
+   `apply_migration` tool (schema pre-checked against live
+   `information_schema.columns` first — no surprises).
+4. Security advisors: zero new findings (the only P5-related entry is the
+   expected `rls_enabled_no_policy` INFO on `research_evidence_lifecycle_events`,
+   identical pattern to every other service-role-only table in this schema).
+   Performance advisors: three INFO-level unindexed-foreign-key notices on
+   the new lifecycle-events table (`actor_id`, `replacement_document_id`,
+   `promoted_primary_document_id`) — closed immediately with a follow-up
+   migration, `20260802220000_research_evidence_lifecycle_events_fk_indexes`,
+   matching this project's established fk-index-cleanup pattern.
+5. Verified live: exactly 12 `research_graph_*` views (the original 9 + P4's
+   `SAME_STUDY_FAMILY` + P5's `SUPERSEDES`/`RETRACTED_BY`); zero
+   anon/authenticated/PUBLIC grants on any new table/view; only
+   `research_documents_duplicate_target_guard` remains as a trigger on
+   `research_documents` (confirms `research_document_sync_claim_metadata`
+   was actually dropped, not just intended to be); only
+   `propagate_research_document_status_change` exists among the three
+   candidate routine names (confirms `mark_research_document_retracted` and
+   `sync_research_claims_after_document_change` are gone). Vercel: zero
+   runtime errors in the two hours around deploy; homepage 200; unauthenticated
+   `/api/admin/research/graph` fails closed 404 (same pattern every prior
+   phase's release record verified).
+
+Both P4 and P5 are now live in production. Next: P6 (recurring missions),
+per the owner's own explicit scope boundary for this session.
+
+## Research Layer P5 retraction/supersession propagation (2026-08-02, local implementation)
 
 P5 is complete as one whole phase, per the owner's exact spec: "Implement and
 test atomic propagation through claims, clusters, corroboration and
