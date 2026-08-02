@@ -13,9 +13,15 @@ import { ReviewStatus } from '@/lib/types';
  * embedding intentionally omitted), ordered by chunk_index asc.
  *
  * PATCH is a plain status update (no LLM/embedding work): body
- * { review_status?: 'approved'|'rejected'|'pending', superseded_by?: string|null }.
- * Only the two whitelisted fields are ever written; review_status is
- * validated against the enum before use.
+ * { review_status?: 'approved'|'rejected'|'pending' }. Only that one
+ * whitelisted field is ever written, validated against the enum before use.
+ *
+ * superseded_by is intentionally NOT writable here (removed for P5, 2026-08):
+ * a raw field write bypassed every P5 propagation step -- claim/cluster
+ * eligibility transitions, study-family promotion, and the audit trail.
+ * Retraction/supersession now goes exclusively through
+ * POST /api/admin/research/[docId]/lifecycle, which calls the atomic
+ * propagate_research_document_status_change RPC.
  */
 
 const VALID_REVIEW_STATUSES: ReviewStatus[] = ['pending', 'approved', 'rejected'];
@@ -86,14 +92,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   }
 
   if ('superseded_by' in body) {
-    const raw = body.superseded_by;
-    if (raw !== null && typeof raw !== 'string') {
-      return NextResponse.json(
-        { error: 'Field "superseded_by" must be a string or null' },
-        { status: 400 },
-      );
-    }
-    update.superseded_by = raw;
+    return NextResponse.json(
+      {
+        error:
+          'Field "superseded_by" is no longer writable here. Use POST /api/admin/research/[docId]/lifecycle to supersede a document.',
+      },
+      { status: 400 },
+    );
   }
 
   if (Object.keys(update).length === 0) {

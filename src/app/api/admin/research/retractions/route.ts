@@ -40,15 +40,50 @@ export async function POST(request: NextRequest) {
         check.europe_pmc.retracted ? 'Europe PMC' : null,
         check.crossref.retracted ? 'Crossref/Retraction Watch' : null,
       ].filter(Boolean);
-      const { error: markError } = await supabaseAdmin.rpc(
-        'mark_research_document_retracted',
-        {
+      const reason = `Retraction reported by ${sourceNames.join(' and ')}`;
+
+      // propagate_research_document_status_change raises on an
+      // already-retracted document (it is a one-way transition, not an
+      // idempotent field write) -- a document already marked retracted by an
+      // earlier run just gets its checked_at refreshed, matching the
+      // no-duplicate-alert guarantee this route has always made.
+      let propagateError: { message: string } | null = null;
+      if (document.retracted) {
+        const { error: touchError } = await supabaseAdmin
+          .from('research_documents')
+          .update({ retraction_checked_at: check.checked_at })
+          .eq('id', document.id);
+        propagateError = touchError;
+      } else {
+        const { error } = await supabaseAdmin.rpc('propagate_research_document_status_change', {
           p_document_id: document.id,
-          p_checked_at: check.checked_at,
-          p_source_message: `Retraction reported by ${sourceNames.join(' and ')}`,
-        },
-      );
-      results.push({ document_id: document.id, title: document.title, check, error: markError?.message ?? null });
+          p_action: 'retract',
+          p_replacement_document_id: null,
+          p_actor_id: null,
+          p_actor_type: 'system',
+          p_reason: reason,
+        });
+        propagateError = error;
+      }
+      // Surfaced separately from the atomic propagation transaction: an
+      // admin-visible operational alert, deduped by check_name, same as
+      // every other system_alerts producer. Best-effort -- a failure here
+      // must not be reported as a propagation failure.
+      if (!propagateError) {
+        const { data: existingAlert } = await supabaseAdmin
+          .from('system_alerts')
+          .select('id')
+          .eq('check_name', `research_retraction:${document.id}`)
+          .is('resolved_at', null)
+          .maybeSingle();
+        if (!existingAlert) {
+          await supabaseAdmin.from('system_alerts').insert({
+            check_name: `research_retraction:${document.id}`,
+            message: `${document.title ?? document.id}: ${reason}`,
+          });
+        }
+      }
+      results.push({ document_id: document.id, title: document.title, check, error: propagateError?.message ?? null });
       continue;
     }
 

@@ -547,16 +547,29 @@ and `ResearchKnowledgeAdmin.tsx` now exclude documents flagged as duplicates
 from "papers awaiting structured processing," with a visible count, so the
 "don't process the same study twice" goal is real, not just a graph label.
 
-**Disclosed verification gap:** this migration was not validated in a
-disposable/isolated Postgres instance the way every P0-P3 migration was —
-this session's environment denied Docker access outright (the sandbox's
-auto-mode classifier blocked `docker ps`). The trigger, constraint, and view
-were checked carefully against the live production schema (read via a
-read-only `information_schema.columns` query against `ysffyuohwvdifvbopfcm`,
-not assumed), but none of it has actually been executed against a real
-Postgres. This should get the same isolated-container validation pass P0-P3
-each received before it is applied to production — that is a concrete,
-specific owner-review item, not a formality.
+**Verification gap closed (2026-08-02, later session).** The migration was
+originally written without disposable-Postgres validation — the session that
+built it had `docker ps` blocked outright by the environment's auto-mode
+classifier. A later orientation session confirmed Docker was available
+(`public.ecr.aws/supabase/postgres:17.6.1.143`, the same image the local
+Supabase stack uses, already cached locally) and ran the same pattern P0-P3
+used: `supabase/tests/p3_minimal_research_fixture.sql`, then the real
+`20260802170000_research_graph_projection.sql`, then the real
+`20260802190000_research_document_study_family.sql`, applied in order to a
+disposable container, followed by a new
+`supabase/tests/p4_study_family.sql` assertion suite. All assertions passed:
+the chain-prevention trigger (`enforce_research_document_duplicate_target`)
+rejects a duplicate pointing at another duplicate and rejects a nonexistent
+target; the `research_documents_duplicate_not_self` check rejects
+self-reference; `research_graph_edges_same_study_family` produces exactly
+the expected edge and correctly excludes a duplicate whose primary target is
+retracted (the primary never becomes an eligible `research_graph_documents`
+node, so no edge is produced); `match_basis`/`detected_at` carry through
+onto the edge; and grants are zero for `anon`/`authenticated`, exactly one
+`service_role` SELECT. This migration is now implementation-validated the
+same way P0-P3 were. It is still **not** applied to the connected production
+Supabase project and still requires a separate, explicit owner approval for
+that exact action — this closes the verification gap, not the release gate.
 
 Verified live: `src/lib/__tests__/researchGraphReadModel.test.ts` (7 tests:
 the original 6 covering quote/review resolution, unresolved-quote handling,
@@ -576,6 +589,135 @@ clean. No ranking/recommendation code path was touched. The owner's
 P4 is complete as one phase. Per the same phase-gate pattern P0-P3 each
 required, this stops at local implementation — commit, push, migration
 application, and deployment all require a separate, explicit owner
-approval, and the disclosed verification gap above means the migration
-specifically should get isolated validation before that approval, not just
-a read-through.
+approval. (The verification gap noted above this record was closed in a
+later session — see the note higher in this section.)
+
+## Research Layer P5 retraction and supersession propagation (2026-08-02, local implementation)
+
+P5 is complete as one whole phase, implementing exactly the "Retraction and
+supersession" design above (§"Revised Bowl target architecture") — the same
+six-step transaction, plus the two graph edge types P3 explicitly deferred
+here.
+
+**The RPC**: `public.propagate_research_document_status_change` in
+`supabase/migrations/20260802210000_research_retraction_supersession_propagation.sql`.
+One `plpgsql` function (`security definer`, `set search_path = ''`,
+`service_role`-only execute grant), so "injected failure rolls back the
+entire change" is true by ordinary Postgres transaction semantics, not by
+sequencing hope — the same reasoning this document uses elsewhere for why
+every other atomic multi-table operation in this schema
+(`research_mission_lifecycle` RPCs, `edit_research_evidence_cluster`, the P2
+budget-cap reservation RPCs) is a single database function rather than
+sequential JS calls.
+
+`p_action` is `'retract'` (sets `retracted = true`) or `'supersede'` (sets
+`superseded_by` to a required replacement document). "Corrected" is not a
+third mechanism: the schema has only ever had these two columns, and a
+correction is, mechanically, a document being superseded by its corrected
+version — the audit event's `reason` text carries that distinction, not a
+new enum value.
+
+**Corroboration/study-family propagation** (the open design question this
+document flagged for P4 not to have to answer): resolved by direct owner
+decision, 2026-08-02 — when a study-family primary (P4's
+`duplicate_of_document_id` target) is retracted or superseded, **the fullest
+remaining non-retracted duplicate is auto-promoted to primary**, using the
+identical fullness ranking `researchStudyFamily.ts` already uses at import
+time, and every other duplicate is re-pointed to it. If every duplicate is
+also retracted, the family is left explicitly orphaned
+(`orphaned_duplicate_document_ids` on the audit event) rather than silently
+dropped or guessed at. This was treated as a genuine product-policy fork, not
+an implementation detail to infer — asked directly, answered directly, same
+as every prior phase-shaping decision in this project.
+
+**Cluster propagation is support-aware, not blanket**: a cluster only
+transitions out of active eligibility when *none* of its member claims
+remain active after the change. A cluster independently corroborated by a
+second, unaffected document survives a retraction of the first; it
+transitions only once its last remaining support is also retracted or
+superseded. Verified as two explicit, separate test scenarios, not inferred
+from one.
+
+**A real ordering bug was caught, not just avoided**: the pre-existing
+`research_document_sync_claim_metadata` trigger (from
+`20260728200000_research_claims_and_grading.sql`, already in production)
+fires synchronously the instant this function's own document-retraction
+`UPDATE` runs — before the function's own explicit claim-transition step
+gets to ask "which claims were active." Left in place, it would have
+silently emptied `affected_claim_ids` on every retraction's audit event, and
+it has no equivalent for the `superseded_by` path at all. This migration
+retires that trigger and the now-fully-subsumed `mark_research_document_retracted`
+function. The disposable-container validation was deliberately rebuilt with a
+`supabase/tests/p5_pre_state_fixture.sql` reconstructing both retired
+objects from their real source migration first, specifically so this
+retirement — and the bug it fixes — was exercised against realistic pre-P5
+state, not a container that never had the conflict to begin with.
+
+**A real safety gap, found while wiring this in rather than invented as
+scope**: `src/app/api/admin/research/[docId]/route.ts`'s `PATCH` allowed a
+raw `superseded_by` field write with zero propagation of any kind. That path
+is now closed; the sole way to retract or supersede a document is the new
+`POST /api/admin/research/[docId]/lifecycle` route (owner-actor) or the
+automated retraction-watch route (`system`-actor), both calling the one RPC.
+
+**Projection**: two new views, `research_graph_edges_supersedes` and
+`research_graph_edges_retracted_by`, exactly the pair
+`20260802170000_research_graph_projection.sql` named as belonging here.
+Both are necessarily asymmetric-eligibility tombstone edges — the
+retracted/superseded side is by definition never itself an eligible
+`research_graph_documents` node, unlike P4's `SAME_STUDY_FAMILY`, which
+requires both endpoints to already be eligible. `SUPERSEDES` points the
+still-live replacement document back at the tombstoned old one;
+`RETRACTED_BY` (no replacement exists for a pure retraction) terminates at
+the audit event instead, via a new `event` node kind in the read model. This
+is a graph-presentation decision, not a product-policy one, so it was made
+and disclosed rather than escalated — same standard this document applies
+elsewhere to reversible technical calls. `ResearchGraphExplorer.tsx` renders
+the tombstoned side visibly dimmed and labelled, not as a dangling edge
+endpoint. Existing `research_graph_*` views need no separate refresh step —
+they are live selects over the same tables this RPC updates, verified
+directly (the P4/P5 disposable-container tests query them after the RPC
+runs) rather than assumed from "views are live" alone.
+
+**Deliberately out of scope**: P6 (recurring missions), P7 (user-facing
+evidence map), any change to ranking/recommendation logic beyond what
+`activeClaimRetrieval.ts` already excluded via its existing
+`document.retracted`/`document.superseded_by` join checks (P5 adds explicit
+claim/cluster status transitions and an audit trail on top of that existing
+exclusion, it does not change what was already excluded). No original
+source, claim, or cluster row is ever deleted. A second, much older raw
+`superseded_by` write in `src/lib/embeddingPipeline.ts` (`ingestResearchDocument`,
+belonging to the original 6-phase build plan's "Phase 4: RAG research layer"
+— a different, earlier subsystem with no `research_claims`/
+`research_evidence_clusters` involvement) was noticed and deliberately left
+alone as a separately-scoped concern, not silently ignored.
+
+Validated in a disposable `public.ecr.aws/supabase/postgres:17.6.1.143`
+container: P3 fixture → P3 migration → P4 migration → a new
+`supabase/tests/p5_pre_state_fixture.sql` (reconstructing the two retired
+pre-P5 objects) → this P5 migration → `supabase/tests/p5_retraction_supersession.sql`.
+Six scenarios: plain retraction; a cluster surviving partial retraction then
+transitioning once its last support is also retracted; supersession
+(including rejecting an already-retracted replacement target);
+study-family auto-promotion; orphaning when every duplicate is also
+retracted; and the acceptance-critical **injected mid-transaction failure**
+— a temporary trigger raising on a sentinel cluster positioned after the
+document and claim updates already ran, asserting all of it rolled back
+(document, claims, cluster, and no audit event inserted), then a clean retry
+after removing the injected failure succeeds normally. Plus append-only
+grant assertions. All passed.
+
+Verified live: `src/lib/__tests__/researchGraphReadModel.test.ts`'s old "no
+supersession edge type is ever produced" placeholder test replaced 1-for-1
+with real `SUPERSEDES`/`RETRACTED_BY` assertions (tombstone nodes resolve,
+not dangling ids) now that P5 exists — full suite still 309/309, `tsc
+--noEmit` clean, optimized production build clean
+(`/api/admin/research/[docId]/lifecycle` in the build output), `git diff
+--check` clean. No ranking/recommendation code path was touched. The
+owner's `docs/research-brain-handoff-2026-07-29.md` edit was not touched
+throughout.
+
+P5 is complete as one phase. Per the same phase-gate pattern every prior
+phase required, this stops at local implementation — commit, push, migration
+application, and deployment all require a separate, explicit owner
+approval.

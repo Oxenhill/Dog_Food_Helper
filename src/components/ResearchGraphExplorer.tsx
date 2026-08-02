@@ -12,7 +12,6 @@ import {
 const EMPTY_GRAPH: ResearchGraph = {
   nodes: [],
   edges: [],
-  deferred: { supersedes_retracted_by: '' },
 };
 
 const KIND_LABEL: Record<ResearchGraphNodeKind, string> = {
@@ -21,9 +20,10 @@ const KIND_LABEL: Record<ResearchGraphNodeKind, string> = {
   cluster: 'Cluster',
   concept: 'Concept',
   context: 'Dog-profile context',
+  event: 'Lifecycle event',
 };
 
-const KIND_ORDER: ResearchGraphNodeKind[] = ['cluster', 'claim', 'document', 'concept', 'context'];
+const KIND_ORDER: ResearchGraphNodeKind[] = ['cluster', 'claim', 'document', 'concept', 'context', 'event'];
 
 function nodeLookup(nodes: ResearchGraphNode[]): Map<string, ResearchGraphNode> {
   return new Map(nodes.map((node) => [node.id, node]));
@@ -87,12 +87,11 @@ export default function ResearchGraphExplorer() {
         <p className="help-text mt-2">
           Read-only navigation over the active, human-reviewed evidence projection. Every edge
           below resolves to reviewer metadata and a literal quote, except SAME_STUDY_FAMILY edges
-          (labelled below), which are automatic bibliographic matches, not human review. This view
+          (labelled below), which are automatic bibliographic matches, not human review. SUPERSEDES
+          and RETRACTED_BY edges point at tombstoned documents (shown greyed out) that are not
+          themselves eligible nodes — that is what retraction/supersession means. This view
           approves, edits, and publishes nothing — that stays in the cluster review workflow.
         </p>
-        {graph.deferred.supersedes_retracted_by && (
-          <p className="help-text mt-2">{graph.deferred.supersedes_retracted_by}</p>
-        )}
       </div>
 
       {error && <div className="callout-alarm" role="alert">{error}</div>}
@@ -121,23 +120,29 @@ export default function ResearchGraphExplorer() {
             </select>
           </div>
           <div className="max-h-[480px] overflow-y-auto rounded border border-line">
-            {visibleNodes.map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                onClick={() => setSelectedId(node.id)}
-                className={`flex w-full flex-col gap-1 border-b border-line px-3 py-2 text-left text-[13px] hover:bg-surface ${
-                  selectedId === node.id ? 'bg-pine-tint/30' : ''
-                }`}
-              >
-                <span className="eyebrow">{KIND_LABEL[node.kind]}</span>
-                <span className="font-semibold text-ink">{node.label}</span>
-                <span className="help-text" title="Navigation hint only — not evidence strength">
-                  {node.navigation_degree} connection{node.navigation_degree === 1 ? '' : 's'} (nav
-                  signal only)
-                </span>
-              </button>
-            ))}
+            {visibleNodes.map((node) => {
+              const tombstoned = node.data.tombstoned === true;
+              return (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => setSelectedId(node.id)}
+                  className={`flex w-full flex-col gap-1 border-b border-line px-3 py-2 text-left text-[13px] hover:bg-surface ${
+                    selectedId === node.id ? 'bg-pine-tint/30' : ''
+                  } ${tombstoned ? 'opacity-60' : ''}`}
+                >
+                  <span className="eyebrow">
+                    {KIND_LABEL[node.kind]}
+                    {tombstoned ? ' — retracted/superseded' : ''}
+                  </span>
+                  <span className="font-semibold text-ink">{node.label}</span>
+                  <span className="help-text" title="Navigation hint only — not evidence strength">
+                    {node.navigation_degree} connection{node.navigation_degree === 1 ? '' : 's'} (nav
+                    signal only)
+                  </span>
+                </button>
+              );
+            })}
             {visibleNodes.length === 0 && !loading && (
               <p className="help-text p-3">No nodes match this filter.</p>
             )}

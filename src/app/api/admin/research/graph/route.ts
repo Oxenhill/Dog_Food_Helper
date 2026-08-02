@@ -27,6 +27,8 @@ export async function GET(request: NextRequest) {
     edgesConcerns,
     edgesAppliesTo,
     edgesSameStudyFamily,
+    edgesSupersedes,
+    edgesRetractedBy,
     clusterMembersRaw,
   ] = await Promise.all([
     supabaseAdmin.from('research_graph_documents').select('*'),
@@ -39,6 +41,8 @@ export async function GET(request: NextRequest) {
     supabaseAdmin.from('research_graph_edges_concerns').select('*'),
     supabaseAdmin.from('research_graph_edges_applies_to').select('*'),
     supabaseAdmin.from('research_graph_edges_same_study_family').select('*'),
+    supabaseAdmin.from('research_graph_edges_supersedes').select('*'),
+    supabaseAdmin.from('research_graph_edges_retracted_by').select('*'),
     supabaseAdmin.from('research_evidence_cluster_members').select('cluster_id, claim_id, semantic_similarity'),
   ]);
 
@@ -53,6 +57,8 @@ export async function GET(request: NextRequest) {
     edgesConcerns,
     edgesAppliesTo,
     edgesSameStudyFamily,
+    edgesSupersedes,
+    edgesRetractedBy,
     clusterMembersRaw,
   ].find((result) => result.error);
   if (failed?.error) {
@@ -70,6 +76,8 @@ export async function GET(request: NextRequest) {
     edgesConcerns: edgesConcerns.data ?? [],
     edgesAppliesTo: edgesAppliesTo.data ?? [],
     edgesSameStudyFamily: edgesSameStudyFamily.data ?? [],
+    edgesSupersedes: edgesSupersedes.data ?? [],
+    edgesRetractedBy: edgesRetractedBy.data ?? [],
     clusterMembersRaw: clusterMembersRaw.data ?? [],
   });
 

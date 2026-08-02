@@ -1,6 +1,6 @@
 type Row = Record<string, unknown>;
 
-export type ResearchGraphNodeKind = 'document' | 'claim' | 'cluster' | 'concept' | 'context';
+export type ResearchGraphNodeKind = 'document' | 'claim' | 'cluster' | 'concept' | 'context' | 'event';
 
 export type ResearchGraphEdgeType =
   | 'DERIVED_FROM'
@@ -9,7 +9,9 @@ export type ResearchGraphEdgeType =
   | 'CAUTIONS_AGAINST'
   | 'CONCERNS'
   | 'APPLIES_TO'
-  | 'SAME_STUDY_FAMILY';
+  | 'SAME_STUDY_FAMILY'
+  | 'SUPERSEDES'
+  | 'RETRACTED_BY';
 
 export interface ResearchGraphAutomaticMatch {
   method: string;
@@ -63,15 +65,14 @@ export interface ResearchGraphViewRows {
   edgesConcerns: Row[];
   edgesAppliesTo: Row[];
   edgesSameStudyFamily: Row[];
+  edgesSupersedes: Row[];
+  edgesRetractedBy: Row[];
   clusterMembersRaw?: Row[];
 }
 
 export interface ResearchGraph {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
-  deferred: {
-    supersedes_retracted_by: string;
-  };
 }
 
 function str(row: Row, key: string): string {
@@ -363,17 +364,64 @@ export function assembleResearchGraph(rows: ResearchGraphViewRows): ResearchGrap
     });
   }
 
+  for (const row of rows.edgesSupersedes) {
+    const newDocumentId = str(row, 'new_document_id');
+    const oldDocumentId = str(row, 'old_document_id');
+    const from = documentNodeId(newDocumentId);
+    const to = documentNodeId(oldDocumentId);
+    // The old/superseded document is never itself an eligible node (that is
+    // what supersession means) -- upsert a minimal tombstone so the edge
+    // resolves to something displayable instead of a dangling id.
+    upsertNode(to, 'document', str(row, 'old_document_title') || oldDocumentId, {
+      document_id: oldDocumentId,
+      title: str(row, 'old_document_title'),
+      tombstoned: true,
+    });
+    touch(from);
+    touch(to);
+    edges.push({
+      id: `SUPERSEDES:${newDocumentId}:${oldDocumentId}`,
+      edge_type: 'SUPERSEDES',
+      from,
+      to,
+      reviews: [],
+      quotes: [],
+      quote_unresolved: false,
+      navigation_signals: { semantic_similarity: null },
+      automatic_match: null,
+    });
+  }
+
+  for (const row of rows.edgesRetractedBy) {
+    const documentId = str(row, 'document_id');
+    const eventId = str(row, 'lifecycle_event_id');
+    const from = documentNodeId(documentId);
+    const to = `lifecycle_event:${eventId}`;
+    upsertNode(from, 'document', str(row, 'document_title') || documentId, {
+      document_id: documentId,
+      title: str(row, 'document_title'),
+      tombstoned: true,
+    });
+    upsertNode(to, 'event', `Retraction: ${str(row, 'reason') || eventId}`, row);
+    touch(from);
+    touch(to);
+    edges.push({
+      id: `RETRACTED_BY:${documentId}:${eventId}`,
+      edge_type: 'RETRACTED_BY',
+      from,
+      to,
+      reviews: [],
+      quotes: [],
+      quote_unresolved: false,
+      navigation_signals: { semantic_similarity: null },
+      automatic_match: null,
+    });
+  }
+
   const nodes = Array.from(nodesById.values()).map((node) => ({
     ...node,
     navigation_degree: degree.get(node.id) ?? 0,
   }));
 
-  return {
-    nodes,
-    edges,
-    deferred: {
-      supersedes_retracted_by:
-        'Not shown. A retracted or superseded document has no node in this projection at all (P5 scope).',
-    },
-  };
+  return { nodes, edges };
 }

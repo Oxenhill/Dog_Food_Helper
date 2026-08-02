@@ -203,3 +203,60 @@ Bad calibration drafts were removed only while they were fresh, queued, and unre
 - Do not change recommendation weights.
 
 At this checkpoint, the architecture is functional but deliberately not deployed: the owner edit/review experience and final quality audit must be completed first.
+
+## Behive assessment and ideas to build locally
+
+Decision recorded 2026-07-29: do not adopt `qa10devteam/behive` as a dependency,
+research authority, crawler, or food-population system. Its public implementation
+does not meet this project's provenance, independent-corroboration, crawl-policy,
+literal-quote, deterministic-grading, or human-review requirements. In particular,
+its numerical "quality" score measures characteristics of the writing rather than
+the truth of a claim, and its crawler's bypass behaviour is incompatible with the
+existing robots.txt and Terms-of-Service gates.
+
+Useful ideas may be rebuilt inside the existing TypeScript/Supabase architecture:
+
+1. **Background research missions.** Keep explicit queued/running/partial/failed/
+   completed states, stage timings, costs, and audit events on the existing
+   `research_ingestion_jobs` workflow.
+2. **Stage-specific model routing.** Allow separately configured discovery,
+   relevance, drafting, and synthesis models, while preserving the rule that model
+   output is offline, queued, and never a runtime decision or database fact.
+3. **Structured source registry.** Maintain a small, versioned registry of approved
+   structured literature APIs with rate limits and capabilities. This registry does
+   not override species, access, retraction, licence, robots.txt, or ToS gates.
+4. **Progress and cost telemetry.** Expose stage progress, source counts, retained
+   candidates, rejected candidates, token cost, and deterministic rejection reasons
+   in the admin research UI.
+5. **Research graph.** Build a read model from approved records rather than a second
+   source of truth. Initial node types should be `document`, `study_family`,
+   `claim`, `evidence_cluster`, `ingredient`, `nutrient`, `processing_method`,
+   `condition`, and `outcome`. Initial edge types should be `SUPPORTS`,
+   `CAUTIONS_AGAINST`, `DERIVED_FROM`, `MEMBER_OF`, `SAME_STUDY_FAMILY`,
+   `APPLIES_TO`, `CONCERNS`, `SUPERSEDES`, and `RETRACTED_BY`.
+
+Graph rules:
+
+- Only active, human-reviewed claims and clusters may appear in the production
+  graph. Draft and queued material may appear only in an isolated admin preview.
+- Every graph edge must resolve to the underlying claim, literal quote, document,
+  and review metadata. An inferred visual relationship is never evidence.
+- Corroboration is determined by the existing study-family and review rules, not by
+  graph degree, repeated URLs, text similarity, or the number of domains.
+- Retraction or supersession must remove the affected production edges in the same
+  transaction that changes evidence status.
+- The first implementation should use relational tables/views and recursive SQL in
+  Supabase. Neo4j or another graph database should be considered only after a
+  measured query or visualisation need cannot be met safely in Postgres.
+- The graph may explain and navigate reviewed evidence. It must not independently
+  change recommendation weights, activate claims, populate food composition, or
+  infer missing product data.
+
+Suggested delivery order:
+
+1. Finish the existing owner edit/review experience and quality audit.
+2. Add mission telemetry and a versioned structured-source registry.
+3. Define a deterministic graph projection view over the approved evidence tables.
+4. Add an admin-only graph explorer with node-to-quote drill-down.
+5. Validate retraction, supersession, privacy, and inactive-cluster behaviour.
+6. Consider a user-facing evidence map only after the reviewed projection is stable.

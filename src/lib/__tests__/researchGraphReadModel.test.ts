@@ -123,6 +123,27 @@ const baseRows: ResearchGraphViewRows = {
       detected_at: '2026-08-02T00:00:00Z',
     },
   ],
+  edgesSupersedes: [
+    {
+      edge_type: 'SUPERSEDES',
+      new_document_id: 'doc-1',
+      old_document_id: 'doc-3',
+      old_document_title: 'Old Study (superseded)',
+      reason: 'Superseded by a larger follow-up study.',
+      occurred_at: '2026-08-02T00:00:00Z',
+    },
+  ],
+  edgesRetractedBy: [
+    {
+      edge_type: 'RETRACTED_BY',
+      document_id: 'doc-4',
+      document_title: 'Retracted Study',
+      lifecycle_event_id: 42,
+      reason: 'Retraction reported by Crossref/Retraction Watch.',
+      actor_type: 'system',
+      occurred_at: '2026-08-02T00:00:00Z',
+    },
+  ],
   clusterMembersRaw: [
     { cluster_id: 'cluster-1', claim_id: 'claim-1', semantic_similarity: 0.92 },
   ],
@@ -223,9 +244,25 @@ test('SAME_STUDY_FAMILY edges carry their automatic match basis and no human rev
   });
 });
 
-test('no supersession edge type is ever produced, and its absence is documented, not silent', () => {
+test('SUPERSEDES and RETRACTED_BY edges (P5) resolve to tombstoned documents, not dangling ids', () => {
   const graph = assembleResearchGraph(baseRows);
-  const forbiddenTypes = new Set(['SUPERSEDES', 'RETRACTED_BY']);
-  assert.equal(graph.edges.some((edge) => forbiddenTypes.has(edge.edge_type)), false);
-  assert.match(graph.deferred.supersedes_retracted_by, /P5/);
+
+  const supersedes = graph.edges.find((edge) => edge.edge_type === 'SUPERSEDES');
+  assert.ok(supersedes);
+  assert.equal(supersedes!.from, 'document:doc-1');
+  assert.equal(supersedes!.to, 'document:doc-3');
+  const oldDocNode = graph.nodes.find((node) => node.id === 'document:doc-3');
+  assert.ok(oldDocNode, 'the old/superseded document must still resolve to a (tombstoned) node');
+  assert.equal(oldDocNode!.data.tombstoned, true);
+  assert.deepEqual(supersedes!.reviews, []);
+
+  const retractedBy = graph.edges.find((edge) => edge.edge_type === 'RETRACTED_BY');
+  assert.ok(retractedBy);
+  assert.equal(retractedBy!.from, 'document:doc-4');
+  const retractedDocNode = graph.nodes.find((node) => node.id === 'document:doc-4');
+  assert.ok(retractedDocNode, 'a pure retraction must still resolve to a (tombstoned) document node');
+  assert.equal(retractedDocNode!.data.tombstoned, true);
+  const eventNode = graph.nodes.find((node) => node.id === retractedBy!.to);
+  assert.ok(eventNode, 'RETRACTED_BY must resolve to an event node, not a document, since a pure retraction has no replacement document');
+  assert.equal(eventNode!.kind, 'event');
 });

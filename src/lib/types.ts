@@ -401,6 +401,23 @@ export interface ResearchChunk {
   // 1536-length vector, never something the client needs to see/hold.
 }
 
+// P5: the row shape propagate_research_document_status_change returns —
+// the append-only audit/tombstone event for a retraction or supersession.
+export interface ResearchEvidenceLifecycleEvent {
+  id: number;
+  document_id: string;
+  event_type: 'retracted' | 'superseded';
+  reason: string;
+  actor_type: 'system' | 'owner' | 'worker';
+  actor_id: string | null;
+  replacement_document_id: string | null;
+  affected_claim_ids: string[];
+  affected_cluster_ids: string[];
+  promoted_primary_document_id: string | null;
+  orphaned_duplicate_document_ids: string[];
+  occurred_at: string;
+}
+
 export type ResearchTopicGroup = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G';
 export type ResearchSourceName = 'europe_pmc' | 'pubmed' | 'crossref' | 'wsava' | 'fediaf';
 export type ResearchSpecies = 'dog' | 'cat' | 'human' | 'rodent' | 'other';
