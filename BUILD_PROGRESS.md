@@ -1,9 +1,21 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Research Layer P3 deterministic graph projection (2026-08-02, local only, latest)
+## Research Layer P3 deterministic graph projection (2026-08-02, production, latest)
 
-**Not applied to production.** Candidate migration
-`supabase/migrations/20260802170000_research_graph_projection.sql` adds nine
+Released to production from exact application commit
+`7b50c55643b6a17f1cede3d9a4e0dc98405f679c`. Supabase project
+`ysffyuohwvdifvbopfcm` recorded migration
+`20260802161032 research_graph_projection` exactly once. Vercel project
+`dog-food-helper` deployed it as `dpl_9j2vaUdgNKgnH9XBdUqQniunncbg`, target
+`production`, reaching `READY`; `https://dog-food-helper.vercel.app` resolves
+to it. Homepage returned HTTP 200; unauthenticated
+`/api/admin/research/missions` and `/api/admin/research/configurations`
+returned fail-closed HTTP 404 JSON (there is no P3-specific API route yet --
+these are the pre-existing P0/P1 admin endpoints, re-checked as a general
+fail-closed sanity check alongside this release).
+
+Migration `supabase/migrations/20260802170000_research_graph_projection.sql`
+(local filename) adds nine
 read-only views (no new tables, no new data) over the existing
 `research_documents` / `research_claims` / `research_evidence_clusters` /
 `research_evidence_cluster_members` / `research_cluster_applicability` tables,
@@ -71,13 +83,27 @@ full test suite 296/296 (including
 `tsc --noEmit` clean, optimized production build clean, `git diff --check`
 clean.
 
-**Owner review still required before production:** per the same phase-gate
-pattern P0/P1/P2 each used (the 2026-08-01 "build it" approval covers the
-phased target, not a standing production-apply authorization), this migration
-has not been applied to the live Supabase project
-(`ysffyuohwvdifvbopfcm`) and has not been committed. P4 (admin graph
-explorer) is the next phase and has no UI consumer for these views yet, so
-nothing currently queries them even once applied.
+**Owner approved production release on 2026-08-02**, matching the same
+phase-gate pattern P0/P1/P2 each used. Live verification against
+`ysffyuohwvdifvbopfcm`: all nine `research_graph_*` views exist; grants show
+zero `anon`/`authenticated`/`PUBLIC` privileges on any of them (`postgres`
+and `service_role` retain the schema's normal owner/backend privileges,
+matching every other table in this project — no browser-reachable role can
+read them); protected counts are unchanged (30 documents, 695 chunks, 88
+centroids, 2,282 relevance rows, 19 ingestion jobs, 22 cluster memberships,
+12 applicability rows, 368 embeddings, 0 score-cache/queue rows, 0 missions,
+0 provider calls). Security advisors are byte-identical to the pre-release
+baseline: 34 findings (27 info, 5 warn, 2 error) — the same two pre-existing
+unrelated errors (`manufacturer_entities`, `terms_clause_patterns` RLS
+disabled) remain, untouched, per standing instruction not to silently
+remediate unrelated schema. Performance advisors are also byte-identical: 91
+findings (78 info, 13 warn). This is a cleaner result than P0/P1/P2, which
+each added a few expected informational notices — plain views with no new
+tables or indexes introduce nothing for the linter to flag.
+
+P4 (admin graph explorer) is the next phase; no UI or API route consumes
+these views yet, so nothing changed about what a browser can reach even
+though the migration is now live.
 
 ## Research Layer P2 persisted provider usage and deterministic caps (2026-08-02, production)
 

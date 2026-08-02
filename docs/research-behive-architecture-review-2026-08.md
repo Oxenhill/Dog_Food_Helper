@@ -398,9 +398,43 @@ the existing `recommendation retrieval does not depend on mission
 control-plane tables` test), `tsc --noEmit`, and an optimized production
 build, all clean. `git diff --check` is clean.
 
-Per the same phase-gate pattern P0/P1/P2 each required, this stops at local
-implementation. The 2026-08-01 "build it" approval covers the phased target,
-not a standing production-apply authorization — applying this migration to
-`ysffyuohwvdifvbopfcm`, committing it, and deploying it each need their own
-explicit owner approval, matching every prior phase's release-record
-precedent above.
+Per the same phase-gate pattern P0/P1/P2 each required, this stopped at local
+implementation until the 2026-08-01 "build it" approval was followed by a
+separate, explicit 2026-08-02 owner approval for commit, push, production
+migration, and deployment.
+
+### P3 production release record
+
+The owner approved P3 for production on 2026-08-02. Exact application commit
+`7b50c55643b6a17f1cede3d9a4e0dc98405f679c` was committed and pushed first.
+The migration was applied to Supabase project `ysffyuohwvdifvbopfcm` as
+`20260802161032 research_graph_projection`, appearing exactly once in
+production history.
+
+All nine `research_graph_*` views exist. Grants confirm zero
+`anon`/`authenticated`/`PUBLIC` privileges on any of them; `postgres` and
+`service_role` hold the normal owner/backend privilege set, the same pattern
+every other table in this schema already uses. Protected counts are
+unchanged: 30 documents, 695 chunks, 88 centroids, 2,282 relevance rows, 19
+ingestion jobs, 22 cluster memberships, 12 applicability rows, 368
+embeddings, 0 score-cache/queue rows, 0 missions, 0 provider calls.
+
+Security and performance advisors are byte-identical to the pre-release
+baseline — 34 security findings (27 info, 5 warning, 2 error) and 91
+performance findings (78 info, 13 warning), with the finding list itself
+unchanged, not just the totals. No `research_graph_*` finding of any kind
+appears (confirmed by searching the full advisor payload). This migration
+introduced zero new advisor findings, unlike P0/P1/P2, which each added a
+small number of expected informational notices — nine read-only views over
+existing tables give the linter nothing new to flag.
+
+Application commit `7b50c55643b6a17f1cede3d9a4e0dc98405f679c` was deployed to
+Vercel project `dog-food-helper` as deployment
+`dpl_9j2vaUdgNKgnH9XBdUqQniunncbg`, target `production`, reaching `READY`;
+`https://dog-food-helper.vercel.app` resolves to it. The homepage returned
+HTTP 200. `/api/admin/research/missions` and
+`/api/admin/research/configurations` (the existing P0/P1 admin endpoints —
+P3 added no API route of its own) returned fail-closed HTTP 404 JSON
+unauthenticated, matching every prior release. No application code changed
+in this release, so this was a re-verification of existing behaviour, not a
+new code path.
