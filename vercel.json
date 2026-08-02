@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/gs1-verification",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/research-discovery",
+      "schedule": "0 7 1 * *"
     }
   ]
 }

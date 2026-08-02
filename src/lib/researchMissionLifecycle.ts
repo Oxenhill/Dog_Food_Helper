@@ -70,12 +70,15 @@ async function attachControlPlane(data: unknown): Promise<ResearchMissionJob> {
   };
 }
 
+export type ResearchMissionRequesterActorType = 'owner' | 'system';
+
 export async function startResearchMissionJob(input: {
   missionType: ResearchMissionType;
   objective: string;
   stageKey: ResearchMissionStageKey;
   jobType: ResearchMissionJobType;
-  requestedBy: string;
+  requestedBy: string | null;
+  requestedByActorType?: ResearchMissionRequesterActorType;
   jobInput?: Record<string, unknown>;
   initialStatus?: ResearchMissionInitialStatus;
   gatewayModel?: string | null;
@@ -91,6 +94,7 @@ export async function startResearchMissionJob(input: {
     p_initial_status: input.initialStatus ?? 'running',
     p_gateway_model: input.gatewayModel ?? null,
     p_idempotency_key: input.idempotencyKey ?? null,
+    p_requested_by_actor_type: input.requestedByActorType ?? 'owner',
   });
   if (error) throw error;
   return attachControlPlane(data);

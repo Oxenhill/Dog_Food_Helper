@@ -48,7 +48,11 @@ test('mission lifecycle migration is additive, private, and append-only', () => 
 
 test('current research operations use the shared mission lifecycle', () => {
   for (const path of [
-    'src/app/api/admin/research/discovery/route.ts',
+    // discovery/route.ts calls the lifecycle indirectly through
+    // runDiscoveryMission (see researchDiscoveryMission.ts below), shared
+    // with the P6 recurring-discovery cron route so there is one acquisition
+    // code path, not two.
+    'src/lib/researchDiscoveryMission.ts',
     'src/app/api/admin/research/ingestion/route.ts',
     'src/app/api/admin/research/processing/route.ts',
     'scripts/researchBrainPopulate.ts',
@@ -61,6 +65,16 @@ test('current research operations use the shared mission lifecycle', () => {
       /\.from\(['"]research_ingestion_jobs['"]\)\s*\n?\s*\.insert\(/
     );
   }
+
+  const discoveryRoute = readFileSync(
+    join(process.cwd(), 'src/app/api/admin/research/discovery/route.ts'),
+    'utf8'
+  );
+  assert.match(discoveryRoute, /runDiscoveryMission/);
+  assert.doesNotMatch(
+    discoveryRoute,
+    /\.from\(['"]research_ingestion_jobs['"]\)\s*\n?\s*\.insert\(/
+  );
 });
 
 test('mission lifecycle migration retains attempt history and prevents cross-mission links', () => {
