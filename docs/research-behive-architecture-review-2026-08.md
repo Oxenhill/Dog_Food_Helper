@@ -1,6 +1,6 @@
 # Bowl Research Layer: Behive-informed architecture review
 
-**Status:** P0 and P1 released; P2 implemented and verified locally, awaiting production approval
+**Status:** P0, P1, and P2 released to production
 **Reviewed:** 2026-08-01
 **Behive implementation reviewed:** public commit [`c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd`](https://github.com/qa10devteam/behive/tree/c41ff5b2efcc7ddd056f493c2b2d44807b2d80fd)
 **Bowl baseline:** `9ce3be3c46b09709aac4f9561a2b363f2e8c63b3`
@@ -316,7 +316,48 @@ keys. Supabase `db lint --level warning --fail-on warning` returned no findings.
 The full 296-test suite, TypeScript, optimized production build, and
 `git diff --check` pass. The disposable database and local preview were removed.
 
-Production remains unchanged pending an explicit owner release decision. It is
-still on P1 migration `20260801221635` and Vercel deployment
-`dpl_8aKEfQ5L8So59mo3mJD82vcvDAqx`; all four P2 tables are absent and current
-mission/stage/event counts are zero.
+### P2 production release record
+
+The owner approved P2 for production on 2026-08-02. Exact application commit
+`a27b75fcab6015456ba32f38cbd14845d68ee514` was pushed before database work.
+The committed migration was verified as 54,922 bytes with SHA-256
+`410b9a81694c3aa7dd0da329bc80e17cb8a3774152d30835b8b1f388fe7d697b`,
+then applied to Supabase project `ysffyuohwvdifvbopfcm` as
+`20260802065908 research_provider_usage_and_budget_caps`. It appears exactly
+once in production history.
+
+Production contains two usage-estimate rate versions, one mission budget-policy
+version, seven stage-cap versions, and zero provider calls. Missions, stage
+attempts, and mission events remain zero. RLS is enabled with no public policy
+on all four P2 tables; anon/authenticated table and RPC access is absent;
+service-role access is limited to the required reads, call insert/update, and
+reservation/completion RPCs; completed calls and control versions are protected
+by immutable/append-preserving triggers; exact restrictive foreign keys and
+their covering indexes are present.
+
+Every one of the 66 pre-existing public-table counts remained unchanged. The
+protected baseline is 30 research documents, 695 chunks, 88 topic centroids,
+2,282 document-relevance rows, 19 ingestion jobs, 22 cluster memberships, 12
+applicability rows, 368 semantic embeddings, and zero research score-cache and
+score-queue rows. Food, dog, private-report, evidence, recommendation, and
+scoring counts were unchanged; all 30 saved recommendation items still have
+zero research ranking contribution.
+
+The immediate pre-release advisor baseline was 30 security findings (23 info,
+5 warning, 2 error) and 82 performance findings (69 info, 13 warning). The
+final result is 34 security findings (27 info, 5 warning, 2 error) and 91
+performance findings (78 info, 13 warning). The complete delta is informational:
+four deliberate private-table `RLS enabled, no policy` notices and nine unused
+new-index notices. No P2 warning or error was introduced.
+
+Vercel production deployment `dpl_2KzqWYAxMLa2A1u5DgEhh87Q9ZZv` reached
+`READY`, and `https://dog-food-helper.vercel.app` resolves to it. The homepage
+returned HTTP 200; unauthenticated mission/configuration endpoints returned
+fail-closed HTTP 404 JSON. An existing authenticated owner session loaded the
+admin research page at desktop and mobile widths with no horizontal overflow or
+console errors. With the required zero-mission baseline, no paid call or mission
+was created merely to populate attempts/events; persisted cursor polling,
+separate actual/estimate presentation, timing/caps/halt UI, and the no-SSE
+boundary remain covered by the released implementation and tests. The owner's
+pre-existing 57-line `docs/research-brain-handoff-2026-07-29.md` edit was not
+staged, committed, or included in the deployment.

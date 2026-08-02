@@ -1,10 +1,14 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Research Layer P2 persisted provider usage and deterministic caps (2026-08-01, local approval gate)
+## Research Layer P2 persisted provider usage and deterministic caps (2026-08-02, production)
 
-P2 is implemented and verified locally only. No Supabase migration has been
-applied and no Vercel deployment has been created. The candidate migration is
-`20260801223514_research_provider_usage_and_budget_caps.sql`.
+P2 was released from exact application commit
+`a27b75fcab6015456ba32f38cbd14845d68ee514`. Supabase project
+`ysffyuohwvdifvbopfcm` records migration
+`20260802065908 research_provider_usage_and_budget_caps` exactly once. Vercel
+project `dog-food-helper` deployed it as
+`dpl_2KzqWYAxMLa2A1u5DgEhh87Q9ZZv`; the deployment reached `READY` and the
+production alias `https://dog-food-helper.vercel.app` resolves to it.
 
 The slice adds immutable estimate-rate, mission-budget, and stage-cap versions;
 one append-preserving row per provider call; exact links to mission, stage
@@ -30,14 +34,40 @@ route/config/rate links, continuous event sequencing, immutable completed rows,
 RLS/privileges, and covering indexes. Supabase `db lint` returned no schema
 errors or warnings. The disposable runtime and local preview were removed.
 
-Final local verification: 296/296 tests passed, `tsc --noEmit` passed,
-production build exited 0, and `git diff --check` passed. Visual navigation
-reached the normal sign-in gate; authentication was not bypassed. Production
-remains on migration `20260801221635 research_model_routing_and_literature_registry`
-and deployment `dpl_8aKEfQ5L8So59mo3mJD82vcvDAqx`; mission, stage, and event
-counts remain zero and all four P2 tables remain absent. Current production
-advisor baseline is unchanged at 30 security findings (23 info, 5 warning,
-2 error) and 84 performance findings (71 info, 13 warning).
+Release-gate verification passed: 296/296 tests, `tsc --noEmit`, the optimized
+production build, and `git diff --check`. The exact committed migration was
+54,922 bytes with SHA-256
+`410b9a81694c3aa7dd0da329bc80e17cb8a3774152d30835b8b1f388fe7d697b`
+before it was sent to Supabase. Production seeds are two estimate-rate rows,
+one budget policy, seven stage caps, and zero provider calls. Missions, stages,
+and events remain zero.
+
+All 66 pre-existing public-table counts were unchanged across the release. The
+protected research baseline remains 30 documents, 695 chunks, 88 topic
+centroids, 2,282 relevance rows, 19 ingestion jobs, 22 evidence-cluster
+memberships, 12 applicability rows, 368 semantic embeddings, and zero score
+cache/queue rows. Food, dog, private-report, evidence, recommendation, and
+scoring counts were also unchanged. Existing saved recommendation items retain
+zero research ranking contribution.
+
+The immediate pre-release advisor recheck was 30 security findings (23 info,
+5 warning, 2 error) and 82 performance findings (69 info, 13 warning), two
+informational findings lower than the earlier local record before P2 changed
+production. The final advisor result is 34 security findings (27 info, 5
+warning, 2 error) and 91 performance findings (78 info, 13 warning): exactly
+four expected RLS-enabled/no-policy informational notices for the deliberately
+private P2 tables and nine expected unused-index informational notices for new
+P2 access paths. No warning or error was added.
+
+Production returned HTTP 200 for the homepage and fail-closed HTTP 404 JSON for
+unauthenticated mission and configuration endpoints. An existing owner session
+loaded `/admin/research` at desktop and mobile widths with the P2 mission panel,
+zero horizontal overflow, and no console errors. Production contains no mission
+rows, so live attempt/event/call rendering and cursor advancement were not
+manufactured for smoke testing; the persisted polling path remains covered by
+the verified implementation/tests and no SSE path exists. The pre-existing
+57-line owner edit in `docs/research-brain-handoff-2026-07-29.md` remained
+unstaged, uncommitted, and excluded from the deployment.
 
 ## Research Layer Gate 4 active-claim runtime integration (2026-07-29, latest)
 
