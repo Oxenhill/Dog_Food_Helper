@@ -1,5 +1,84 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer P3 deterministic graph projection (2026-08-02, local only, latest)
+
+**Not applied to production.** Candidate migration
+`supabase/migrations/20260802170000_research_graph_projection.sql` adds nine
+read-only views (no new tables, no new data) over the existing
+`research_documents` / `research_claims` / `research_evidence_clusters` /
+`research_evidence_cluster_members` / `research_cluster_applicability` tables,
+per the P3 acceptance criteria in
+`docs/research-behive-architecture-review-2026-08.md:233-236`:
+`research_graph_documents`, `research_graph_claims`,
+`research_graph_clusters` (nodes); `research_graph_concept_nodes` (derived
+ingredient/nutrient/ingredient_class/processing_method/biome_marker/
+condition/clinical_marker/outcome_metric/general_health nodes, distinct
+(type, key) pairs, not a separate identity table);
+`research_graph_edges_derived_from`, `research_graph_edges_member_of`,
+`research_graph_edges_direction` (SUPPORTS/CAUTIONS_AGAINST),
+`research_graph_edges_concerns`, `research_graph_edges_applies_to`.
+
+Eligibility is uniform across every view: document not retracted, not
+superseded, `evidence_scope = 'canine_direct'` (Group-G veterinary-methodology
+appraisal documents/claims are excluded — they never make a biological claim
+about dogs); claim `status = 'active'`; cluster `status = 'active'`. All views
+are `security_invoker = true`; `anon`/`authenticated`/`PUBLIC` are revoked on
+every view; only `service_role` has `SELECT`. No table, trigger, function, or
+application code was modified — this migration is purely additive.
+
+**Deliberately deferred, not missing by oversight:**
+- `SAME_STUDY_FAMILY` — no `study_family` identity exists anywhere in the
+  schema. `research_documents` deduplicates by unique DOI/source-record, which
+  is a different guarantee than "same underlying trial or population."
+  Modelling that correctly is a data-model decision, not a query; building a
+  synthetic grouping here would misrepresent independence between studies.
+  Needs its own design decision before a later phase.
+- `SUPERSEDES` / `RETRACTED_BY` — explicitly scoped to P5 ("retraction and
+  supersession validation") in the architecture doc. A retracted/superseded
+  document has no node in this projection at all, so there is nothing yet to
+  attach a transition edge to.
+
+**Validated in a disposable Postgres 17 container** (`supabase/postgres`
+image, isolated from both the real Supabase project and the unrelated local
+Supabase stack already running for the sibling Dog Smart Studio repo).
+Because the migration history in this repo does not include the pre-
+`supabase/migrations` baseline (`foods`, `dogs`, etc. predate the folder — the
+same gap the existing `supabase/tests/p2_minimal_research_fixture.sql`
+already worked around), validation used a new
+`supabase/tests/p3_minimal_research_fixture.sql` reconstructing the exact
+final-state shape of the claims/clusters/documents schema, then applied the
+real P3 migration on top, then ran
+`supabase/tests/p3_graph_projection.sql`. That file plants one fully eligible
+document/claim/cluster/membership/applicability chain plus one ineligible
+example of every exclusion path (draft claim, rejected claim, queued claim, a
+claim whose document was superseded *after* the claim was already active —
+proving the join-based eligibility check, not just the status column, does
+the work — a veterinary_methodology document/claim, a queued cluster, a
+rejected cluster, and a neutral-direction cluster) and asserts by count and by
+id that only the eligible rows appear in every node/edge view, that the
+neutral cluster produces no directional edge, and that no ineligible
+claim's subject/outcome value leaks into `research_graph_concept_nodes`. A
+separate assertion block confirms zero `anon`/`authenticated`/`PUBLIC` grants
+and exactly nine `service_role` `SELECT` grants across the nine views. All
+assertions passed. The migration was also reapplied a second time against the
+same database with no error, confirming `create or replace view` idempotency.
+The disposable container was removed after validation.
+
+**Ranking stability:** no application code (`.ts`/`.tsx`) was touched, so
+ranking/recommendation output is unchanged by construction. Confirmed live:
+full test suite 296/296 (including
+`recommendation retrieval does not depend on mission control-plane tables`),
+`tsc --noEmit` clean, optimized production build clean, `git diff --check`
+clean.
+
+**Owner review still required before production:** per the same phase-gate
+pattern P0/P1/P2 each used (the 2026-08-01 "build it" approval covers the
+phased target, not a standing production-apply authorization), this migration
+has not been applied to the live Supabase project
+(`ysffyuohwvdifvbopfcm`) and has not been committed. P4 (admin graph
+explorer) is the next phase and has no UI consumer for these views yet, so
+nothing currently queries them even once applied.
+
 ## Research Layer P2 persisted provider usage and deterministic caps (2026-08-02, production)
 
 P2 was released from exact application commit

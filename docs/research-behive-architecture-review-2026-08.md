@@ -361,3 +361,46 @@ separate actual/estimate presentation, timing/caps/halt UI, and the no-SSE
 boundary remain covered by the released implementation and tests. The owner's
 pre-existing 57-line `docs/research-brain-handoff-2026-07-29.md` edit was not
 staged, committed, or included in the deployment.
+
+### P3 local implementation (not yet production-gated)
+
+Candidate migration
+`supabase/migrations/20260802170000_research_graph_projection.sql`
+implements P3 without applying it to production or committing it. It adds
+nine read-only views only (`research_graph_documents`,
+`research_graph_claims`, `research_graph_clusters`,
+`research_graph_concept_nodes`, `research_graph_edges_derived_from`,
+`research_graph_edges_member_of`, `research_graph_edges_direction`,
+`research_graph_edges_concerns`, `research_graph_edges_applies_to`) —
+`security_invoker`, no `anon`/`authenticated`/`PUBLIC` grant, `service_role`
+`SELECT` only. Eligibility is enforced by the same rule everywhere: document
+not retracted/not superseded/`canine_direct` scope, claim `status='active'`,
+cluster `status='active'`. `SAME_STUDY_FAMILY` and `SUPERSEDES`/
+`RETRACTED_BY` are explicitly not built (see BUILD_PROGRESS.md P3 entry for
+why — no study-family identity exists yet, and supersession/retraction
+propagation is P5's job, not P3's).
+
+Validated in a disposable Supabase-image Postgres 17 container using a new
+minimal fixture (`supabase/tests/p3_minimal_research_fixture.sql`,
+reconstructing final-state schema the same way the existing
+`p2_minimal_research_fixture.sql` does) plus assertions in
+`supabase/tests/p3_graph_projection.sql`: exactly the eligible
+document/claim/cluster/membership/applicability rows appear in every view;
+every exclusion path (draft, rejected, queued, superseded-after-active-via-
+join not just status, veterinary_methodology scope, queued cluster, rejected
+cluster, neutral-direction cluster) is individually proven absent; no
+ineligible concept value leaks into the concept-node union; grants are
+exactly zero for anon/authenticated/PUBLIC and nine for service_role. The
+migration was reapplied a second time with no error (idempotent). No
+application code was touched, so ranking/recommendation output is unchanged
+by construction; confirmed live with the full 296/296 test suite (including
+the existing `recommendation retrieval does not depend on mission
+control-plane tables` test), `tsc --noEmit`, and an optimized production
+build, all clean. `git diff --check` is clean.
+
+Per the same phase-gate pattern P0/P1/P2 each required, this stops at local
+implementation. The 2026-08-01 "build it" approval covers the phased target,
+not a standing production-apply authorization — applying this migration to
+`ysffyuohwvdifvbopfcm`, committing it, and deploying it each need their own
+explicit owner approval, matching every prior phase's release-record
+precedent above.
