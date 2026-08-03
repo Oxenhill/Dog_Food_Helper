@@ -3005,6 +3005,75 @@ the full pre-existing test suite passing unmodified. Correlation history
 - Review the decision-trace output above and confirm the Gate 5 numbers read as intended before ever
   flipping `research_scoring_enabled` to `true` for real dog owners.
 - Decide when (if ever) to build the client-facing with/without view (deferred item 1).
-- Decide whether/when to scope the "probe" longitudinal-hypothesis feature (deferred item 2).
+- Deferred item 2 (the "probe") is now built — see the section directly below.
 - This branch has real, verified changes but was not committed or pushed — standing permission from the
   P7 session does not carry forward automatically per this task's brief; ask again when ready to ship.
+
+## Probe — fleet-wide ingredient signal vs. literature (2026-08-03)
+
+**Status:** implemented, tested, and verified live against real data on branch `codex/mobile-pack-capture`.
+Not committed/pushed (this task's brief did not carry forward commit/push permission either — ask again).
+
+**What changed and why.** Direct follow-on to Gate 5. Owner framing that started this: "the dogs data is
+also a research layer... their data is possibly the most valuable of all because its real life." Gate 5 let
+literature evidence move a food's score; this closes the other half of the loop by comparing what the
+literature says about an ingredient against what the whole dog fleet's real logged outcomes say about that
+same ingredient — surfaced to admin, never written back into scoring. Design proposal (mechanism, sample
+thresholds, page location) was put to the owner before any code was written; all three recommended options
+were approved as proposed.
+
+**Mechanism** (`src/lib/fleetIngredientSignal.ts`, new):
+- **Unit of comparison:** one canonical ingredient (`canonicalIngredientKey`, the same normalizer
+  `activeClaimRetrieval.ts` already uses for research-subject matching — strips parenthetical
+  percentages/footnotes so "Chicken (26%)" and "chicken" join correctly).
+- **Fleet side:** groups `ingredient_outcome_signals` across every dog. At most one row counts per
+  (dog, ingredient, metric) — `food_switch` evidence preferred over `single_food_period` when a dog has
+  both, same preference `correlationScoring.ts` applies per-dog. Confidence is gated on DISTINCT DOG COUNT,
+  not raw row count, so one chatty dog can't fake a fleet pattern: <5 dogs hidden entirely, 5-9
+  `low_sample`, 10-24 `preliminary`, 25+ `established` (`FLEET_CONFIDENCE_THRESHOLDS`, tunable, scaled up
+  from `correlationEngine.ts`'s per-dog 3/6/16).
+- **Literature side:** every active, reviewed claim whose subject is an ingredient, run through the exact
+  same `computeResearchScoringTrace()` Gate 5 uses per food — just grouped by ingredient across the whole
+  corpus instead of matched to one food's declared composition. No per-dog condition/life-stage gating
+  (this answers "what does literature broadly say", not "would this apply to one specific dog").
+- **Combine:** each ingredient gets an `agrees` / `diverges` / `inconclusive` / `fleet_only` /
+  `literature_only` label, sorted divergent-and-largest-sample first (most actionable).
+- **Surface-only, confirmed non-negotiable:** no function here writes to `researchScoringPolicy.ts`, any
+  claim's grade/direction, or any scoring path. `hardFilter.ts` is not imported and unreachable from this
+  module.
+
+**New surface:** `/admin/research/fleet-signal`, 9th `ResearchNav` entry ("Fleet signal — Literature vs.
+real dog outcomes"), backed by `GET /api/admin/research/fleet-signal`
+(`src/app/api/admin/research/fleet-signal/route.ts`). Admin-only via `requireAdmin`. No client-facing
+exposure, matching the established admin-first pattern.
+
+**Verification:**
+- `tsc --noEmit`: clean.
+- `npm test`: 349/349 passing, including 7 new tests in
+  `src/lib/__tests__/fleetIngredientSignal.test.ts` covering the confidence-tier boundaries, the fleet
+  sample floor hiding small patterns entirely, food_switch-over-period preference, canonical-key grouping,
+  direction classification (including the neutral band), and null-strength rows being ignored.
+- `npm run build`: clean, both new routes registered.
+- `git diff --check`: clean.
+- **Live browser verification**, per the established throwaway-admin-QA pattern: signed up
+  `fleet-signal-qa-throwaway@example.com` through the real `/signup` UI, promoted via one direct SQL
+  statement, loaded `/admin/research/fleet-signal` — nav entry present, page rendered, API returned 200,
+  no console errors. Confirmed against live DB data (Supabase project `Dog_Food_Helper`,
+  `ysffyuohwvdifvbopfcm`) that the empty-state result shown was CORRECT, not a bug: `ingredient_outcome_signals`
+  has 0 rows (no dog fleet data exists yet in this environment) and the one active `subject_type='ingredient'`
+  claim in the corpus (`green lentil`, taurine finding) has `direction='neutral'`, which both Gate 5 and this
+  page correctly treat as inert and exclude. Throwaway account deleted afterward
+  (`user_profiles`/`auth.users` rows removed).
+
+**Deferred, not built:** client-facing exposure of fleet-vs-literature agreement — stays admin-only, same
+open question as Gate 5's deferred item 1. No automatic write-back from fleet pattern into scoring weight
+was built or proposed; that remains a human-in-the-loop decision by design (owner's explicit default, matching
+CLAUDE.md's no-silent-edit AI-governance principle).
+
+**Needs owner input:**
+- This module cannot be exercised meaningfully until real dog fleet data exists (`ingredient_outcome_signals`
+  is currently empty in the connected project) — worth revisiting once there's a working population of logged
+  dogs.
+- Decide whether/when a `diverges` result should trigger any concrete editorial action (e.g. flagging a
+  claim for re-review) — today it is purely descriptive.
+- This branch has real, verified changes but was not committed or pushed — ask again when ready to ship.

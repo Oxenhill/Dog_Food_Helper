@@ -12,6 +12,7 @@ const ITEMS: { href: string; label: string; hint: string }[] = [
   { href: '/admin/research/graph', label: 'Graph canvas', hint: 'Spatial map — grouping & time' },
   { href: '/admin/research/retractions', label: 'Retraction watch', hint: 'What changed, and what it affected' },
   { href: '/admin/research/decision-trace', label: 'Decision trace', hint: 'With/without research, food by food' },
+  { href: '/admin/research/fleet-signal', label: 'Fleet signal', hint: 'Literature vs. real dog outcomes' },
 ];
 
 /**
