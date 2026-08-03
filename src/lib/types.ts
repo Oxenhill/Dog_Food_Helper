@@ -485,6 +485,7 @@ export interface ResearchClaim {
   reviewed_by?: string | null;
   reviewed_at?: string | null;
   review_note?: string | null;
+  auto_activated_by_rule?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -543,6 +544,7 @@ export interface ResearchEvidenceCluster {
   reviewed_by?: string | null;
   reviewed_at?: string | null;
   review_note?: string | null;
+  auto_activated_by_rule?: string | null;
   last_edited_by?: string | null;
   last_edited_at?: string | null;
   created_at: string;

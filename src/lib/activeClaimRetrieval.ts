@@ -295,10 +295,11 @@ export function buildEligibleActiveClaims(
   const chunksById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
 
   return claims.flatMap((claim) => {
+    const isHumanReviewed = Boolean(claim.reviewed_by) && Boolean(claim.reviewed_at);
+    const isRuleActivated = Boolean(claim.auto_activated_by_rule);
     if (
       claim.status !== 'active' ||
-      !claim.reviewed_by ||
-      !claim.reviewed_at ||
+      (!isHumanReviewed && !isRuleActivated) ||
       claim.evidence_scope !== 'canine_direct'
     ) {
       return [];
@@ -441,11 +442,12 @@ export function createActiveClaimEvidenceRetriever(source: ActiveClaimDataSource
       }
       for (const clusterId of memberClusterIds) {
         const cluster = clustersById.get(clusterId);
+        const clusterHumanReviewed = Boolean(cluster?.reviewed_by) && Boolean(cluster?.reviewed_at);
+        const clusterRuleActivated = Boolean(cluster?.auto_activated_by_rule);
         if (
           !cluster ||
           cluster.status !== 'active' ||
-          !cluster.reviewed_by ||
-          !cluster.reviewed_at
+          (!clusterHumanReviewed && !clusterRuleActivated)
         ) {
           continue;
         }
@@ -517,8 +519,11 @@ export const supabaseActiveClaimDataSource: ActiveClaimDataSource = {
         .select('*')
         .eq('status', 'active')
         .eq('evidence_scope', 'canine_direct')
-        .not('reviewed_by', 'is', null)
-        .not('reviewed_at', 'is', null)
+        // Active by explicit human review (reviewed_by + reviewed_at) or by
+        // the deterministic auto-activation rule (auto_activated_by_rule) --
+        // never neither, per the DB constraint. buildEligibleActiveClaims()
+        // re-asserts this same OR in memory below.
+        .or('and(reviewed_by.not.is.null,reviewed_at.not.is.null),auto_activated_by_rule.not.is.null')
     ),
   loadDocuments: (ids) =>
     ids.length === 0

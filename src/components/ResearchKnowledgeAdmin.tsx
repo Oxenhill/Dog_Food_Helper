@@ -49,6 +49,19 @@ interface ClusterMember {
   document: ProcessingDocument | null;
 }
 
+interface EligibilityCriterion {
+  key: string;
+  pass: boolean;
+  detail: string;
+  value?: number;
+}
+
+interface AutoActivationEligibility {
+  eligible: boolean;
+  rule_version: string;
+  criteria: EligibilityCriterion[];
+}
+
 interface EvidenceCluster {
   id: string;
   label: string;
@@ -61,10 +74,41 @@ interface EvidenceCluster {
   status: string;
   reviewed_at: string | null;
   review_note: string | null;
+  auto_activated_by_rule: string | null;
   updated_at: string;
   members: ClusterMember[];
   applicability: ClusterContext[];
+  auto_activation_eligibility: AutoActivationEligibility | null;
 }
+
+interface AutomationSettings {
+  deterministic_auto_activation_enabled: boolean;
+  daily_activation_cap: number;
+  paused: boolean;
+  paused_reason: string | null;
+  paused_at: string | null;
+}
+
+interface AutomationLogEntry {
+  id: string;
+  cluster_id: string;
+  decision: string;
+  rule_version: string;
+  created_at: string;
+  explain: { criteria?: EligibilityCriterion[]; reason?: string } | null;
+}
+
+interface AutomationState {
+  settings: AutomationSettings | null;
+  activated_last_24h: number;
+  recent_log: AutomationLogEntry[];
+}
+
+const EMPTY_AUTOMATION: AutomationState = {
+  settings: null,
+  activated_last_24h: 0,
+  recent_log: [],
+};
 
 interface ReviewOptions {
   subject_types: string[];
@@ -112,6 +156,8 @@ export default function ResearchKnowledgeAdmin() {
   const [documents, setDocuments] = useState<ProcessingDocument[]>([]);
   const [clusters, setClusters] = useState<EvidenceCluster[]>([]);
   const [reviewOptions, setReviewOptions] = useState<ReviewOptions>(EMPTY_REVIEW_OPTIONS);
+  const [automation, setAutomation] = useState<AutomationState>(EMPTY_AUTOMATION);
+  const [capInput, setCapInput] = useState('10');
   const [edits, setEdits] = useState<Record<string, EditableCluster>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
@@ -130,6 +176,11 @@ export default function ResearchKnowledgeAdmin() {
     setDocuments(body.documents ?? []);
     setClusters(body.clusters ?? []);
     setReviewOptions(body.review_options ?? EMPTY_REVIEW_OPTIONS);
+    const nextAutomation: AutomationState = body.automation ?? EMPTY_AUTOMATION;
+    setAutomation(nextAutomation);
+    if (nextAutomation.settings) {
+      setCapInput(String(nextAutomation.settings.daily_activation_cap));
+    }
   }, []);
 
   useEffect(() => {
@@ -189,6 +240,67 @@ export default function ResearchKnowledgeAdmin() {
       setError(reviewError instanceof Error ? reviewError.message : 'Cluster review failed');
     } finally {
       setBusy('');
+    }
+  }
+
+  async function postAutomationAction(action: string, extra?: Record<string, unknown>) {
+    setBusy(action);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/admin/research/processing', {
+        method: 'POST',
+        headers: { ...sessionAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Automation action failed');
+      await load();
+      return body;
+    } catch (automationError) {
+      setError(
+        automationError instanceof Error ? automationError.message : 'Automation action failed'
+      );
+      return null;
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function toggleAutomationEnabled() {
+    const enabled = !automation.settings?.deterministic_auto_activation_enabled;
+    const result = await postAutomationAction('set_automation_enabled', { enabled });
+    if (result) {
+      setNotice(
+        enabled
+          ? 'Deterministic auto-activation is now enabled. It only ever activates a cluster where every criterion below passes.'
+          : 'Deterministic auto-activation is now disabled. Every cluster stays in the manual queue.'
+      );
+    }
+  }
+
+  async function saveAutomationCap() {
+    const cap = Number(capInput);
+    if (!Number.isInteger(cap) || cap <= 0) {
+      setError('Daily activation cap must be a positive whole number.');
+      return;
+    }
+    const result = await postAutomationAction('set_automation_cap', { daily_activation_cap: cap });
+    if (result) setNotice(`Circuit breaker cap set to ${cap} activations per rolling 24h.`);
+  }
+
+  async function clearAutomationPause() {
+    const result = await postAutomationAction('clear_automation_pause');
+    if (result) setNotice('Automation pause cleared. It will resume evaluating queued clusters.');
+  }
+
+  async function runAutomationSweepNow() {
+    const result = await postAutomationAction('run_automation_sweep');
+    if (result?.result) {
+      const summary = result.result as Record<string, number>;
+      setNotice(
+        `Sweep considered ${summary.considered}, activated ${summary.activated}, left ${summary.skipped_ineligible} still ineligible for review.`
+      );
     }
   }
 
@@ -315,6 +427,99 @@ export default function ResearchKnowledgeAdmin() {
 
       {error && <div className="callout-alarm" role="alert">{error}</div>}
       {notice && <div className="callout-info" role="status">{notice}</div>}
+
+      <div className="rounded border border-line bg-surface p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Deterministic auto-activation</p>
+            <p className="help-text mt-1 max-w-2xl">
+              Activates a cluster with no human step only when every criterion below passes for
+              every one of its source claims: grade A or B, direct canine evidence, complete
+              grading metadata, not steering a user away from a food, and corroborated by at
+              least two independent study families beyond itself. Everything else stays in the
+              queue below, exactly as before.
+            </p>
+          </div>
+          <span className={automation.settings?.deterministic_auto_activation_enabled ? 'badge-pine' : 'badge-neutral'}>
+            {automation.settings?.deterministic_auto_activation_enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        </div>
+
+        {automation.settings?.paused && (
+          <div className="callout-alarm mt-3 text-[13px]">
+            Paused: {automation.settings.paused_reason ?? 'circuit breaker triggered.'} No cluster
+            will auto-activate until this is cleared.
+            <button
+              type="button"
+              className="btn-secondary btn-sm ml-3"
+              disabled={Boolean(busy)}
+              onClick={() => void clearAutomationPause()}
+            >
+              Clear pause
+            </button>
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-[13px]">
+          <span>{automation.activated_last_24h} activated in the last 24h</span>
+          <span>·</span>
+          <span>Cap: {automation.settings?.daily_activation_cap ?? '—'} per rolling 24h</span>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={Boolean(busy)}
+            onClick={() => void toggleAutomationEnabled()}
+          >
+            {automation.settings?.deterministic_auto_activation_enabled ? 'Disable' : 'Enable'} auto-activation
+          </button>
+          <label className="field">
+            <span className="label">Daily cap</span>
+            <input
+              className="input w-24"
+              inputMode="numeric"
+              value={capInput}
+              onChange={(event) => setCapInput(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={Boolean(busy)}
+            onClick={() => void saveAutomationCap()}
+          >
+            Save cap
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={Boolean(busy)}
+            onClick={() => void runAutomationSweepNow()}
+          >
+            {busy === 'run_automation_sweep' ? 'Running…' : 'Run sweep now'}
+          </button>
+        </div>
+
+        {automation.recent_log.length > 0 && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-[13px] font-semibold text-ink">
+              Recent automation decisions ({automation.recent_log.length})
+            </summary>
+            <ul className="mt-2 grid gap-2 text-[13px]">
+              {automation.recent_log.map((entry) => (
+                <li key={entry.id} className="rounded border border-line bg-paper p-2">
+                  <span className="font-semibold">{entry.decision.replace(/_/g, ' ')}</span>
+                  {' · '}
+                  {new Date(entry.created_at).toLocaleString()}
+                  {entry.explain?.reason && <p className="help-text mt-1">{entry.explain.reason}</p>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
 
       <details open={queuedClusters.length === 0 && pendingDocuments.length > 0}>
         <summary className="cursor-pointer font-semibold text-ink">
@@ -633,6 +838,35 @@ export default function ResearchKnowledgeAdmin() {
                     <p className="mt-3 text-[14px] leading-6 text-ink">
                       {cluster.cautious_summary}
                     </p>
+
+                    {cluster.auto_activation_eligibility && (
+                      <div className="mt-3 rounded border border-line bg-surface p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="eyebrow">Auto-activation reasoning</p>
+                          <span
+                            className={
+                              cluster.auto_activation_eligibility.eligible
+                                ? 'badge-pine'
+                                : 'badge-neutral'
+                            }
+                          >
+                            {cluster.auto_activation_eligibility.eligible
+                              ? 'Would auto-activate'
+                              : 'Needs your review'}
+                          </span>
+                        </div>
+                        <ul className="mt-2 grid gap-1 text-[13px]">
+                          {cluster.auto_activation_eligibility.criteria.map((criterion) => (
+                            <li
+                              key={criterion.key}
+                              className={criterion.pass ? 'text-ink' : 'text-ink/80'}
+                            >
+                              {criterion.pass ? '✓' : '✗'} {criterion.detail}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     <div className="mt-3 rounded border border-line bg-surface p-3">
                       <p className="eyebrow">Required dog context</p>

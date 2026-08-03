@@ -59,6 +59,8 @@ async function listProcessingState() {
     { data: documents, error: documentsError },
     { data: claims, error: claimsError },
     { data: clusters, error: clustersError },
+    { data: automationSettings, error: automationSettingsError },
+    { data: automationLog, error: automationLogError },
   ] = await Promise.all([
     supabaseAdmin
       .from('research_documents')
@@ -75,10 +77,18 @@ async function listProcessingState() {
       .select('*')
       .order('created_at', { ascending: false })
       .limit(100),
+    supabaseAdmin.from('research_automation_settings').select('*').eq('id', true).maybeSingle(),
+    supabaseAdmin
+      .from('research_auto_activation_log')
+      .select('id, cluster_id, decision, rule_version, explain, created_at')
+      .order('created_at', { ascending: false })
+      .limit(20),
   ]);
   if (documentsError) throw documentsError;
   if (claimsError) throw claimsError;
   if (clustersError) throw clustersError;
+  if (automationSettingsError) throw automationSettingsError;
+  if (automationLogError) throw automationLogError;
 
   const clusterIds = (clusters ?? []).map((cluster) => cluster.id);
   const [{ data: members, error: membersError }, { data: applicability, error: applicabilityError }] =
@@ -96,6 +106,33 @@ async function listProcessingState() {
         ]);
   if (membersError) throw membersError;
   if (applicabilityError) throw applicabilityError;
+
+  const queuedClusterIds = (clusters ?? [])
+    .filter((cluster) => cluster.status === 'draft' || cluster.status === 'queued_for_review')
+    .map((cluster) => cluster.id);
+  const [
+    { data: eligibilityRows, error: eligibilityError },
+    { count: activatedLast24h, error: activatedCountError },
+  ] = await Promise.all([
+    queuedClusterIds.length === 0
+      ? Promise.resolve({ data: [], error: null })
+      : supabaseAdmin.rpc('research_cluster_deterministic_eligibility_batch', {
+          p_cluster_ids: queuedClusterIds,
+        }),
+    supabaseAdmin
+      .from('research_auto_activation_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('decision', 'activated')
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+  ]);
+  if (eligibilityError) throw eligibilityError;
+  if (activatedCountError) throw activatedCountError;
+  const eligibilityByCluster = new Map(
+    (eligibilityRows ?? []).map((row: { cluster_id: string; eligibility: unknown }) => [
+      row.cluster_id,
+      row.eligibility,
+    ])
+  );
 
   const claimById = new Map((claims ?? []).map((claim) => [claim.id, claim]));
   const documentById = new Map(
@@ -136,7 +173,13 @@ async function listProcessingState() {
       ...cluster,
       members: membersByCluster.get(cluster.id) ?? [],
       applicability: applicabilityByCluster.get(cluster.id) ?? [],
+      auto_activation_eligibility: eligibilityByCluster.get(cluster.id) ?? null,
     })),
+    automation: {
+      settings: automationSettings,
+      activated_last_24h: activatedLast24h ?? 0,
+      recent_log: automationLog ?? [],
+    },
     review_options: {
       subject_types: [
         'ingredient',
@@ -366,6 +409,55 @@ export async function POST(request: NextRequest) {
     );
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json({ cluster: data });
+  }
+
+  if (action === 'set_automation_enabled') {
+    if (typeof body.enabled !== 'boolean') {
+      return NextResponse.json({ error: 'enabled must be a boolean' }, { status: 400 });
+    }
+    const { data, error } = await supabaseAdmin
+      .from('research_automation_settings')
+      .update({ deterministic_auto_activation_enabled: body.enabled })
+      .eq('id', true)
+      .select()
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ settings: data });
+  }
+
+  if (action === 'set_automation_cap') {
+    const cap = Number(body.daily_activation_cap);
+    if (!Number.isInteger(cap) || cap <= 0) {
+      return NextResponse.json(
+        { error: 'daily_activation_cap must be a positive integer' },
+        { status: 400 }
+      );
+    }
+    const { data, error } = await supabaseAdmin
+      .from('research_automation_settings')
+      .update({ daily_activation_cap: cap })
+      .eq('id', true)
+      .select()
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ settings: data });
+  }
+
+  if (action === 'clear_automation_pause') {
+    const { data, error } = await supabaseAdmin
+      .from('research_automation_settings')
+      .update({ paused: false, paused_reason: null, paused_at: null })
+      .eq('id', true)
+      .select()
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ settings: data });
+  }
+
+  if (action === 'run_automation_sweep') {
+    const { data, error } = await supabaseAdmin.rpc('run_deterministic_auto_activation_sweep');
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ result: data });
   }
 
   return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });

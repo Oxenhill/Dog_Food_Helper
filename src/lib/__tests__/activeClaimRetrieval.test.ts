@@ -177,6 +177,28 @@ test('queued, rejected and unreviewed claims never become eligible', () => {
   assert.deepEqual(buildEligibleActiveClaims(candidates, [document()], [chunk()]), []);
 });
 
+test('a claim with no human reviewer but a deterministic auto-activation rule is still eligible', () => {
+  const autoActivated = claim({
+    id: 'auto-activated',
+    reviewed_by: null,
+    reviewed_at: null,
+    auto_activated_by_rule: 'deterministic_grade_ab_v1',
+  });
+  const eligible = buildEligibleActiveClaims([autoActivated], [document()], [chunk()]);
+  assert.equal(eligible.length, 1);
+  assert.equal(eligible[0].claim.id, 'auto-activated');
+});
+
+test('a claim with neither a human reviewer nor an auto-activation rule is never eligible', () => {
+  const neither = claim({
+    id: 'neither',
+    reviewed_by: null,
+    reviewed_at: null,
+    auto_activated_by_rule: null,
+  });
+  assert.deepEqual(buildEligibleActiveClaims([neither], [document()], [chunk()]), []);
+});
+
 test('retracted and superseded source documents never become eligible', () => {
   assert.deepEqual(
     buildEligibleActiveClaims([claim()], [document({ retracted: true })], [chunk()]),
@@ -472,6 +494,25 @@ test('an active claim in an inactive or unreviewed cluster cannot appear', async
     [food()]
   );
   assert.deepEqual(inactive.evidenceByFoodId.get('food-1'), []);
+});
+
+test('an active cluster with no human reviewer but a deterministic auto-activation rule reaches the food response', async () => {
+  const result = await createActiveClaimEvidenceRetriever(
+    clusteredSource({
+      cluster: {
+        status: 'active',
+        reviewed_by: null,
+        reviewed_at: null,
+        auto_activated_by_rule: 'deterministic_grade_ab_v1',
+      },
+    })
+  )(
+    { id: 'dog-1', life_stage: 'adult' },
+    [food()]
+  );
+  const evidence = result.evidenceByFoodId.get('food-1');
+  assert.equal(evidence?.length, 1);
+  assert.equal(evidence?.[0].cluster_id, 'cluster-1');
 });
 
 test('a no-context cluster is suppressed by the integrated retrieval path', async () => {

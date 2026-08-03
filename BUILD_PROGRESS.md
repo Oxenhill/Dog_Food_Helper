@@ -3153,3 +3153,127 @@ the real `/admin/research/intake` UI now that the bug is fixed.
 
 **Needs owner input:** none — this is a pure bugfix, no policy/scope decision involved. Retry the original
 upload when convenient.
+
+## Review-automation design options (2026-08-03) — proposal only, nothing built
+
+Owner asked directly to be removed from manual research review entirely ("im actually probably less
+qualified to do it than a well informed AI... I want a design option to remove me from this"). Per this
+project's own precedent (Gate 5, the Probe — design proposal first, owner sign-off, then build), this
+session produced options only. See
+[`docs/research-review-automation-design-2026-08-03.md`](docs/research-review-automation-design-2026-08-03.md)
+for the full writeup.
+
+**What the research confirmed:** both review mechanisms (`review_research_evidence_cluster()` and
+`PATCH /api/admin/research/claims/[claimId]`) are 100% human-gated today, despite
+`RESEARCH_LAYER_DESIGN.md` §5 already specifying a detailed auto-activation rule back in July that was
+never wired up. Existing infrastructure (`research_provider_calls` telemetry, the Gate 5 scoring formula,
+the Probe's fleet-vs-literature comparison) all turned out to be directly reusable for whichever
+automation option gets picked, rather than needing new plumbing.
+
+**Four options presented:** (A) confidence-gated auto-approve, using the already-designed §5 rule as a
+deterministic no-model-call tier plus a narrower model-assisted tier for the next confidence band down;
+(B) dual-model consensus before any unattended activation; (C) graduated trust — shadow-mode comparison
+of automated verdicts against real human decisions before switching anything on, reusing the Probe's
+comparison pattern; (D) keep the human but shrink the click — pre-drafted AI reasoning, one-click
+confirm, no new approval-risk surface at all. Recommendation: start with Option A's deterministic tier
+only (no model call), add the model-assisted tier once validated in Option C's shadow mode, ship
+Option D's UI regardless since it helps under every option.
+
+**Needs owner input:**
+- Which option (or sequence) to build first.
+- Risk tolerance for a deterministic-only first cut vs. wanting the model-assisted tier from day one.
+- A specific circuit-breaker number: unattended activations per day/week before auto-pause, and who gets
+  alerted.
+- Trial-window length if Option C's shadow-mode comparison gates turning on the model-assisted tier.
+- Whether Option D's redesigned review UI should ship in parallel regardless of which automation tier is
+  chosen.
+
+No code was written. No claim, cluster, or review mechanism was touched.
+
+## Deterministic auto-activation tier shipped, off by default (2026-08-03)
+
+Owner picked the recommended sequence and delegated the tuning numbers ("your the design authority
+here"), with one explicit condition: a human must always be able to remove/reject research, automated
+or not. This session built the first tier only — the deterministic, no-model-call rule from
+`RESEARCH_LAYER_DESIGN.md` §5, finally wired up. The model-assisted tier and its shadow-mode validation
+are NOT built; they remain a later, separate piece of work per the design doc.
+
+**What ships:**
+- `supabase/migrations/20260803150000_research_deterministic_auto_activation.sql` — new
+  `auto_activated_by_rule`/`auto_activated_at`/`auto_activation_explain` columns on `research_claims`
+  and `research_evidence_clusters`; relaxed the active-review check constraint so a row is active via
+  either human review OR the rule, never neither; `research_automation_settings` (single-row switch,
+  **disabled by default**, daily activation cap, pause state); append-only, trigger-protected
+  `research_auto_activation_log` (every attempt, activated or not, with full reasoning);
+  `compute_cluster_deterministic_eligibility()` (pure, also used to explain every queued cluster in the
+  UI); `run_deterministic_cluster_auto_activation()` (the only path that can activate without a human —
+  re-checks the switch, the circuit breaker, and every criterion on every call); a batched eligibility
+  reader; `run_deterministic_auto_activation_sweep()`; an hourly `pg_cron` schedule.
+- **Bug caught before it shipped inert:** `activeClaimRetrieval.ts`'s runtime matching (the code that
+  actually surfaces evidence on a recommendation) required `reviewed_by`/`reviewed_at` to be non-null —
+  an auto-activated row would have been silently invisible at runtime despite `status='active'` in the
+  database. Fixed in three places (the `loadActiveClaims` query filter, `buildEligibleActiveClaims`, and
+  the cluster-eligibility check inside the retrieval loop) to accept `auto_activated_by_rule is not
+  null` as an alternative. `ResearchClaim`/`ResearchEvidenceCluster` types updated to carry the field.
+- Human override guarantee verified structurally: the existing per-claim `PATCH
+  /api/admin/research/claims/[claimId]` endpoint has no status precondition, so a human can reject an
+  auto-activated claim at any time through the unmodified existing path. Confirmed live in the
+  transactional exercise below.
+- `/api/admin/research/processing` GET now returns `automation` (settings, activated-in-last-24h count,
+  recent decision log) and, per queued cluster, `auto_activation_eligibility` (the same pass/fail
+  reasoning the actor uses). POST gained `set_automation_enabled`, `set_automation_cap`,
+  `clear_automation_pause`, `run_automation_sweep`.
+- `ResearchKnowledgeAdmin.tsx` gained a status panel (enabled/paused, cap, 24h count, enable/disable,
+  cap editor, run-sweep-now, recent-decisions log) and, on every queued cluster card, a criterion-by-
+  criterion "auto-activation reasoning" block — this is the "give me reasons" and "make approval easy"
+  ask: every queued item now states in plain language exactly which of the eight criteria pass or fail,
+  with no model call involved in producing that explanation.
+
+**Verification:**
+- `tsc --noEmit`: clean.
+- Full test suite: 352/352 passed (4 new: two `buildEligibleActiveClaims` cases and two integrated-
+  retrieval cases proving an auto-activated claim/cluster with no human reviewer is eligible, and that
+  neither reviewed-nor-rule-activated is not).
+- `next build`: exit 0.
+- `git diff --check`: clean (line-ending warnings only, matching this repo's existing baseline).
+- Supabase advisors: neither new table appears in the RLS/no-policy findings (both got explicit
+  service-role policies); no new finding introduced. Performance advisor shows only the expected
+  new-and-unused-index notices for the brand-new empty tables.
+- **Transactional live exercise** (real project, `begin ... rollback`, zero residue confirmed
+  afterward): built 4 clusters against real constraints — one with 3 independent grade-A families
+  (eligible), one with 1 family (ineligible on corroboration), one `cautions_against` (ineligible on
+  both corroboration and direction), plus a second eligible cluster to exercise the breaker. Proved, in
+  order: disabled → `skipped_disabled`; enabled + eligible → `activated`, cluster and all 3 claims set
+  active with `auto_activated_by_rule` populated and `reviewed_by`/`reviewed_at` correctly left null;
+  both ineligible clusters → `skipped_ineligible` with the exact failing criteria in the log; a second
+  eligible cluster with cap=1 already reached → `skipped_circuit_breaker`, `paused=true` set with the
+  right reason, one `system_alerts` row raised; a further attempt while paused → `skipped_paused`;
+  audit log decision counts matched exactly (1 activated, 1 circuit breaker, 1 disabled, 2 ineligible, 1
+  paused); and a plain `UPDATE ... status='rejected'` on the now-active claim succeeded with no
+  constraint blocking it, proving the human-override guarantee holds.
+- **Authenticated production UI verification** (throwaway-admin-QA pattern: signup → promote → verify →
+  delete, per established convention): against the real 14-cluster production queue, the reasoning
+  panel rendered correct, cluster-specific pass/fail criteria for every real queued item (e.g. the one
+  grade-A systematic-review cluster showed every criterion passing except corroboration — exactly
+  right, since no real cluster today has 3 independent families). Enabled automation live, ran a real
+  sweep (`Sweep considered 14, activated 0, left 14 still ineligible for review` — correct, since
+  nothing in the live queue currently qualifies), saw the recent-decisions log populate, then disabled
+  automation again to restore the safe default before cleanup. No console errors. Throwaway account
+  fully deleted afterward (this table has no actor/requested_by column, so unlike the
+  `research_provider_calls` caveat, no FK blocked the delete). The 14 real `skipped_ineligible` audit-log
+  rows from that live sweep were left in place — honest, harmless, append-only history, not fabricated
+  test data.
+
+**State after this session:** `research_automation_settings.deterministic_auto_activation_enabled =
+false` in production (unchanged from its shipped default) — nothing auto-activates until the owner
+explicitly turns it on. The daily cap is currently `10` (Claude's design-authority default from the
+sign-off). All 14 real queued clusters remain exactly as they were: still awaiting manual review, now
+each showing why they haven't (and, for most, currently can't) auto-activate.
+
+**Needs owner input:**
+- Whether to turn `deterministic_auto_activation_enabled` on now, given the real queue's current shape
+  (every cluster today is short on independent corroborating families, so turning it on right now would
+  not itself activate anything — it's a genuinely safe first flip if the owner wants to see it live).
+- Whether 10/rolling-24h is the right cap, now that its effect has been seen against real data.
+- The model-assisted tier and its shadow-mode validation trial remain unbuilt and unscheduled — next
+  natural step per the design doc's recommendation, but a separate decision to greenlight.
