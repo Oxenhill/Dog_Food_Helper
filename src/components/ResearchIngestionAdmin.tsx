@@ -197,8 +197,12 @@ export default function ResearchIngestionAdmin() {
       setPdfTitle('');
       setPdfSourceUrl('');
       if (pdfInput.current) pdfInput.current.value = '';
+      const discarded = finalized.result?.discardedChunkCount ?? 0;
       setNotice(
-        `PDF imported and embedded through the Gateway (${finalized.result?.chunkCount ?? 0} chunks).`
+        `PDF imported and embedded through the Gateway (${finalized.result?.chunkCount ?? 0} chunks).` +
+          (discarded > 0
+            ? ` ${discarded} cat-only passage${discarded === 1 ? '' : 's'} discarded before embedding.`
+            : '')
       );
       await refresh();
     } catch (uploadError) {

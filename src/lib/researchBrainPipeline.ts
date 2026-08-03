@@ -17,6 +17,7 @@ import {
   createResearchProviderEstimate,
   executeTrackedResearchProviderCall,
 } from './researchProviderTelemetry';
+import { filterCatOnlyChunks } from './researchSpeciesFilter';
 import { detectAndLinkStudyFamily, StudyFamilyMatch } from './researchStudyFamily';
 import { supabaseAdmin } from './supabase';
 import type { EvidenceGrade, ResearchTopic } from './types';
@@ -38,6 +39,7 @@ export interface ResearchIngestionResult {
   duplicate: boolean;
   embedding: Omit<ResearchEmbeddingRun, 'vectors'>;
   studyFamilyMatch: StudyFamilyMatch | null;
+  discardedChunkCount: number;
 }
 
 function sha256(value: string): string {
@@ -209,18 +211,51 @@ async function storeDocumentWithVoyage(input: {
   embeddingModel: string;
   controlPlane: ResearchStageControlPlaneSnapshot;
   callKeyPrefix: string;
+  /**
+   * Applied to chunks right after splitting, before anything is embedded or
+   * stored. Only the uploaded-PDF path passes this -- the URL/PMID path
+   * already gates species at the whole-document level via PubMed MeSH
+   * headings (see evaluateResearchEvidenceAdmissibility), so re-applying a
+   * text heuristic there would risk dropping a real study's own comparative
+   * mention of cats.
+   */
+  chunkFilter?: (chunks: string[]) => { keptChunks: string[]; discardedChunks: unknown[] };
 }): Promise<ResearchIngestionResult> {
-  const chunks = chunkText(input.text, RESEARCH_BRAIN_CHUNK_CHARACTERS);
+  let chunks = chunkText(input.text, RESEARCH_BRAIN_CHUNK_CHARACTERS);
+  let discardedChunkCount = 0;
+  if (input.chunkFilter) {
+    const filtered = input.chunkFilter(chunks);
+    discardedChunkCount = filtered.discardedChunks.length;
+    chunks = filtered.keptChunks;
+    if (chunks.length === 0) {
+      throw new Error(
+        'No dog-relevant content found after species filtering (every extracted passage was cat-only)'
+      );
+    }
+  }
   const embedding = await embedResearchTexts(chunks, input.embeddingModel, {
     jobId: input.jobId,
     controlPlane: input.controlPlane,
     callKeyPrefix: input.callKeyPrefix,
   });
 
+  const documentRow = input.chunkFilter
+    ? {
+        ...input.documentRow,
+        source_metadata: {
+          ...((input.documentRow.source_metadata as Record<string, unknown> | undefined) ?? {}),
+          species_filter: {
+            method: 'keyword_v1',
+            discarded_chunk_count: discardedChunkCount,
+          },
+        },
+      }
+    : input.documentRow;
+
   const { data: document, error: documentError } = await supabaseAdmin
     .from('research_documents')
     .insert({
-      ...input.documentRow,
+      ...documentRow,
       topic: input.topic,
       review_status: 'pending',
       ingestion_job_id: input.jobId,
@@ -281,6 +316,7 @@ async function storeDocumentWithVoyage(input: {
       estimatedCostUsd: embedding.estimatedCostUsd,
     },
     studyFamilyMatch,
+    discardedChunkCount,
   };
 }
 
@@ -327,6 +363,7 @@ export async function ingestDiscoveryCandidate(input: {
         estimatedCostUsd: 0,
       },
       studyFamilyMatch: null,
+      discardedChunkCount: 0,
     };
   }
 
@@ -418,6 +455,7 @@ export async function ingestUploadedResearchPdf(input: {
     embeddingModel,
     controlPlane: input.controlPlane,
     callKeyPrefix: 'document_embedding',
+    chunkFilter: filterCatOnlyChunks,
     documentRow: {
       title: input.title,
       source_url: input.sourceUrl,

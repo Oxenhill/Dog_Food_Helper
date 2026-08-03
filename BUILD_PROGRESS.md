@@ -1,6 +1,40 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## PDF worker fix; PDF-upload species filtering gap found, unbuilt (2026-08-03, latest)
+## PDF-upload species filtering built (2026-08-03, latest)
+
+Closes the gap logged just below (same day): `ingestUploadedResearchPdf`
+had no species check at all, unlike the URL/PMID path's document-level
+`evaluateResearchEvidenceAdmissibility` gate against PubMed MeSH headings —
+PDFs have no such metadata, only extracted text.
+
+**What shipped:** [src/lib/researchSpeciesFilter.ts](src/lib/researchSpeciesFilter.ts),
+a deterministic keyword classifier (`classifyChunkSpecies`,
+`filterCatOnlyChunks`) applied per-chunk, not per-document — a brochure with
+real dog and cat sections shouldn't lose its dog content because of a
+whole-document reject. A chunk is `cat_only` only if it mentions
+cat/feline/kitten terms and never mentions dog/canine/puppy terms; mixed and
+neutral chunks are kept. 9 unit tests in
+[researchSpeciesFilter.test.ts](src/lib/__tests__/researchSpeciesFilter.test.ts)
+cover cat-only, dog-only, mixed, neutral, case/plural/canine-feline forms,
+the "category"/"catalogue" substring false-positive risk, and the
+all-cat-document edge case.
+
+Wired into `storeDocumentWithVoyage` (`researchBrainPipeline.ts`) via a new
+optional `chunkFilter` param, applied only from `ingestUploadedResearchPdf` —
+deliberately not from `ingestDiscoveryCandidate`, which already has its own
+working document-level gate and shouldn't have a second, cruder heuristic
+layered on top. If every chunk in an upload comes back cat-only, ingestion
+now throws before embedding anything rather than silently storing an empty
+document. `discarded_chunk_count` is recorded in the document's
+`source_metadata.species_filter` and surfaced through the job's
+`resultSummary`/audit event and the Intake page's success message.
+
+Full project `tsc --noEmit`: clean. `npm test`: 361/361 pass (9 new). Not
+yet re-tested against the actual Purina brochure (job `1a3a45ce`, orphaned
+upload still in the `research-ingestion` bucket) — that re-test is the
+next step, now that filtering exists.
+
+## PDF worker fix; PDF-upload species filtering gap found, unbuilt (2026-08-03, earlier)
 
 Owner uploaded `33784_ppvd_range_brochure_v7_0_0.pdf` (Purina, image-heavy,
 8.3MB) through Intake. Job `1a3a45ce` failed: `Setting up fake worker failed:

@@ -61,6 +61,7 @@ async function completeJob(
       estimatedInputTokens: number;
       estimatedCostUsd: number;
     };
+    discardedChunkCount?: number;
   }
 ) {
   return finishResearchMissionJob({
@@ -70,12 +71,14 @@ async function completeJob(
         document_id: result.documentId,
         chunk_count: result.chunkCount,
         duplicate: result.duplicate,
+        discarded_chunk_count: result.discardedChunkCount ?? 0,
         recommendation_runtime_model_calls: 0,
     },
     eventPayload: {
       document_id: result.documentId,
       chunk_count: result.chunkCount,
       duplicate: result.duplicate,
+      discarded_chunk_count: result.discardedChunkCount ?? 0,
     },
   });
 }
