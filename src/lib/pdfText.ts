@@ -1,5 +1,8 @@
 import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas';
 import { PDFParse } from 'pdf-parse';
+// @ts-expect-error -- no type declarations for this pdfjs-dist subpath; the
+// module itself (WorkerMessageHandler) is what we need, not its types.
+import * as pdfjsWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs';
 
 /**
  * pdf-parse bundles pdfjs-dist, whose worker (pdf.worker.mjs) tries to
@@ -25,6 +28,26 @@ if (typeof (globalThis as { Path2D?: unknown }).Path2D === 'undefined') {
 }
 if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
   (globalThis as { ImageData?: unknown }).ImageData = ImageData;
+}
+
+/**
+ * pdfjs-dist has no real Worker thread available in a Vercel serverless
+ * function, so it falls back to a "fake worker" that runs in-process. That
+ * fallback resolves its module with `import(GlobalWorkerOptions.workerSrc)`
+ * -- a runtime string, not a static path -- so Vercel's output file tracing
+ * (which only follows statically-analyzable imports) does not know to bundle
+ * `pdf.worker.mjs` into the function, and the dynamic import throws "Cannot
+ * find module .../pdfjs-dist/legacy/build/pdf.worker.mjs" the first time a
+ * cold-started instance needs it. Confirmed live 2026-08-03 on an 8MB
+ * image-heavy brochure upload; smaller PDFs had it happen to hit a warm
+ * instance that had already resolved (and cached) the dynamic import once.
+ * pdfjs checks `globalThis.pdfjsWorker` before ever attempting that dynamic
+ * import (its documented Node/bundler escape hatch) -- statically importing
+ * the worker module ourselves here guarantees the file tracer includes it
+ * *and* skips the fragile dynamic-import path entirely.
+ */
+if (typeof (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker === 'undefined') {
+  (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = pdfjsWorker;
 }
 
 export interface ExtractedPdfPage {

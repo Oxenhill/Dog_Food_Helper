@@ -1,5 +1,57 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## PDF worker fix; PDF-upload species filtering gap found, unbuilt (2026-08-03, latest)
+
+Owner uploaded `33784_ppvd_range_brochure_v7_0_0.pdf` (Purina, image-heavy,
+8.3MB) through Intake. Job `1a3a45ce` failed: `Setting up fake worker failed:
+"Cannot find module '/var/task/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'"`.
+Not the DOMMatrix bug fixed earlier the same day (that one's confirmed good —
+3 successful imports since). This is a separate, Vercel-specific packaging
+bug: pdfjs-dist's Node fake-worker fallback resolves its module with
+`import(GlobalWorkerOptions.workerSrc)` — a runtime string pdfjs builds
+itself, not a static path — so Vercel's output-file-tracing can't see it and
+doesn't bundle `pdf.worker.mjs` into the function. It only surfaces on a cold
+lambda instance that hasn't already resolved (and cached) that dynamic import
+once, which is why earlier same-day PDFs on a warm instance were unaffected.
+
+**Fix** ([src/lib/pdfText.ts](src/lib/pdfText.ts)): statically import
+`pdfjs-dist/legacy/build/pdf.worker.mjs` and set it on
+`globalThis.pdfjsWorker` ourselves. pdfjs checks `globalThis.pdfjsWorker`
+before ever attempting the dynamic import (its documented Node escape hatch),
+so this both guarantees the file is traced (real static import) and skips
+the fragile dynamic-import path entirely. Type-checked clean
+(`tsc -p tsconfig.json --noEmit`, full project, no errors). Pushed to `main`
+per owner go-ahead; Vercel will redeploy.
+
+**Side effect, not yet cleaned up**: the original 8.3MB upload is still
+sitting in the `research-ingestion` storage bucket at
+`bcc4087f-c41a-42af-83ef-d97d35e4aea6/1a3a45ce-a1f7-4714-8bb3-0586581845b9.pdf`
+— `finalize_pdf` only removes the storage object on the success path, so a
+failed job orphans it. Low priority (private bucket, one file), but worth a
+cleanup pass if failures recur.
+
+**Needs owner input / real gap found, not yet built**: while checking this,
+found `ingestUploadedResearchPdf` in
+[src/lib/researchBrainPipeline.ts:397](src/lib/researchBrainPipeline.ts:397)
+has **no species filtering at all** — every PDF upload hardcodes
+`evidence_scope: 'canine_direct'` on the whole document, and every chunk gets
+embedded and stored under that scope regardless of content. Compare
+`ingestDiscoveryCandidate` (same file, ~line 297), which runs
+`evaluateResearchEvidenceAdmissibility` against `candidate.species` before
+storing anything — the URL/PMID import path has a real gate the PDF-upload
+path never got. This particular brochure has both dog and cat product lines,
+so re-ingesting it as-is would embed cat-only chunks labeled canine evidence,
+with nothing catching that until a human reviews an individual claim drafted
+from one later (per-claim review, not per-chunk).
+
+Owner decision (2026-08-03): **hold off re-ingesting this document** until a
+species-detection/filtering step exists for the PDF-upload path. Do not
+re-run `finalize_pdf` against the orphaned upload above until that's built.
+Best next task: scope what "filtering" means here — reject the whole PDF
+(same coarse gate as the URL path), or split/tag chunks by detected species
+so the dog-relevant portion of a mixed document doesn't need discarding
+wholesale.
+
 ## Research Layer P7 admin/expert-reviewer workspace redesign (2026-08-03, latest, local implementation)
 
 P7 is complete as one whole phase: a redesign of the research admin surface
