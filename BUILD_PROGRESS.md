@@ -3076,4 +3076,19 @@ CLAUDE.md's no-silent-edit AI-governance principle).
   dogs.
 - Decide whether/when a `diverges` result should trigger any concrete editorial action (e.g. flagging a
   claim for re-review) — today it is purely descriptive.
-- This branch has real, verified changes but was not committed or pushed — ask again when ready to ship.
+
+**Shipped:** committed (`8748c7f`) and fast-forward merged to `main`, both pushed. `main` and
+`codex/mobile-pack-capture` are at the same commit. Three stale branches confirmed fully contained in
+`main` (zero unique commits — `codex/biome4pets-documents`, `codex/mixed-feeding`, `codex/stool-events`)
+and deleted, local and remote, per owner request 2026-08-03.
+
+## Backlog spec — client-facing "with/without research" view (2026-08-03, not yet built)
+
+Owner direction, recorded ahead of building it: when this is built, it must be gated behind its own
+explicit admin on/off switch, separate from `research_scoring_enabled` — the switch controls whether the
+with/without-research view is exposed to real dog owners at all, independent of whether Gate 5 scoring
+itself is live. This lets admin decide exposure and scoring live-ness on two separate axes rather than one
+flag doing both jobs, and matches the project's established off-by-default pattern
+(`recommendation_scoring_weights.research_scoring_enabled` did the same for Gate 5 itself). Needs its own
+design pass before implementation (new weights-table column vs. new settings row, exact UI copy for what
+"research-backed" means to an owner, whether it's per-dog or global) — not scoped further here.
