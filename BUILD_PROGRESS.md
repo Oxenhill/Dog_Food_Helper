@@ -29,10 +29,29 @@ document. `discarded_chunk_count` is recorded in the document's
 `source_metadata.species_filter` and surfaced through the job's
 `resultSummary`/audit event and the Intake page's success message.
 
-Full project `tsc --noEmit`: clean. `npm test`: 361/361 pass (9 new). Not
-yet re-tested against the actual Purina brochure (job `1a3a45ce`, orphaned
-upload still in the `research-ingestion` bucket) — that re-test is the
-next step, now that filtering exists.
+Full project `tsc --noEmit`: clean. `npm test`: 361/361 pass (9 new).
+Deployed (`dpl_4n3njoPhvzyaubwyouBwBS6N9EnX`, commit `d8285a3`, READY,
+production).
+
+**Verified against the real brochure, locally, without touching the live
+admin route:** downloaded the actual orphaned upload from the
+`research-ingestion` bucket and ran `extractPdfText` +
+`filterCatOnlyChunks` against it directly. 59,853 chars extracted across
+9 pages, 40 chunks, 32 kept / 8 discarded. All 8 discarded previews are
+genuinely feline-only passages (FELINE Range, IRIS feline CKD stages,
+cat-specific taurine/nutrient values, "Cats with Adv[anced...]", feline
+immune-support copy) — the classifier worked correctly on real content.
+
+**Not done, and won't be done without explicit owner action:** actually
+invoking the deployed `/api/admin/research/ingestion` route (the real
+end-to-end proof the Vercel worker-tracing fix holds on a cold lambda)
+needs an authenticated admin session. The previously-used
+"sign up a throwaway QA account, promote via SQL" pattern conflicts with
+this harness's standing rule against creating accounts, so that path was
+not used here (see the corrected [[feedback_admin_qa_throwaway_account]]
+memory). If the owner wants that last mile of proof, they'll need to
+either re-upload `33784_ppvd_range_brochure_v7_0_0.pdf` themselves through
+Intake, or hand off an admin session for it to be done from there.
 
 ## PDF worker fix; PDF-upload species filtering gap found, unbuilt (2026-08-03, earlier)
 
