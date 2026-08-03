@@ -3441,3 +3441,67 @@ each showing why they haven't (and, for most, currently can't) auto-activate.
 - Whether 10/rolling-24h is the right cap, now that its effect has been seen against real data.
 - The model-assisted tier and its shadow-mode validation trial remain unbuilt and unscheduled — next
   natural step per the design doc's recommendation, but a separate decision to greenlight.
+
+---
+
+## Session 2026-08-03 (continued) — allergen-family matching fallback (Priority 1 from handoff)
+
+**Problem (from the approved-evidence usability audit):** `matchClaimSubject()`'s ingredient branch
+(`src/lib/activeClaimRetrieval.ts`) required exact `canonicalIngredientKey` equality, so allergen-family
+research subjects (`wheat`, `soy`) never matched real compound catalog names (`Ground whole grain wheat`,
+`Wheatfeed`, `hydrolysed soya protein isolate`, `Soybean meal`) — confirmed by direct query against
+`food_ingredients` before writing any code. 2 of the 43 approved claims (both from the atopic-dermatitis
+allergen-identification paper) sat structurally clean but permanently unattachable to any food.
+
+**Fix:** Added `ALLERGEN_FAMILY_MATCH_RULES`, a small curated allowlist in `activeClaimRetrieval.ts`
+(same pattern as the existing `NUTRIENT_MATCH_RULES` table), mapping `wheat` → substring `wheat` (with
+`buckwheat` excluded — botanically unrelated despite the substring) and `soy`/`soya` → substrings
+`soy`/`soya`. Wired in as a fallback inside the `ingredient` branch of `matchClaimSubject()`: exact
+`canonicalIngredientKey` match still runs first and unchanged; the family-substring check only fires for
+subject values present in the allowlist, after exact match fails. Every other ingredient subject value —
+anything not in the table — gets zero behavior change, still strict exact-key matching.
+
+`hardFilter.ts` was read and reconfirmed to have no import of `canonicalIngredientKey`/`SYNONYM_GROUPS`
+(it does its own `ILIKE '%substance%'` directly against the DB) — the safety-critical hard-filter layer
+is architecturally untouched by this change, not just untouched by coincidence.
+
+**Files changed:**
+- `src/lib/activeClaimRetrieval.ts` — `ALLERGEN_FAMILY_MATCH_RULES`, `matchesAllergenFamily()`, and the
+  updated `ingredient` branch of `matchClaimSubject()`.
+- `src/lib/__tests__/activeClaimRetrieval.test.ts` — 3 new tests: real wheat/soy compound-name matches;
+  `buckwheat` false-positive guard; proof the fallback does not widen matching for a subject outside the
+  allowlist (`lamb` against `Lamb bone broth`, still requires exact key match).
+
+**Verification:**
+- `npm test`: 364/364 passed (was 361 before the 3 new tests — no regressions elsewhere).
+- `NODE_OPTIONS="--max-old-space-size=8192" npx tsc -p tsconfig.json --noEmit`: clean.
+- `npx tsx --env-file=.env scripts/researchApprovedEvidenceAudit.ts` (rerun unmodified, against real
+  production data): matches-at-least-one-food count moved 14 → 16; both wheat and soy claims disappeared
+  from the orphaned list. The remaining 27 orphaned claims are the confirmed catalog-coverage gaps
+  (poultry offal meal, `Bacillus velezensis C-3102`, press cakes, etc.) — unchanged, correctly untouched,
+  not something this task was scoped to fix.
+- `git diff --check`: clean (pre-existing LF/CRLF warning only, same baseline as prior sessions).
+
+**Decisions:**
+- Seeded the allowlist with only `wheat`/`soy`/`soya` — the two subject values with a real, audit-
+  confirmed catalog match. Did **not** add `dairy`/`milk`, `egg`, `chicken`, `beef`, `corn`, `lamb` as the
+  handoff speculated the owner might want, because their real `food_ingredients` strings were not checked
+  this session — adding them from assumption would violate the project's "verify against real catalog
+  strings before hardcoding an allergen grouping" rule. The table is structured so extending it later is a
+  one-line addition once each term is checked the same way.
+- `research_scoring_enabled` remains `false`, untouched, per the handoff's explicit instruction — this
+  work only improves the quality of data waiting behind that switch.
+
+**Risks/blockers:** none. This is inference-layer-only, additive, and covered by tests proving both the
+positive case and the no-widening guarantee.
+
+**Owner review:** none required — this was a scoped code-correctness fix with tests and a clean audit
+re-run, matching the "just ship it and report" guidance from the prior session's git-workflow note. Not
+committed/pushed yet pending the owner's go-ahead per that same convention.
+
+**Best next task:** extend `ALLERGEN_FAMILY_MATCH_RULES` to `dairy`/`milk`, `egg`, `chicken`, `beef`,
+`corn`, `lamb` — each needs a quick `food_ingredients` substring query first (same method used for
+wheat/soy) to confirm real catalog spelling and check for false-positive risks (e.g. does "milk" catch
+"milk thistle" anywhere in the catalog?) before adding. After that, the 27-claim catalog-coverage gap is
+the only remaining usability shortfall, and it resolves naturally as the food catalog grows — not a build
+task.

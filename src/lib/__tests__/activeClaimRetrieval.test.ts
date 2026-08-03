@@ -139,6 +139,78 @@ test('active matching ingredient claim appears with canonical whole/singular gre
   assert.equal(toResearchEvidence(item).claim_id, 'claim-active');
 });
 
+test('wheat and soy allergen-family claims match compound catalog ingredient names', () => {
+  const wheatFood = food({
+    ingredients: [
+      {
+        name: 'Ground whole grain wheat',
+        category: 'carbohydrate',
+        position: 1,
+        inclusion_pct: null,
+        note: null,
+        sub_ingredients: [],
+      },
+    ],
+  });
+  assert.deepEqual(matchClaimSubject('ingredient', 'wheat', wheatFood), {
+    supported: true,
+    matches: true,
+    reason: 'ingredient_family_match',
+  });
+
+  const soyFood = food({
+    ingredients: [
+      {
+        name: 'Hydrolysed soya protein isolate',
+        category: 'protein_plant',
+        position: 1,
+        inclusion_pct: null,
+        note: null,
+        sub_ingredients: [],
+      },
+    ],
+  });
+  assert.deepEqual(matchClaimSubject('ingredient', 'soy', soyFood), {
+    supported: true,
+    matches: true,
+    reason: 'ingredient_family_match',
+  });
+});
+
+test('wheat allergen-family fallback excludes buckwheat, which is botanically unrelated', () => {
+  const buckwheatFood = food({
+    ingredients: [
+      {
+        name: 'Buckwheat',
+        category: 'carbohydrate',
+        position: 1,
+        inclusion_pct: null,
+        note: null,
+        sub_ingredients: [],
+      },
+    ],
+  });
+  assert.equal(matchClaimSubject('ingredient', 'wheat', buckwheatFood).matches, false);
+});
+
+test('allergen-family fallback does not widen matching for subjects outside the allowlist', () => {
+  // "lamb" is not in ALLERGEN_FAMILY_MATCH_RULES; a compound name containing
+  // it as a substring must still require the strict exact-key match.
+  const lambStewFood = food({
+    ingredients: [
+      {
+        name: 'Lamb bone broth',
+        category: 'protein_animal',
+        position: 1,
+        inclusion_pct: null,
+        note: null,
+        sub_ingredients: [],
+      },
+    ],
+  });
+  assert.equal(matchClaimSubject('ingredient', 'lamb', lambStewFood).matches, false);
+});
+
 test('active matching nutrient claim appears for an exact declared additive', () => {
   const withTaurine = food({
     ingredients: [],

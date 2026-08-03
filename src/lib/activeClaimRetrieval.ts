@@ -64,6 +64,36 @@ export const NUTRIENT_MATCH_RULES: Readonly<Record<string, NutrientMatchRule>> =
 const PROCESSING_METHODS: Readonly<Record<string, FoodFull['food_type']>> =
   RESEARCH_PROCESSING_METHODS;
 
+interface AllergenFamilyRule {
+  /** Lowercase substrings tested against the raw ingredient name. */
+  substrings: readonly string[];
+  /** Lowercase substrings that veto a match even if a substring above hit. */
+  excludes?: readonly string[];
+}
+
+/**
+ * Fallback for allergen-family research subjects ("wheat", "soy") that never
+ * exact-match a compound catalog ingredient name ("Ground whole grain
+ * wheat", "Soybean meal") under canonicalIngredientKey's identity matching.
+ * Curated and additive only: it widens matching for exactly these allowlisted
+ * subject values, never for ingredient matching in general. Each entry is
+ * verified against real food_ingredients strings before being added here
+ * (see BUILD_PROGRESS.md) — don't extend this from assumption.
+ */
+export const ALLERGEN_FAMILY_MATCH_RULES: Readonly<Record<string, AllergenFamilyRule>> = {
+  wheat: { substrings: ['wheat'], excludes: ['buckwheat'] },
+  soy: { substrings: ['soy', 'soya'] },
+  soya: { substrings: ['soy', 'soya'] },
+};
+
+function matchesAllergenFamily(rule: AllergenFamilyRule, names: string[]): boolean {
+  return names.some((name) => {
+    const normalized = name.toLowerCase();
+    if ((rule.excludes ?? []).some((exclude) => normalized.includes(exclude))) return false;
+    return rule.substrings.some((substring) => normalized.includes(substring));
+  });
+}
+
 const CATEGORY_BY_SUBJECT = new Map<string, string>(
   INGREDIENT_CATEGORIES.flatMap((category) => [
     [normalizeStructuredValue(category.value), category.value],
@@ -139,10 +169,20 @@ export function matchClaimSubject(
 ): SubjectMatchResult {
   if (subjectType === 'ingredient') {
     const subject = canonicalIngredientKey(subjectValue);
-    const matches = ingredientNames(food).some(
-      (name) => canonicalIngredientKey(name) === subject
-    );
-    return { supported: true, matches, reason: matches ? 'ingredient_exact' : 'ingredient_absent' };
+    const names = ingredientNames(food);
+    const exactMatch = names.some((name) => canonicalIngredientKey(name) === subject);
+    const familyRule = ALLERGEN_FAMILY_MATCH_RULES[normalizeStructuredValue(subjectValue)];
+    const familyMatch = !exactMatch && familyRule ? matchesAllergenFamily(familyRule, names) : false;
+    const matches = exactMatch || familyMatch;
+    return {
+      supported: true,
+      matches,
+      reason: matches
+        ? exactMatch
+          ? 'ingredient_exact'
+          : 'ingredient_family_match'
+        : 'ingredient_absent',
+    };
   }
 
   if (subjectType === 'nutrient') {
