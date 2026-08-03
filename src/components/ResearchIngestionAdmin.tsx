@@ -23,6 +23,7 @@ interface IngestionJob {
   gateway_cost_usd: number | null;
   result_summary: Record<string, unknown>;
   created_at: string;
+  label: string | null;
 }
 
 async function readBody(response: Response): Promise<Record<string, any>> {
@@ -371,14 +372,20 @@ export default function ResearchIngestionAdmin() {
           <div className="mt-3 grid gap-2">
             {jobs.map((job) => (
               <div key={job.id} className="flex flex-wrap justify-between gap-2 rounded border border-line p-3 text-[13px]">
-                <span>{job.job_type.replace(/_/g, ' ')} · {job.status.replace(/_/g, ' ')}</span>
-                <span className="metric">
-                  {job.gateway_model
-                    ? `${job.gateway_model} · ${job.gateway_cost_usd === null
-                      ? 'actual cost not reported'
-                      : `actual provider-reported cost $${Number(job.gateway_cost_usd).toFixed(6)}`}`
-                    : 'No provider call recorded'}
-                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold text-ink">{job.label ?? '(untitled)'}</p>
+                  <span>{job.job_type.replace(/_/g, ' ')} · {job.status.replace(/_/g, ' ')}</span>
+                </div>
+                <div className="text-right">
+                  <span className="metric block">
+                    {job.gateway_model
+                      ? `${job.gateway_model} · ${job.gateway_cost_usd === null
+                        ? 'actual cost not reported'
+                        : `actual provider-reported cost $${Number(job.gateway_cost_usd).toFixed(6)}`}`
+                      : 'No provider call recorded'}
+                  </span>
+                  <span className="help-text block">{new Date(job.created_at).toLocaleString()}</span>
+                </div>
                 {job.error_message && <p className="error-text w-full">{job.error_message}</p>}
               </div>
             ))}

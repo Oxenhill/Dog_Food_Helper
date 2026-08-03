@@ -83,6 +83,47 @@ async function completeJob(
   });
 }
 
+/**
+ * A raw job_type/status pair tells an operator nothing about which paper it
+ * was -- pdf_import/url_import jobs carry a title/filename in `input`, but
+ * draft_claims jobs only carry a document_id, and none of them carry a
+ * document title for cross-referencing. Resolve a human label for every job
+ * so "Recent processing jobs" is actually useful for figuring out what
+ * happened to a specific upload, not just a wall of identical-looking rows.
+ */
+async function attachJobLabels(
+  jobs: Array<{ input: Record<string, unknown> | null; result_summary: Record<string, unknown> | null }>
+): Promise<Array<{ label: string | null }>> {
+  const documentIds = new Set<string>();
+  for (const job of jobs) {
+    const inputDocId = job.input?.document_id;
+    if (typeof inputDocId === 'string') documentIds.add(inputDocId);
+    const resultDocId = job.result_summary?.document_id;
+    if (typeof resultDocId === 'string') documentIds.add(resultDocId);
+  }
+  const titleById = new Map<string, string | null>();
+  if (documentIds.size > 0) {
+    const { data } = await supabaseAdmin
+      .from('research_documents')
+      .select('id, title')
+      .in('id', Array.from(documentIds));
+    for (const row of data ?? []) {
+      titleById.set(row.id as string, (row.title as string | null) ?? null);
+    }
+  }
+  return jobs.map((job) => {
+    const input = job.input ?? {};
+    const title = typeof input.title === 'string' ? input.title : null;
+    const originalFilename = typeof input.original_filename === 'string' ? input.original_filename : null;
+    const identifier = typeof input.identifier === 'string' ? input.identifier : null;
+    const inputDocId = typeof input.document_id === 'string' ? input.document_id : null;
+    const resultSummaryDocId = job.result_summary?.document_id;
+    const resultDocId = typeof resultSummaryDocId === 'string' ? resultSummaryDocId : null;
+    const documentTitle = titleById.get(inputDocId ?? resultDocId ?? '') ?? null;
+    return { label: title ?? documentTitle ?? originalFilename ?? identifier ?? null };
+  });
+}
+
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (!admin) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -93,7 +134,11 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(20);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ jobs: data ?? [] });
+  const jobs = data ?? [];
+  const labels = await attachJobLabels(jobs);
+  return NextResponse.json({
+    jobs: jobs.map((job, index) => ({ ...job, label: labels[index].label })),
+  });
 }
 
 export async function POST(request: NextRequest) {
