@@ -1,5 +1,146 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Research Layer P7 admin/expert-reviewer workspace redesign (2026-08-03, latest, local implementation)
+
+P7 is complete as one whole phase: a redesign of the research admin surface
+for two audiences inside the existing `requireAdmin`-gated area — day-to-day
+operators and expert reviewers (vets) doing reference-quality lookups. Owner
+confirmed this stays entirely admin-account-level, not public-facing:
+"expert introduced into this system will be done so at an admin account
+level... research only affects [customers] by how its information informs
+and interacts with the dogs data... exposing research to them is not
+necessary." The original narrow P7 scope from
+`docs/research-behive-architecture-review-2026-08.md` (a public-facing,
+unauthenticated evidence map) is superseded by this phase and pushed to a
+future P8 — a reversible naming decision, not an owner-directed one (the
+owner didn't pick between "call this P7" vs. "insert a phase before P7";
+since the practical work is identical either way, this was made and
+disclosed per the "reasonable technical decision" clause rather than
+re-asked).
+
+**The problem.** Five components — `ResearchMissionAdmin`,
+`ResearchIngestionAdmin`, `ResearchKnowledgeAdmin`, `ResearchGraphExplorer`,
+`ResearchAdmin` (2,310 lines) — were simply stacked vertically on one route,
+`/admin/research`. No shared navigation, no visual hierarchy connecting a
+mission to the documents it acquired, the claims drafted from them, or the
+graph view of the whole. Owner: "there is still the separation between
+ingestion of the research data and being able to see and use it properly...
+I expect this will need multiple UI pages not to be crammed onto one page."
+
+**Design process.** Followed this project's own instruction to design before
+coding: loaded the `frontend-design` and `dataviz` skills, then built a
+clickable HTML/JS mockup (Artifact, not committed to the repo) using
+fabricated sample data across five design iterations, each responding to
+direct owner feedback (page split → add a spatial graph page → the graph's
+physics/legibility/scale were each individually broken and fixed → owner
+signed off with "build this as it is... I will revisit the graphing again
+later"). Full iteration history is in agentmemory, not duplicated here.
+
+**Information architecture.** `/admin/research/*` is now seven routes under
+one shared `layout.tsx` (`AdminShell` + a new `ResearchNav` secondary nav),
+using a new `wide` prop on `AdminShell` (`.container-wide`, ~1600px cap) so
+data-dense pages aren't squeezed into the app's normal 768px reading column:
+
+- `/admin/research` (Home) — new `ResearchHome.tsx`: stat tiles (papers in
+  library, awaiting-review counts, active clusters, recent lifecycle
+  events), a merged activity feed (missions + retractions), quick actions.
+  Aggregates existing endpoints client-side; added no new API surface.
+- `/admin/research/intake` — existing `ResearchIngestionAdmin`, unchanged,
+  relocated with page framing.
+- `/admin/research/review` — **soft merge**: `ResearchKnowledgeAdmin`
+  (cluster review) and `ResearchAdmin` (individual claim review) render on
+  one page with unifying framing. Deliberately not a deep code merge — the
+  two use genuinely different mechanisms (cluster-level RPC vs. per-claim
+  PATCH), both already independently tested; merging the UI location was the
+  actual ask, not rewriting two working, reviewed flows for cosmetic gain.
+- `/admin/research/missions` — existing `ResearchMissionAdmin`, unchanged.
+- `/admin/research/explorer` — existing `ResearchGraphExplorer` (quote-first
+  list navigator), unchanged.
+- `/admin/research/graph` — **new**: `ResearchGraphCanvas.tsx`, a real
+  spatial force-directed/timeline graph, see below.
+- `/admin/research/retractions` — **new**: `ResearchRetractionWatch.tsx`
+  reading a new route, `GET /api/admin/research/lifecycle-events`
+  (admin-gated, reads the existing P5 `research_evidence_lifecycle_events`
+  table, resolves document/claim/cluster ids to labels — no schema change,
+  no new writable path; the sole way to retract/supersede a document is
+  still `POST /api/admin/research/[docId]/lifecycle`). Previously the only
+  way to see a retraction's downstream effect was to know to search for it
+  in the graph explorer.
+
+**Graph canvas — the one genuinely new visualization.** Reuses the existing
+`GET /api/admin/research/graph` endpoint and P4 read model
+(`researchGraphReadModel.ts`) unchanged; all eligibility/quote/review rules
+are inherited, not reimplemented. New pure module
+`src/lib/researchGraphLayout.ts` (11 tests,
+`src/lib/__tests__/researchGraphLayout.test.ts`) transforms the read model
+into a layout-ready shape:
+
+- **Dynamic topic grouping, not a fixed list** — owner's explicit
+  requirement ("the research layer should identify new topic groups not
+  have a fixed one, this is dynamic information"). `deriveNodeConcepts`
+  reads `subject_type:subject_value` directly off claim/cluster rows (the
+  same field `research_graph_concept_nodes` already exposes) and propagates
+  it to documents/lifecycle-events via `DERIVED_FROM`/`RETRACTED_BY`/
+  `SUPERSEDES` edges. No topic is ever hardcoded; the UI's "Topics in view"
+  list is built by scanning whatever concepts are actually present.
+  `deriveStudyFamilies` and `deriveClusterGroups` are similarly derived from
+  `SAME_STUDY_FAMILY` and `MEMBER_OF` edges, not separate lookups.
+- **Node status is real, not fabricated** — the graph endpoint only ever
+  returns active, human-reviewed content plus explicit tombstones (P3's
+  active-only eligibility rule), so "status" here is exactly `active` or
+  `tombstoned` (`data.tombstoned === true`), never an invented "queued"
+  state (the mockup's queued-status nodes were a mockup-only liberty; the
+  real projection cannot return queued/draft material by construction).
+- **Legibility, tuned through several rounds of owner feedback on the
+  mockup**: alpha-cooled force simulation (settles instead of jittering
+  forever) with an always-on radius-aware overlap-prevention pass
+  independent of cooling; persistent on-canvas labels (not click-only) with
+  per-frame greedy collision avoidance (priority: selected node, then
+  cluster/document, then event, then claim — the category caption for a
+  topic halo only draws in whatever space labels didn't already claim);
+  directional arrowheads on every edge; a "Fit" view that frames whatever's
+  currently visible; a near-full-height canvas (`calc(100vh-200px)`) with
+  the detail panel as a small overlay instead of a permanent grid column.
+- **Anti-corroboration invariant preserved by construction, not just by
+  copy**: no spatial force-directed force is ever driven by
+  `semantic_similarity` or edge count — grouping forces only ever use
+  concept/study-family/cluster identity, matching the same "navigation
+  signal only, never evidence strength" rule `ResearchGraphExplorer`
+  already enforces. A literal spatial node-link canvas was initially a
+  candidate to skip entirely (the architecture doc's own threat table warns
+  dense/near nodes look more certain than the evidence supports) — built
+  anyway once the owner asked directly for it, with that safeguard kept
+  intact rather than dropped for visual appeal.
+
+**Verified**: full suite 331/331 (320 existing + 11 new), `tsc --noEmit`
+clean, optimized production build clean (all seven `/admin/research/*`
+routes plus `/api/admin/research/lifecycle-events` appear in the build
+output), `git diff --check` clean. `npm run lint` could not run non-
+interactively in this session (ESLint config prompt, a pre-existing gap in
+this repo, not introduced here — matches the deferred-lint gap noted in
+earlier phase records). Live-checked against the local dev server:
+unauthenticated `/admin/research` redirects to `/signin` (client-side
+auth guard, no crash before redirect); unauthenticated
+`/api/admin/research/lifecycle-events` fails closed 404, same pattern as
+every existing admin route; zero server errors in dev server logs across
+the navigation. No admin test credentials were available in this session to
+verify the authenticated views visually — that remains open, see below.
+
+**Not done in this pass, disclosed rather than silently skipped**: no visual
+screenshot verification of the authenticated pages (no test admin account in
+this sandbox); the owner has already said they'll revisit the graph canvas
+specifically once seen in production ("I will then revisit the graphing
+again later to fine tune it once ive seen it in a full productions
+format") — this is expected, not a gap to chase further right now. `npm
+audit`'s two pre-existing high-severity Next.js/postcss advisories
+(documented in the P6 record) are unrelated and untouched.
+
+Per the owner's explicit "You have my full permission to build and commit
+and push to main" — this phase, uniquely among P0–P6, needed no Supabase
+migration (pure UI + one new read-only API route over an already-existing
+P5 table), so there is no separate production-migration gate to clear
+before the Vercel auto-deploy that follows a push to `main`.
+
 ## Research Layer P4+P5 production release (2026-08-02, latest)
 
 Owner approved commit, push, production migration, and deploy for both P4

@@ -256,10 +256,38 @@ flowchart TD
 - Add schedules only after idempotency, source policy and cost caps are proven.
 - Acceptance: recurrence cannot overlap itself, exceed caps, bypass policy, or activate evidence.
 
-### P7 — user-facing evidence map
+### P7 — admin/expert-reviewer research workspace (redefined 2026-08-03)
+
+**This phase was redefined before it was built.** The line below described
+the original narrow scope, dated 2026-08-01. On 2026-08-03 the owner asked
+for the research admin surface itself to be redesigned first — a multi-page
+workspace for internal operators and admin-account-level expert reviewers
+(vets), covering missions, intake, review, the evidence graph, and a new
+retraction watch — explicitly confirming this stays inside the existing
+`requireAdmin`-gated area, not public-facing: "expert introduced into this
+system will be done so at an admin account level... exposing research to
+[customers] is not necessary and overcomplicates their journey." That is
+what P7 now means. The original scope described immediately below is
+deferred to a future P8, unbuilt.
+
+- Status: local implementation complete, see `BUILD_PROGRESS.md`'s
+  "Research Layer P7 admin/expert-reviewer workspace redesign" entry for
+  the full record — new multi-page IA under `/admin/research/*`, a new
+  spatial force/timeline graph canvas (`src/lib/researchGraphLayout.ts` +
+  `src/components/research/ResearchGraphCanvas.tsx`) with dynamically
+  discovered topic groups (no fixed topic list), and a new retraction-watch
+  read route over the existing P5 audit table. No schema change. Awaiting
+  the owner's own follow-up pass on the graph canvas specifically ("I will
+  revisit the graphing again later to fine tune it once I've seen it in a
+  full production format") — expected, not an open defect.
+
+### P8 — user-facing evidence map (originally scoped as P7, 2026-08-01)
 
 - Consider only after the reviewed graph and correction lifecycle are stable.
 - Acceptance: plain-language authority warnings, quote/source access, accessibility, mobile usability, and no ranking implication.
+- Explicitly public-facing and explicitly out of scope for P7 above — the
+  owner has directly confirmed customers should not be exposed to raw
+  research at all; it should only ever inform recommendations indirectly.
 
 ## Approval record and implementation boundary
 

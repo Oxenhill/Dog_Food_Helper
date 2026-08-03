@@ -111,10 +111,13 @@ export default function AdminShell({
   children,
   eyebrow,
   title,
+  wide,
 }: {
   children: React.ReactNode;
   eyebrow?: string;
   title?: string;
+  /** Data-dense surfaces (research workspace) opt out of the normal 768px reading column. */
+  wide?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -201,7 +204,7 @@ export default function AdminShell({
         </nav>
       </header>
 
-      <main className="container-page">
+      <main className={wide ? 'container-wide' : 'container-page'}>
         <SystemAlertsBanner />
         {(eyebrow || title) && (
           <div className="mb-6">
