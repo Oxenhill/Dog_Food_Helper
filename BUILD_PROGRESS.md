@@ -3092,3 +3092,64 @@ flag doing both jobs, and matches the project's established off-by-default patte
 (`recommendation_scoring_weights.research_scoring_enabled` did the same for Gate 5 itself). Needs its own
 design pass before implementation (new weights-table column vs. new settings row, exact UI copy for what
 "research-backed" means to an owner, whether it's per-dog or global) — not scoped further here.
+
+## Bugfix — "DOMMatrix is not defined" on research PDF upload (2026-08-03)
+
+**Symptom:** owner uploaded a real research paper ("Evaluation of Serum and Urine Amino Acids in Dogs
+with Chronic Kidney Disease and Healthy Dogs Fed a Renal Diet") via `/admin/research/intake`. The
+`finalize_pdf` job failed with `error_message = "DOMMatrix is not defined"`
+(`research_ingestion_jobs.id = 23910b4e-a17a-43e1-8af4-21c0777bf529`).
+
+**Root cause, confirmed by static inspection of the installed dependency, not guessed:**
+`pdf-parse@2.4.5` bundles `pdfjs-dist@5.4.296`. Its worker (`pdf.worker.mjs`) tries to self-polyfill
+`globalThis.DOMMatrix`/`Path2D`/`ImageData` for Node by dynamically requiring `@napi-rs/canvas`
+(pdf-parse's own dependency, already present and working in this environment) the first time a
+canvas-drawing code path is hit — gradients, patterns, clipping paths, the kind of vector graphics a
+figure/chart in a scientific paper produces, which simple lab-report PDFs never touch. That self-polyfill
+is wrapped in a try/catch that logs a warning and silently continues on failure rather than throwing
+(`"Cannot polyfill \`DOMMatrix\`, rendering may be broken."` in the bundled source). When it silently no-ops,
+the next line to call `new DOMMatrix(...)` directly throws the exact error recorded. Reproduced the failure
+mode's mechanism was confirmed live by downloading the owner's actual uploaded PDF from the
+`research-ingestion` storage bucket and replaying it through the real `finalize_pdf` route on a fresh `next
+dev` server — the self-polyfill's timing/context sensitivity meant it did NOT fail on replay (non-deterministic
+by nature of a require-inside-a-worker race), but the fragile mechanism itself is real and demonstrated in
+the shipped code, and the fix removes it from the equation entirely rather than relying on catching it after
+the fact.
+
+**Fix** (`src/lib/pdfText.ts`): explicitly polyfill `DOMMatrix`/`Path2D`/`ImageData` onto `globalThis` from
+`@napi-rs/canvas` ourselves, once, at module load — before `pdf-parse`/`pdfjs` ever gets a chance to attempt
+its own fragile self-polyfill. Idempotent (`typeof globalThis.X === 'undefined'` guard), so it's a no-op if
+something else already set them. Also: added `@napi-rs/canvas` as an explicit direct dependency
+(`package.json`) rather than relying on it only being resolvable as pdf-parse's transitive dependency, and
+added it to `next.config.mjs`'s `serverComponentsExternalPackages` alongside `pdf-parse` (same rationale —
+it's a native-binary package, and Next's route-handler bundler should not try to rewrite it).
+
+**Verification:**
+- `tsc --noEmit`: clean.
+- `npm test`: 349/349 passing (no test coverage added — this is dependency-loader-order behavior, not
+  business logic; not practically unit-testable without mocking pdf-parse's internals).
+- `npm run build`: clean.
+- `git diff --check`: clean.
+- `npm audit`: 2 pre-existing high-severity advisories (Next.js/postcss), confirmed via `git stash` +
+  `npm install` on the unmodified tree that they predate this change — not introduced by it, not addressed
+  here (fixing them is a Next 14→16 major-version jump, out of scope for a bugfix).
+- **Live verification, throwaway-admin-QA pattern:** downloaded the owner's actual failed PDF from storage,
+  replayed the real `prepare_pdf` → upload → `finalize_pdf` flow against the live dev server three times
+  (once pre-fix confirming success — the bug is non-deterministic, so absence of failure on replay isn't
+  proof by itself, which is why the fix targets the confirmed underlying mechanism rather than "it didn't
+  reproduce" — and twice post-fix on a freshly restarted server). All three succeeded end to end: 37 chunks,
+  real Voyage embedding call, `research_documents` row created. Test documents/chunks deleted afterward.
+  Test ingestion-job rows (3) and their `research_provider_calls` telemetry rows could NOT be deleted — both
+  tables are deliberately append-only (a DB trigger blocks `research_provider_calls` deletes outright,
+  matching the project's audit-immutability principle) — left in place as harmless residual audit history
+  (~$0.002 total real cost already incurred, unrecoverable either way). For the same reason the throwaway
+  QA account (`pdf-repro-qa-throwaway@example.com`) could not be fully deleted (its id is the `requested_by`
+  on those immutable job rows) — demoted to non-admin instead of the usual full delete.
+
+**Owner's original upload:** the real failed job's PDF is still sitting in the `research-ingestion` bucket
+(never auto-deleted on failure, by design — see the route's finalize_pdf catch path). Not re-processed on
+the owner's behalf without them re-driving it — the natural next step is to retry the same upload through
+the real `/admin/research/intake` UI now that the bug is fixed.
+
+**Needs owner input:** none — this is a pure bugfix, no policy/scope decision involved. Retry the original
+upload when convenient.
