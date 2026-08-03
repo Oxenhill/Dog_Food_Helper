@@ -1,6 +1,43 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## PDF-upload species filtering built (2026-08-03, latest)
+## Claim drafting auto-runs after import; job list gets labels/timestamps (2026-08-03, latest)
+
+Owner uploaded ~28 real papers in one session and correctly called out
+the "Draft structured evidence" per-document click as pointless toil:
+importing a document (PDF upload, candidate import, URL import) is
+already the deliberate human action. Drafting only proposes claims into
+`queued_for_review` clusters -- cluster approval is the actual evidence
+gate and is completely unchanged. Owner's framing: "the human trigger is
+the fact i uploaded the documents... the logical step after i upload a
+document is to process them."
+
+`finalize_pdf` and `import_candidate`/`import_url`
+([ingestion/route.ts](src/app/api/admin/research/ingestion/route.ts))
+now call `draftDocumentIntoKnowledge` automatically right after
+ingestion succeeds. Skipped only for duplicates (claims already exist)
+and `methodology_context_only` sources (not evidence-eligible). Never
+turns a successful import into an error if drafting fails -- the manual
+button on the Review queue page stays as a retry path. Deliberately
+**not** wired into the monthly discovery cron, which only surfaces
+candidates; importing one is still an explicit per-item click.
+
+Also fixed, same session: the "Recent processing jobs" list showed only
+`{job_type} · {status}` with no timestamp or document reference, so
+several old `draft_claims` rows from 2026-07-29 were indistinguishable
+from a fresh upload and buried it. The route now resolves a label
+(title/filename, or the linked document's title for jobs that only
+carried a `document_id`) and the list renders it with a formatted
+timestamp.
+
+Full `tsc --noEmit`: clean. `npm test`: 361/361. Commits `b6b033a`
+(job labels) and `d1201c4` (auto-draft), pushed to main.
+
+**Not done: the 28-document backlog won't retroactively draft** -- this
+only fires for imports going forward. Draft-all-pending for the existing
+backlog is a real ~28-call Sonnet spend; flagged to the owner rather than
+run silently.
+
+## PDF-upload species filtering built (2026-08-03, earlier)
 
 Closes the gap logged just below (same day): `ingestUploadedResearchPdf`
 had no species check at all, unlike the URL/PMID path's document-level
