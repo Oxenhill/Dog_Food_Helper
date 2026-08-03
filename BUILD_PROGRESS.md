@@ -1,6 +1,25 @@
 # Bowl (by Dog Smart) — Build Progress
 
-## Claim drafting auto-runs after import; job list gets labels/timestamps (2026-08-03, latest)
+## "Awaiting processing" now excludes already-drafted zero-claim papers (2026-08-03, latest)
+
+Owner ran the backlog catch-up (previous entry) then still saw 20 papers
+under "Papers awaiting structured processing" and read it as the
+auto-draft fix not working. It wasn't -- confirmed via job history that
+all 20 already had 1+ successful `draft_claims` attempts, several with
+multiple, all correctly producing zero claims (a few are genuinely
+methodology-scope, most just had nothing claim-worthy in the kept text).
+The bug was real, just one layer over: the UI defined "pending" as
+`claims.length === 0`, which is also true for "tried, found nothing".
+
+`listProcessingState` ([processing/route.ts](src/app/api/admin/research/processing/route.ts))
+now joins `draft_claims` job history per document. The review queue
+splits the zero-claim set into real "awaiting processing"
+(`draft_attempts === 0`) and a new "Processed, no claims found" section
+with a labeled Retry button instead of an indistinguishable one; the
+Home dashboard's pending-count tile uses the same distinction. `tsc
+--noEmit` clean, 361/361 tests. Pushed `ad3d5f9`.
+
+## Claim drafting auto-runs after import; job list gets labels/timestamps (2026-08-03, earlier)
 
 Owner uploaded ~28 real papers in one session and correctly called out
 the "Draft structured evidence" per-document click as pointless toil:
