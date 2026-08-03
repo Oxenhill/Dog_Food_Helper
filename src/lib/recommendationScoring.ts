@@ -6,15 +6,25 @@ import { type ResearchRelevanceResult } from './researchScoring';
 import { type DogCorrelationContext, scoreCorrelationSignalForFood } from './correlationScoring';
 
 /**
- * Recommendation scoring (Phase 3, Gate 4 research boundary)
+ * Recommendation scoring (Phase 3; Gate 5 research boundary)
  *
  * overall_score = nutritional_fit_weight*nutritional_fit
- *               + research_relevance_weight*research_relevance   (Gate 4 — fixed at zero)
+ *               + research_relevance_weight*research_relevance   (Gate 4: always exactly 0. Gate 5, when enabled: 0.5-neutral, ±0.3 capped — see below)
  *               + budget_fit_weight*budget_fit
  *               + correlation_signal_weight*correlation_signal   (Phase 6 — dog's own log history, real; 0.5 neutral if no data yet)
  *
  * Weights come from `recommendation_scoring_weights` (active row), normalized
  * if they don't sum to 1.0 — never hardcoded here.
+ *
+ * This function is agnostic to WHICH research result it's given: the caller
+ * decides. Real recommendations (api/recommendations/route.ts) pass the
+ * unmodified Gate 4 forced-zero result unless `research_scoring_enabled` is
+ * true, in which case they pass the real Gate 5 result
+ * (researchScoringPolicy.ts's computeResearchRankingResult — a *different*,
+ * deliberately 0.5-neutral convention, necessary because Gate 5 must express
+ * both supports and cautions_against as a two-sided deviation, which a
+ * literal-zero baseline cannot do). The admin decision-trace page computes
+ * both, for every food, regardless of the flag.
  */
 
 export interface ScoringWeights {
@@ -22,6 +32,13 @@ export interface ScoringWeights {
   research_relevance_weight: number;
   budget_fit_weight: number;
   correlation_signal_weight: number;
+  // Gate 5 switch (recommendation_scoring_weights.research_scoring_enabled,
+  // default false). Independent of research_relevance_weight's magnitude:
+  // false means research contributes zero to every real recommendation
+  // regardless of what the weight is set to. Flipping this on is the intended
+  // way to make research affect real client-facing scores later, with no
+  // code deploy. See src/lib/researchScoringPolicy.ts.
+  research_scoring_enabled: boolean;
 }
 
 // Documented default from architecture doc §5 / Part A's column defaults —
@@ -32,12 +49,15 @@ const FALLBACK_WEIGHTS: ScoringWeights = {
   research_relevance_weight: 0.25,
   budget_fit_weight: 0.2,
   correlation_signal_weight: 0.2,
+  research_scoring_enabled: false,
 };
 
 export async function getActiveScoringWeights(): Promise<ScoringWeights> {
   const { data, error } = await supabaseAdmin
     .from('recommendation_scoring_weights')
-    .select('nutritional_fit_weight, research_relevance_weight, budget_fit_weight, correlation_signal_weight')
+    .select(
+      'nutritional_fit_weight, research_relevance_weight, budget_fit_weight, correlation_signal_weight, research_scoring_enabled'
+    )
     .eq('active', true)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -51,6 +71,7 @@ export async function getActiveScoringWeights(): Promise<ScoringWeights> {
     research_relevance_weight: Number(data.research_relevance_weight),
     budget_fit_weight: Number(data.budget_fit_weight),
     correlation_signal_weight: Number(data.correlation_signal_weight),
+    research_scoring_enabled: Boolean(data.research_scoring_enabled),
   };
 }
 
@@ -69,6 +90,7 @@ export function normalizeWeights(weights: ScoringWeights): ScoringWeights {
     research_relevance_weight: weights.research_relevance_weight / sum,
     budget_fit_weight: weights.budget_fit_weight / sum,
     correlation_signal_weight: weights.correlation_signal_weight / sum,
+    research_scoring_enabled: weights.research_scoring_enabled,
   };
 }
 
@@ -78,8 +100,8 @@ export interface ScoredFood {
   confidence: number;
   nutritional_fit: NutritionalFitResult;
   budget_fit: BudgetFitResult;
-  research_relevance: number; // Gate 4 — always zero; active evidence is attached separately
-  research_summary: string; // states evidence visibility and the zero ranking boundary
+  research_relevance: number; // whatever `research` the caller passed in — exactly 0 (Gate 4, default) or a real 0.5-neutral Gate 5 result
+  research_summary: string; // matches whichever research_relevance came in
   correlation_signal: number; // Phase 6 — real (0.5 neutral if this dog has no eligible signal history yet)
   correlation_summary: string;
   reason: string;
@@ -88,10 +110,11 @@ export interface ScoredFood {
 /**
  * Per-food scoring.
  *
- * `research` is a deterministic Gate 4 boundary result: score zero, with a
- * plain-language note saying whether active evidence is shown separately.
- * Historical offline scoring code remains available outside this request path,
- * but this function makes no model calls and receives no model-derived score.
+ * `research` is whichever deterministic result the caller computed: the
+ * Gate 4 forced-zero boundary, or (when enabled) the real Gate 5 policy
+ * result. Either way it is always a plain {score, summary} pair with no
+ * model call in this function — historical offline scoring code remains
+ * available outside this request path but is not a caller here.
  *
  * As of Phase 6 it also takes this dog's ingredient_outcome_signals
  * (fetchDogCorrelationSignals — dog-level, fetched once per request and
@@ -124,9 +147,9 @@ export async function scoreFood(
     weights.budget_fit_weight * budget_fit.score +
     weights.correlation_signal_weight * correlation_signal;
 
-  // Preserve the existing confidence calculation and active weights in this
-  // gate. Research evidence changes neither: its score contribution is zero
-  // until a separately reviewed policy is approved.
+  // Confidence stays the sum of active weights regardless of what research
+  // contributed — it reports how much of the formula had a real input at
+  // all, not how favourable that input was.
   const confidence = Math.round(
     (weights.nutritional_fit_weight +
       weights.research_relevance_weight +

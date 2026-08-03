@@ -364,6 +364,8 @@ export function toResearchEvidence(
     outcome_type: cluster?.outcome_type ?? null,
     outcome_value: cluster?.outcome_value ?? null,
     matched_dog_context: matchedDogContext,
+    document_id: document.id,
+    study_family_id: document.duplicate_of_document_id ?? document.id,
   };
 }
 
@@ -508,7 +510,7 @@ async function queryRows<T>(
   return (data ?? []) as T[];
 }
 
-const supabaseActiveClaimDataSource: ActiveClaimDataSource = {
+export const supabaseActiveClaimDataSource: ActiveClaimDataSource = {
   loadActiveClaims: () =>
     queryRows<ResearchClaim>('research_claims', (query) =>
       query
@@ -574,3 +576,35 @@ const supabaseActiveClaimDataSource: ActiveClaimDataSource = {
 export const retrieveActiveClaimEvidence = createActiveClaimEvidenceRetriever(
   supabaseActiveClaimDataSource
 );
+
+/**
+ * What-if sandbox support (admin decision-trace page only). Overrides the
+ * dog conditions/restrictions this retriever matches claims against, without
+ * touching the real `dog_health_conditions`/`dog_restrictions` tables or the
+ * default retriever above. Everything else — claims, documents, chunks,
+ * findings, outcome metrics, cluster applicability — still reads the real
+ * data for this dog, exactly like production. When `overrides` is omitted,
+ * returns the base source unchanged.
+ */
+export function withConditionRestrictionOverrides(
+  base: ActiveClaimDataSource,
+  overrides?: { conditions?: string[]; restrictions?: string[] }
+): ActiveClaimDataSource {
+  if (!overrides || (!overrides.conditions && !overrides.restrictions)) return base;
+  return {
+    ...base,
+    loadDogConditions: overrides.conditions
+      ? async () =>
+          overrides.conditions!.map((condition) => ({
+            id: 'what-if-override',
+            dog_id: 'what-if-override',
+            condition,
+            source: 'owner_reported' as const,
+            created_at: new Date().toISOString(),
+          }))
+      : base.loadDogConditions,
+    loadDogRestrictions: overrides.restrictions
+      ? async () => overrides.restrictions!.map((substance) => ({ substance }))
+      : base.loadDogRestrictions,
+  };
+}

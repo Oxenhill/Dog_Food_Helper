@@ -17,6 +17,7 @@ import {
   researchRankingResult,
   retrieveActiveClaimEvidence,
 } from '@/lib/activeClaimRetrieval';
+import { computeResearchRankingResult } from '@/lib/researchScoringPolicy';
 
 const DISCLAIMER =
   'This is a decision-support tool, not veterinary advice. Always consult your vet before changing your dog\'s diet, especially if your dog has existing health conditions.';
@@ -105,8 +106,12 @@ export async function GET(request: NextRequest) {
  * Flow (architecture doc §5):
  *   1. Hard filter (deterministic, §2) — excludes restricted-ingredient foods
  *   2. Retrieve eligible active claims and deterministically match them
- *   3. Keep the Gate 4 research ranking contribution at exactly zero
- *   4. Score candidates: nutritional_fit + zero research contribution + budget_fit
+ *   3. Research ranking contribution: exactly zero (Gate 4), unless
+ *      `recommendation_scoring_weights.research_scoring_enabled` is true, in
+ *      which case the real Gate 5 policy result is used instead
+ *      (researchScoringPolicy.ts). Default is false — unchanged Gate 4
+ *      behaviour for every real recommendation until an admin turns it on.
+ *   4. Score candidates: nutritional_fit + research contribution + budget_fit
  *      + correlation_signal
  *   5. Attach each recommended food's full ingredient list and nutrients
  *   6. Persist the set, then return it
@@ -210,24 +215,24 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < foodsToScore.length; i += SCORING_BATCH_SIZE) {
       const batch = foodsToScore.slice(i, i + SCORING_BATCH_SIZE);
       const batchResults = await Promise.all(
-        batch.map((food) =>
-          scoreFood(
+        batch.map((food) => {
+          const evidenceForFood = activeResearch.evidenceByFoodId.get(food.id) ?? [];
+          const research = weights.research_scoring_enabled
+            ? computeResearchRankingResult(evidenceForFood)
+            : researchRankingResult(evidenceForFood.map((evidence) => evidence.direction));
+          return scoreFood(
             typedDog,
             food,
             der,
             weights,
             monthlyBudget,
-            researchRankingResult(
-              (activeResearch.evidenceByFoodId.get(food.id) ?? []).map(
-                (evidence) => evidence.direction
-              )
-            ),
+            research,
             correlationContext,
             // Flattened, so nested sub-ingredients are matched too — a
             // beef-flavoured food's hidden chicken is a nested row.
             flattenIngredientNames(detail.get(food.id)?.ingredients ?? [])
-          )
-        )
+          );
+        })
       );
       scored.push(...batchResults);
     }
@@ -316,7 +321,7 @@ export async function POST(request: NextRequest) {
       research_runtime: {
         eligible_claim_count: activeResearch.eligibleClaimCount,
         unsupported_claim_count: activeResearch.unsupportedClaimIds.length,
-        ranking_effect: 'none',
+        ranking_effect: weights.research_scoring_enabled ? 'gate5_applied' : 'none',
       },
       disclaimer: DISCLAIMER,
     };

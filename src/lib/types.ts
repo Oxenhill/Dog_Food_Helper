@@ -390,6 +390,9 @@ export interface ResearchDocument {
   retrieved_at: string;
   review_status: ReviewStatus;
   superseded_by?: string | null;
+  // P4 study-family dedup (researchStudyFamily.ts). Always points directly to
+  // a primary document; null when this document IS a primary.
+  duplicate_of_document_id?: string | null;
 }
 
 export interface ResearchChunk {
@@ -511,6 +514,14 @@ export interface ResearchEvidence {
   outcome_type?: string | null;
   outcome_value?: string | null;
   matched_dog_context?: string[];
+  // Gate 5 corroboration input (researchScoringPolicy.ts): the source
+  // document's id, and its study-family root -- duplicate_of_document_id when
+  // this document is a republished form of an earlier one, otherwise the
+  // document's own id. Two evidence items sharing a study_family_id are the
+  // same underlying study and must never be counted as independent
+  // corroboration of each other.
+  document_id: string;
+  study_family_id: string;
 }
 
 export interface ResearchEvidenceCluster {

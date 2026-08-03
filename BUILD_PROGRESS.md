@@ -2866,3 +2866,145 @@ was approved.
 
 The pre-existing `docs/research-brain-handoff-2026-07-29.md` edit remains
 outside these implementation commits.
+
+## Gate 5 — research evidence actually scores, behind an explicit switch (2026-08-03)
+
+**Status:** implemented, tested, and verified live against real data on branch
+`codex/mobile-pack-capture`. Not yet committed/pushed (this task's brief
+explicitly withheld the standing build/commit/push permission carried from the
+P7 session — needs asking for again).
+
+**What changed and why.** The owner reviewed the P7 research admin workspace
+and asked directly: does research evidence actually inform a recommendation,
+or does it just sit there? It was confirmed sitting there —
+`researchRankingResult()` (`src/lib/activeClaimRetrieval.ts`) always returned
+score zero (Gate 4, 2026-07-29, itself a deliberate and correct placeholder —
+see `docs/research-gate4-2026-07-29.md`'s "What remains before evidence may
+influence ranking" section, which named exactly what a real policy needed to
+define). The owner reversed that call and asked for a real scoring policy, an
+admin diagnostic view showing recommendations with/without research applied,
+and a what-if sandbox — with the explicit, unmoved boundary that
+`hardFilter.ts`'s deterministic exclusion logic stays completely untouched
+(CLAUDE.md's safety-layer-separation principle, design principle #1).
+
+**The Gate 5 formula** (`src/lib/researchScoringPolicy.ts`, new) — proposed to
+the owner as a short design doc before any code was written, approved as
+proposed:
+- Evidence groups into **topics** (a reviewed cluster id, or
+  `subject_type:subject_value` for a direct unclustered claim) so an unrelated
+  supports finding and a cautions finding on the same food never cancel out.
+- Per topic: `strength = grade_weight[A..E: 1.0/0.8/0.6/0.35/0.15] ×
+  (grading_inputs_complete ? 1 : 0.5) × (abstract_only ? 0.75 : 1.0)`.
+- `neutral`/`insufficient_evidence` directions never move the score (shown,
+  inert) — only `supports`/`cautions_against` do.
+- Corroboration: each additional **independent study family** (via the new
+  `ResearchEvidence.study_family_id`, sourced from P4's
+  `research_documents.duplicate_of_document_id` dedup — a preprint repeat of
+  an already-counted study adds nothing) backing the same topic adds +0.05,
+  capped at +0.15/topic.
+- Topic contributions sum, clamp to [-1, 1], then scale by a `±0.3` cap:
+  `research_relevance = clamp(0.5 + clamped_sum × 0.3, 0, 1)`, i.e. final
+  range **[0.2, 0.8]** — research can never be the deciding factor. This 0.5-
+  neutral convention deliberately matches `correlationScoring.ts`'s existing
+  `NEUTRAL_SCORE` pattern (a factor with no signal defaults to the midpoint,
+  not to zero) rather than Gate 4's literal-zero placeholder, because Gate 5
+  has to express both supports and cautions as a genuine two-sided deviation,
+  which a zero floor cannot do. Confirmed live (see verification below) this
+  means every food for a dog with zero matching evidence gets a uniform
+  +0.125 lift when Gate 5 is enabled (0.25 weight × 0.5 midpoint) — this does
+  not change ranking (uniform across all foods) and mirrors how
+  `correlation_signal` already treats "no history yet," so it was kept as
+  designed rather than special-cased back to zero.
+- Every constant carries a plain-language `explain` string in the same object
+  — the admin page renders these directly rather than showing bare numbers.
+
+**The explicit on/off switch.** Live schema check
+(`recommendation_scoring_weights`) found `research_relevance_weight` already
+`0.25` — a real nonzero magnitude, inert only because the code path forced
+the score to zero. Wiring the real formula straight into that existing weight
+would have made research affect every real client-facing recommendation the
+moment this shipped, contradicting the owner's explicit "admin-only for now"
+scoping. Migration `20260803140000_add_research_scoring_enabled_flag.sql`
+(applied live) adds `recommendation_scoring_weights.research_scoring_enabled
+boolean not null default false` — a separate switch from the weight's
+magnitude. `POST /api/recommendations` now computes the real Gate 5 result
+only when this flag is true; `research_runtime.ranking_effect` reports
+`'gate5_applied'` or `'none'` accordingly. Confirmed live after all testing:
+flag is still `false`, weight is still `0.25`, so today's real recommendations
+are byte-for-byte unchanged. Flipping it on later is the owner's intended path
+to making this live for real dog owners, with no code deploy — this is what
+the owner asked for when clarifying scope ("give admin a way of switching it
+on for owners without refactoring code").
+
+**Admin decision-trace page** (`/admin/research/decision-trace`, 8th
+`ResearchNav` entry) — pick any registered dog (new admin-gated
+`GET /api/admin/research/dogs`), run the real engine
+(`POST /api/admin/research/decision-trace`), see hard-filter exclusions with
+reasons, per-food nutritional/budget/correlation breakdown, matched research
+evidence, the Gate 5 topic-by-topic explanation, and the ranked top 10
+computed **twice** — with Gate 5 applied and with it forced to zero — so the
+difference is directly visible. This endpoint never persists anything (no
+`dog_recommendation_sets` insert, confirmed live — see verification).
+
+**What-if sandbox** — additive, opt-in overrides threaded through without
+touching any real call site's default behaviour: `applyHardFilter(dogId,
+overrides?)` gained an optional 2nd parameter (restrictions/conditions/
+life-stage/date-of-birth substitution, applied once right after the real DB
+read, before anything downstream uses it); `activeClaimRetrieval.ts` gained
+`withConditionRestrictionOverrides()`, a thin wrapper around its existing
+injectable `ActiveClaimDataSource` seam. Every real caller
+(`api/recommendations/route.ts`, `isFoodSuitable`) calls these with no
+overrides argument, so behaviour there is provably unchanged — confirmed by
+the full pre-existing test suite passing unmodified. Correlation history
+(the dog's real logged data) is deliberately never part of the sandbox.
+
+**New/changed files:** `supabase/migrations/20260803140000_add_research_scoring_enabled_flag.sql`,
+`src/lib/researchScoringPolicy.ts` (new), `src/lib/__tests__/researchScoringPolicy.test.ts` (new, 11 tests),
+`src/lib/types.ts` (`ResearchEvidence.document_id`/`study_family_id`, `ResearchDocument.duplicate_of_document_id`),
+`src/lib/activeClaimRetrieval.ts` (`toResearchEvidence` populates the new fields; exports
+`supabaseActiveClaimDataSource` and `withConditionRestrictionOverrides`),
+`src/lib/recommendationScoring.ts` (`ScoringWeights.research_scoring_enabled` threaded through
+`getActiveScoringWeights`/`normalizeWeights`; doc comments corrected),
+`src/lib/hardFilter.ts` (`HardFilterOverrides`), `src/app/api/recommendations/route.ts` (flag-gated wiring),
+`src/app/api/admin/research/decision-trace/route.ts` (new), `src/app/api/admin/research/dogs/route.ts` (new),
+`src/components/ResearchDecisionTrace.tsx` (new), `src/app/admin/research/decision-trace/page.tsx` (new),
+`src/components/research/ResearchNav.tsx` (new entry).
+
+**Verification (all against the live project, `ysffyuohwvdifvbopfcm`):**
+- `tsc --noEmit`: clean. `npm test`: 342/342 (331 pre-existing + 11 new). `npm run build`: exit 0,
+  only the repository's pre-existing dynamic-route static-analysis notices. `git diff --check`: clean
+  (only expected LF/CRLF warnings).
+- Authenticated live browser verification, following this repo's established admin-QA pattern (throwaway
+  account signed up through the real UI, promoted to `is_admin` via direct SQL, deleted afterward — see
+  the P2 system-alerts entry above for precedent): loaded `/admin/research/decision-trace`, the 6 real
+  registered dogs populated the picker, ran Ron (real adult dog) — 174/262 foods survived the hard
+  filter, 0 eligible active claims matched (consistent with the 2026-08-01 finding that the one active
+  claim's food is senior-only), ranked lists rendered with-research (0.587) vs without (0.462) for every
+  food, a uniform +0.125 as designed. Expanded the what-if sandbox, overrode life stage to `senior`,
+  re-ran: 207/262 survived, `Acana Senior Dog` appeared at rank 8 — exactly matching the
+  2026-08-01/07-29 finding that this food is only eligible for a senior-life-stage dog. No console
+  errors either run. Confirmed live afterward: `dog_recommendation_sets` count for Ron unchanged at 2
+  (both runs correctly persisted nothing), and `recommendation_scoring_weights` still reads
+  `research_scoring_enabled=false`, `research_relevance_weight=0.25` — real client recommendations
+  untouched throughout.
+
+**Deferred, not built (flagged for the backlog, per the task brief):**
+1. **Client-facing "with/without research" exposure.** Named explicitly by the owner as a real future
+   goal; confirmed at the start of this session it stays admin-only for now, matching this project's
+   established admin-first-then-approve-exposure pattern (P7 today, and everything before it).
+2. **The "probe" idea** — testing hypotheses like "is this dog reacting badly to chicken" against the
+   whole dog fleet's real longitudinal monitoring data, treating logged outcomes as their own research
+   layer (owner's framing: "the dogs data is also a research layer... possibly the most valuable of
+   all"). This is the natural sequel connecting Gate 5 (literature evidence → score) to the existing
+   Phase 6 correlation engine (`src/lib/correlationScoring.ts`, real per-dog outcome tracking) into one
+   intended learning loop, per the owner's core mission framing for this whole tool ("this system should
+   be learning over time"). It is a distinct, substantial feature (longitudinal hypothesis tracking, not
+   a UI view) and deserves its own dedicated design pass — not folded into this task.
+
+**Needs owner input:**
+- Review the decision-trace output above and confirm the Gate 5 numbers read as intended before ever
+  flipping `research_scoring_enabled` to `true` for real dog owners.
+- Decide when (if ever) to build the client-facing with/without view (deferred item 1).
+- Decide whether/when to scope the "probe" longitudinal-hypothesis feature (deferred item 2).
+- This branch has real, verified changes but was not committed or pushed — standing permission from the
+  P7 session does not carry forward automatically per this task's brief; ask again when ready to ship.

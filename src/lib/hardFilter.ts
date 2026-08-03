@@ -198,7 +198,25 @@ export function filterCandidateFoods(
   });
 }
 
-export async function applyHardFilter(dogId: string): Promise<HardFilterResult> {
+/**
+ * What-if overrides for the admin decision-trace sandbox
+ * (src/app/api/admin/research/decision-trace/route.ts). Every field is
+ * additive and optional: when `overrides` is omitted entirely, this function
+ * is byte-identical to its pre-Gate-5 behaviour, and every real call site
+ * (api/recommendations/route.ts, isFoodSuitable) is unaffected. Nothing here
+ * is persisted — a caller passing overrides is always a scratch computation.
+ */
+export interface HardFilterOverrides {
+  restrictions?: string[];
+  conditions?: string[];
+  life_stage?: LifeStage | null;
+  date_of_birth?: string | null;
+}
+
+export async function applyHardFilter(
+  dogId: string,
+  overrides?: HardFilterOverrides
+): Promise<HardFilterResult> {
   const excluded_foods = new Set<string>();
   const excluded_reasons: { food_id: string; reason: string }[] = [];
 
@@ -212,8 +230,8 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
   try {
     // Fetch the dog's ingredient restrictions and diagnosed health conditions.
     const [
-      { data: restrictions, error: restrictionError },
-      { data: conditions, error: conditionError },
+      { data: restrictionRows, error: restrictionError },
+      { data: conditionRows, error: conditionError },
       { data: dogRow, error: dogError },
     ] =
       await Promise.all([
@@ -231,9 +249,23 @@ export async function applyHardFilter(dogId: string): Promise<HardFilterResult> 
     if (dogError) throw dogError;
     if (!dogRow) throw new Error('Dog not found');
 
+    // What-if substitution happens right here, once, before anything below
+    // reads restrictions/conditions/life-stage — everything downstream is
+    // unaware whether a value came from the database or a sandbox override.
+    const restrictions = overrides?.restrictions
+      ? overrides.restrictions.map((substance) => ({ substance }))
+      : restrictionRows;
+    const conditions = overrides?.conditions
+      ? overrides.conditions.map((condition) => ({ condition }))
+      : conditionRows;
+    const effectiveLifeStage =
+      overrides?.life_stage !== undefined ? overrides.life_stage : (dogRow.life_stage as LifeStage | null);
+    const effectiveDateOfBirth =
+      overrides?.date_of_birth !== undefined ? overrides.date_of_birth : dogRow.date_of_birth;
+
     const dogLifeStage: DogLifeStageContext = {
-      lifeStage: dogRow.life_stage as LifeStage | null,
-      ageMonths: dogRow.date_of_birth ? ageInMonths(dogRow.date_of_birth) : null,
+      lifeStage: effectiveLifeStage,
+      ageMonths: effectiveDateOfBirth ? ageInMonths(effectiveDateOfBirth) : null,
     };
 
     // Pull only approved contraindication rules; match to this dog's
