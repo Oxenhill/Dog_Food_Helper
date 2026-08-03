@@ -32,10 +32,13 @@ timestamp.
 Full `tsc --noEmit`: clean. `npm test`: 361/361. Commits `b6b033a`
 (job labels) and `d1201c4` (auto-draft), pushed to main.
 
-**Not done: the 28-document backlog won't retroactively draft** -- this
-only fires for imports going forward. Draft-all-pending for the existing
-backlog is a real ~28-call Sonnet spend; flagged to the owner rather than
-run silently.
+**Backlog cleared (owner-authorized):** ran
+[scripts/researchDraftPendingDocuments.ts](scripts/researchDraftPendingDocuments.ts)
+against all 28 pending documents -- same job/audit sequence as a manual
+click, just looped. 26/28 processed: 31 claims drafted into 28 review
+clusters. 2 correctly skipped (`veterinary_methodology` scope, not
+evidence-eligible by design, same guard the auto-draft route already
+has). Committed `800d354`.
 
 ## PDF-upload species filtering built (2026-08-03, earlier)
 
