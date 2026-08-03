@@ -31,6 +31,9 @@ interface ProcessingDocument {
   duplicate_of_document_id: string | null;
   retrieved_at: string;
   claims: ProcessingClaim[];
+  draft_attempts: number;
+  last_draft_status: string | null;
+  last_draft_rejected_count: number | null;
 }
 
 interface ClusterContext {
@@ -397,12 +400,19 @@ export default function ResearchKnowledgeAdmin() {
     return [];
   }
 
-  const pendingDocuments = documents.filter(
+  const zeroClaimDocuments = documents.filter(
     (document) =>
       !document.retracted &&
       !document.superseded_by &&
       !document.duplicate_of_document_id &&
       document.claims.length === 0
+  );
+  // A zero-claim document isn't necessarily untouched -- drafting can run and
+  // correctly find nothing claim-worthy, or fail for a scope reason. Split so
+  // "awaiting processing" only ever means "the button hasn't been clicked yet".
+  const pendingDocuments = zeroClaimDocuments.filter((document) => document.draft_attempts === 0);
+  const alreadyAttemptedDocuments = zeroClaimDocuments.filter(
+    (document) => document.draft_attempts > 0
   );
   const queuedClusters = clusters.filter(
     (cluster) => cluster.status === 'queued_for_review' || cluster.status === 'draft'
@@ -572,6 +582,46 @@ export default function ResearchKnowledgeAdmin() {
           )}
         </div>
       </details>
+
+      {alreadyAttemptedDocuments.length > 0 && (
+        <details>
+          <summary className="cursor-pointer font-semibold text-ink">
+            Processed, no claims found ({alreadyAttemptedDocuments.length})
+          </summary>
+          <p className="help-text mt-2">
+            Drafting already ran for these -- the model found nothing claim-worthy in the kept
+            text (or the source is methodology-context, never evidence-eligible). Not stuck;
+            retrying is unlikely to change the result unless the source itself changes.
+          </p>
+          <div className="mt-3 grid gap-3">
+            {alreadyAttemptedDocuments.slice(0, 30).map((document) => (
+              <article key={document.id} className="rounded border border-line bg-paper p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-ink">{document.title ?? 'Untitled source'}</p>
+                    <p className="help-text mt-1">
+                      Grade {document.evidence_grade} · {document.access_type.replace(/_/g, ' ')} ·{' '}
+                      {document.draft_attempts} attempt{document.draft_attempts === 1 ? '' : 's'}, last{' '}
+                      {document.last_draft_status?.replace(/_/g, ' ') ?? 'unknown'}
+                      {document.last_draft_rejected_count !== null &&
+                        document.last_draft_rejected_count > 0 &&
+                        ` (${document.last_draft_rejected_count} draft(s) rejected on review, none accepted)`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    disabled={Boolean(busy)}
+                    onClick={() => void processDocument(document.id)}
+                  >
+                    {busy === document.id ? 'Organising evidence…' : 'Retry drafting'}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
+      )}
 
       <div className="hairline pt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">

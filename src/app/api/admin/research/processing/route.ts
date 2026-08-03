@@ -90,6 +90,40 @@ async function listProcessingState() {
   if (automationSettingsError) throw automationSettingsError;
   if (automationLogError) throw automationLogError;
 
+  /**
+   * A document with zero claims is not necessarily untried -- drafting can
+   * run, find nothing claim-worthy in the source, and correctly produce
+   * zero claims (or fail outright for a scope reason). Without this, "Papers
+   * awaiting structured processing" looked identical for a document nobody
+   * has touched yet and one that's already been drafted (sometimes several
+   * times) with a genuine null result, which reads as "the button doesn't
+   * work" and invites spending another model call on the same outcome.
+   */
+  const { data: draftJobs, error: draftJobsError } = await supabaseAdmin
+    .from('research_ingestion_jobs')
+    .select('input, status, result_summary, completed_at')
+    .eq('job_type', 'draft_claims')
+    .order('completed_at', { ascending: true });
+  if (draftJobsError) throw draftJobsError;
+  const draftAttemptsByDocument = new Map<
+    string,
+    { attempts: number; lastStatus: string | null; lastRejectedCount: number | null }
+  >();
+  for (const job of draftJobs ?? []) {
+    const documentId = (job.input as Record<string, unknown> | null)?.document_id;
+    if (typeof documentId !== 'string') continue;
+    const existing = draftAttemptsByDocument.get(documentId) ?? {
+      attempts: 0,
+      lastStatus: null,
+      lastRejectedCount: null,
+    };
+    existing.attempts += 1;
+    existing.lastStatus = job.status;
+    const rejected = (job.result_summary as Record<string, unknown> | null)?.rejected;
+    existing.lastRejectedCount = Array.isArray(rejected) ? rejected.length : null;
+    draftAttemptsByDocument.set(documentId, existing);
+  }
+
   const clusterIds = (clusters ?? []).map((cluster) => cluster.id);
   const [{ data: members, error: membersError }, { data: applicability, error: applicabilityError }] =
     clusterIds.length === 0
@@ -165,10 +199,16 @@ async function listProcessingState() {
   }
 
   return {
-    documents: (documents ?? []).map((document) => ({
-      ...document,
-      claims: claimsByDocument.get(document.id) ?? [],
-    })),
+    documents: (documents ?? []).map((document) => {
+      const draftAttempts = draftAttemptsByDocument.get(document.id) ?? null;
+      return {
+        ...document,
+        claims: claimsByDocument.get(document.id) ?? [],
+        draft_attempts: draftAttempts?.attempts ?? 0,
+        last_draft_status: draftAttempts?.lastStatus ?? null,
+        last_draft_rejected_count: draftAttempts?.lastRejectedCount ?? null,
+      };
+    }),
     clusters: (clusters ?? []).map((cluster) => ({
       ...cluster,
       members: membersByCluster.get(cluster.id) ?? [],

@@ -5,7 +5,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { sessionAuthHeaders } from '@/lib/session';
 
 interface ProcessingSummary {
-  documents: Array<{ id: string; retracted: boolean; superseded_by: string | null; duplicate_of_document_id: string | null; claims: unknown[] }>;
+  documents: Array<{
+    id: string;
+    retracted: boolean;
+    superseded_by: string | null;
+    duplicate_of_document_id: string | null;
+    claims: unknown[];
+    draft_attempts: number;
+  }>;
   clusters: Array<{ id: string; status: string }>;
 }
 
@@ -76,7 +83,12 @@ export default function ResearchHome() {
   const pendingDocuments = useMemo(
     () =>
       (processing?.documents ?? []).filter(
-        (doc) => !doc.retracted && !doc.superseded_by && !doc.duplicate_of_document_id && doc.claims.length === 0,
+        (doc) =>
+          !doc.retracted &&
+          !doc.superseded_by &&
+          !doc.duplicate_of_document_id &&
+          doc.claims.length === 0 &&
+          doc.draft_attempts === 0,
       ).length,
     [processing],
   );
