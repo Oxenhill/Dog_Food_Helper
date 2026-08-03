@@ -3,6 +3,7 @@ import {
   ingestDiscoveryCandidate,
   ingestUploadedResearchPdf,
 } from '@/lib/researchBrainPipeline';
+import { draftDocumentIntoKnowledge, type DraftDocumentResult } from '@/lib/researchBrainDrafting';
 import { resolveResearchCandidate } from '@/lib/researchDiscovery';
 import { loadLiteratureRegistrySnapshot } from '@/lib/researchLiteratureSources';
 import {
@@ -13,6 +14,7 @@ import {
   type ResearchMissionJob,
 } from '@/lib/researchMissionLifecycle';
 import { isPersistedResearchProviderHalt } from '@/lib/researchProviderTelemetry';
+import type { ResearchStageControlPlaneSnapshot } from '@/lib/researchModelRouting';
 import { requireAdmin } from '@/lib/serverAuth';
 import { supabaseAdmin } from '@/lib/supabase';
 import type { ResearchCandidate } from '@/lib/researchEvidence';
@@ -81,6 +83,86 @@ async function completeJob(
       discarded_chunk_count: result.discardedChunkCount ?? 0,
     },
   });
+}
+
+type AutoDraftOutcome =
+  | ({ attempted: true; job_id: string } & DraftDocumentResult)
+  | { attempted: false; reason: 'duplicate_document' | 'methodology_context_only' }
+  | { attempted: true; job_id: string; error: string };
+
+/**
+ * Ingesting a document (uploading a PDF, importing a discovered/URL
+ * candidate) is already the deliberate human action -- an admin chose this
+ * exact source and clicked import. Requiring a second, separate click
+ * afterward just to draft claims from it added pure toil with no additional
+ * safety: drafting only proposes claims into queued_for_review clusters,
+ * which still require the same human cluster-approval step before anything
+ * becomes usable evidence (see review_research_evidence_cluster). So this
+ * runs automatically right after ingestion succeeds, for exactly the
+ * documents that were just deliberately imported -- it is NOT wired into the
+ * monthly discovery cron, which only ever surfaces unimported candidates and
+ * still requires an explicit per-candidate Import click before anything is
+ * ingested or drafted.
+ *
+ * Never throws: an ingestion that just succeeded should never be turned
+ * into an error response by a drafting failure. The existing "Draft
+ * structured evidence" button on the Review queue page remains as a manual
+ * retry path if this fails or is skipped (duplicate documents skip it,
+ * since claims already exist for the original).
+ */
+async function autoDraftDocument(
+  documentId: string,
+  adminId: string,
+  controlPlane: ResearchStageControlPlaneSnapshot
+): Promise<AutoDraftOutcome> {
+  let job: ResearchMissionJob;
+  try {
+    job = await startResearchMissionJob({
+      missionType: 'claim_drafting',
+      objective: `Draft source-backed claims from newly ingested document ${documentId}`,
+      stageKey: 'claim_drafting',
+      jobType: 'draft_claims',
+      requestedBy: adminId,
+      jobInput: { document_id: documentId, source: 'auto_after_ingestion' },
+      initialStatus: 'running',
+    });
+  } catch (error) {
+    return {
+      attempted: true,
+      job_id: '',
+      error: error instanceof Error ? error.message : 'Could not start claim drafting',
+    };
+  }
+  try {
+    const result = await draftDocumentIntoKnowledge(documentId, job.id, controlPlane);
+    await finishResearchMissionJob({
+      jobId: job.id,
+      status: 'succeeded',
+      resultSummary: { ...result },
+      eventPayload: {
+        document_id: documentId,
+        drafted_claim_count: result.drafted,
+        rejected_draft_count: result.rejected.length,
+      },
+    });
+    return { attempted: true, job_id: job.id, ...result };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Claim drafting failed';
+    if (!isPersistedResearchProviderHalt(error)) {
+      try {
+        await finishResearchMissionJob({
+          jobId: job.id,
+          status: 'failed',
+          reasonCode: 'claim_drafting_failed',
+          errorMessage: message,
+          eventPayload: { document_id: documentId },
+        });
+      } catch {
+        // Preserve the drafting failure as the response if audit finalisation fails.
+      }
+    }
+    return { attempted: true, job_id: job.id, error: message };
+  }
 }
 
 /**
@@ -295,7 +377,10 @@ export async function POST(request: NextRequest) {
       });
       const completedJob = await completeJob(runningJob, result);
       await supabaseAdmin.storage.from(BUCKET).remove([input.storage_path]);
-      return NextResponse.json({ job: completedJob, result });
+      const drafting = result.duplicate
+        ? ({ attempted: false, reason: 'duplicate_document' } as const)
+        : await autoDraftDocument(result.documentId, admin.id, runningJob.control_plane);
+      return NextResponse.json({ job: completedJob, result, drafting });
     } catch (error) {
       const message = await failJob(job.id, error);
       return NextResponse.json({ error: message, job_id: job.id }, { status: 500 });
@@ -431,7 +516,12 @@ export async function POST(request: NextRequest) {
         literatureRegistry,
       });
       const completedJob = await completeJob(runningJob, result);
-      return NextResponse.json({ job: completedJob, result });
+      const drafting = result.duplicate
+        ? ({ attempted: false, reason: 'duplicate_document' } as const)
+        : candidate.evidence_scope !== 'canine_direct'
+          ? ({ attempted: false, reason: 'methodology_context_only' } as const)
+          : await autoDraftDocument(result.documentId, admin.id, runningJob.control_plane);
+      return NextResponse.json({ job: completedJob, result, drafting });
     } catch (error) {
       const message = await failJob(processingJobId, error);
       return NextResponse.json(

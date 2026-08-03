@@ -36,6 +36,27 @@ async function readBody(response: Response): Promise<Record<string, any>> {
   }
 }
 
+/**
+ * Claim drafting now runs automatically right after a successful import --
+ * the import click was already the deliberate human trigger. This describes
+ * what that follow-on step did (or didn't) so the success message doesn't
+ * just say "imported" while silently also spending a model call.
+ */
+function describeDrafting(drafting: Record<string, any> | undefined): string {
+  if (!drafting) return '';
+  if (drafting.attempted === false) {
+    return drafting.reason === 'duplicate_document'
+      ? ' Already-known paper, so no new claims were drafted.'
+      : ' Methodology-context source, so no claims were drafted from it.';
+  }
+  if (typeof drafting.error === 'string') {
+    return ` Claim drafting failed (${drafting.error}) — retry it from the Review queue's "Draft structured evidence" button.`;
+  }
+  const drafted = drafting.drafted ?? 0;
+  const clusters = Array.isArray(drafting.clusterIds) ? drafting.clusterIds.length : 0;
+  return ` Drafted ${drafted} claim${drafted === 1 ? '' : 's'} into ${clusters} review cluster${clusters === 1 ? '' : 's'}.`;
+}
+
 export default function ResearchIngestionAdmin() {
   const pdfInput = useRef<HTMLInputElement>(null);
   const [candidates, setCandidates] = useState<DiscoveryCandidateRow[]>([]);
@@ -105,7 +126,8 @@ export default function ResearchIngestionAdmin() {
       setNotice(
         body.already_imported
           ? 'That paper is already in the knowledge base.'
-          : `Paper imported and embedded through the Gateway (${body.result?.chunkCount ?? 0} chunks).`
+          : `Paper imported and embedded through the Gateway (${body.result?.chunkCount ?? 0} chunks).` +
+            describeDrafting(body.drafting)
       );
       await refresh();
     } catch (importError) {
@@ -134,7 +156,8 @@ export default function ResearchIngestionAdmin() {
       if (!response.ok) throw new Error(body.error ?? 'Source import failed');
       setSourceUrl('');
       setNotice(
-        `Source resolved through PubMed and embedded through the Gateway (${body.result?.chunkCount ?? 0} chunks).`
+        `Source resolved through PubMed and embedded through the Gateway (${body.result?.chunkCount ?? 0} chunks).` +
+          describeDrafting(body.drafting)
       );
       await refresh();
     } catch (importError) {
@@ -203,7 +226,8 @@ export default function ResearchIngestionAdmin() {
         `PDF imported and embedded through the Gateway (${finalized.result?.chunkCount ?? 0} chunks).` +
           (discarded > 0
             ? ` ${discarded} cat-only passage${discarded === 1 ? '' : 's'} discarded before embedding.`
-            : '')
+            : '') +
+          describeDrafting(finalized.drafting)
       );
       await refresh();
     } catch (uploadError) {
