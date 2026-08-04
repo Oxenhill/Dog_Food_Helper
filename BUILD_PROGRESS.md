@@ -1,5 +1,49 @@
 # Bowl (by Dog Smart) — Build Progress
 
+## Forgot-password flow shipped via Supabase's built-in reset, not Resend (2026-08-04, latest)
+
+Owner asked for a forgotten-password mechanism, unsure if it would actually
+send email. Investigated both options before building:
+
+- **Resend** (already wired for inactivity-warning emails,
+  [emailProvider.ts](src/lib/emailProvider.ts)): couldn't be verified from
+  this sandbox — it deliberately scrubs recognized secret values (API keys,
+  tokens) before they reach disk or command output, even for a subprocess
+  like `vercel env pull`, so a real test call against the real key isn't
+  possible here. Separately, Vercel's `EMAIL_FROM_ADDRESS` for this project is
+  `noreply@cape-canine.org` — a different product's domain, confirming the
+  owner's own suspicion ("my resend is being used for a different project").
+- **Supabase's built-in reset** — owner's stated fallback. Built this instead:
+  `supabase.auth.resetPasswordForEmail()` (implicit flow — this app doesn't
+  use PKCE/`@supabase/ssr`) from a new
+  [/api/auth/forgot-password](src/app/api/auth/forgot-password/route.ts)
+  route, a [/forgot-password](src/app/forgot-password/page.tsx) request page,
+  and a [/reset-password](src/app/reset-password/page.tsx) page that manually
+  parses the recovery tokens from the URL hash (`detectSessionInUrl: false`
+  in [session.ts](src/lib/session.ts), so nothing does this automatically),
+  establishes a session, and lets the user set a new password before forcing
+  a fresh sign-in. Added `establishRecoverySession` and `updatePassword` to
+  session.ts. "Forgot password?" link added to `/signin`.
+
+Verified: invalid/missing recovery hash correctly shows the "link
+invalid/expired" state (both no-hash and garbage-token cases, live in
+browser); `POST /api/auth/forgot-password` returns 200 with a generic
+message that doesn't leak account existence. **Not verified**: an actual
+recovery email landing in an inbox and completing the full loop, because
+that needs a real account + real inbox access I don't have. `tsc --noEmit`
+clean, 364/364 tests (no new tests added — this is UI/integration plumbing
+against Supabase Auth, not new pure logic).
+
+**Needs owner input:** Supabase Auth has its own "Redirect URLs" allow-list
+(Dashboard → Authentication → URL Configuration) that `resetPasswordForEmail`'s
+`redirectTo` must match, or the emailed link may fail to authenticate even
+though the email itself sends fine. I can't inspect or change that dashboard
+setting from here — confirm `<your-deployed-origin>/reset-password` (and the
+`localhost:3000` version for local testing) is on that list before relying on
+this in production. Also confirm Supabase's project-level Auth email
+(sender/SMTP) is itself configured — the free-tier built-in mailer is
+rate-limited (~2-4/hr) and not meant for production reliability.
+
 ## "Awaiting processing" now excludes already-drafted zero-claim papers (2026-08-03, latest)
 
 Owner ran the backlog catch-up (previous entry) then still saw 20 papers

@@ -202,3 +202,31 @@ export function clearSession() {
   const client = getClient();
   if (client) void client.auth.signOut();
 }
+
+/**
+ * Establish a session from the access/refresh tokens Supabase attaches to a
+ * password-recovery redirect (parsed from the URL hash on /reset-password —
+ * detectSessionInUrl is false above, so nothing does this automatically).
+ * Persists exactly like a normal sign-in via saveSession() so the "prior
+ * recovery must never win the race" ordering above still applies.
+ */
+export async function establishRecoverySession(
+  access_token: string,
+  refresh_token: string
+): Promise<{ error: Error | null }> {
+  await ensureInit();
+  const client = getClient();
+  if (!client) return { error: new Error('No browser session available') };
+  const { data, error } = await client.auth.setSession({ access_token, refresh_token });
+  if (error) return { error };
+  await saveSession(data.session);
+  return { error: null };
+}
+
+/** Set a new password on the currently-authenticated (recovery) session. */
+export async function updatePassword(newPassword: string): Promise<{ error: Error | null }> {
+  const client = getClient();
+  if (!client) return { error: new Error('No browser session available') };
+  const { error } = await client.auth.updateUser({ password: newPassword });
+  return { error: error ?? null };
+}
