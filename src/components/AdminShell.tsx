@@ -180,9 +180,14 @@ export default function AdminShell({
             <span className="wordmark-dot" />
             Bowl <span className="muted font-sans font-normal">· admin</span>
           </Link>
-          <button type="button" onClick={handleSignOut} className="btn-ghost btn-sm">
-            Sign out
-          </button>
+          <div className="flex items-center gap-2">
+            <Link href="/dogs" className="btn-ghost btn-sm">
+              Your dogs
+            </Link>
+            <button type="button" onClick={handleSignOut} className="btn-ghost btn-sm">
+              Sign out
+            </button>
+          </div>
         </div>
         <nav
           aria-label="Admin sections"
